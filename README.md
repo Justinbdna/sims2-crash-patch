@@ -49,6 +49,7 @@ else:
 ### Target Environment
 * **Application:** *The Sims 2: Super Collection* (Mac App Store, `com.aspyr.sims2.appstore`).
 * **Binary:** `/Applications/The Sims 2.app/Contents/MacOS/Sims2XP_Exe` (Mach-O x86_64 translated via Rosetta 2).
+* **Tooling Used:** Ghidra 12.2 (NSA SRE Framework, `Sims2Debug` project) and REA (*Reverse Engineer Anything* MCP framework).
 * **Crash Stack:**
   ```text
   0  libc++abi.dylib    std::__terminate(void (*)()) + 6
@@ -61,7 +62,7 @@ else:
 1. In `FUN_1000fe510` (at `0x1000fe665`), the engine queries display refresh rates via `_CGDisplayModeGetRefreshRate`.
 2. On 120 Hz ProMotion displays, Quartz returns `120.0`.
 3. At `0x1000fe6e1`, `cvttsd2si %xmm0, %r15d` loads integer `120` (`0x78`) into `R15D`.
-4. At `0x1000fe6f7`, `testl %r15d, %r15d` followed by `jne 0x1000fe745` branches immediately to `0x1000fe745`, bypassing the fallback routine (`_CVDisplayLinkGetNominalOutputVideoRefreshPeriod`).
+4. At `0x1000fe6f7`, `testl %r15d, %r15d` followed by `jne 0x1000fe745` (`1000fe6fc(j)`) branches immediately to `0x1000fe745`, bypassing the fallback routine (`_CVDisplayLinkGetNominalOutputVideoRefreshPeriod`).
 5. At `0x1000fe790`, `movl %r15d, 0xc(%rbx)` writes `120` to the display mode structure.
 6. In `FUN_10081a5c0`, the engine calls `0x101769030` to validate supported display modes. The legacy engine rejects 120 Hz, returning `0` (no valid modes).
 7. At `0x10081a8ca`, `je 0x10081cf8f` branches to `___cxa_throw` at `0x10081cfca`. Without an active catch handler, `std::__terminate` is triggered -> instant SIGSEGV.
@@ -82,6 +83,14 @@ The patch overrides the Quartz result immediately before CoreFoundation release,
   ```
 
 **Result:** `R15D` holds 60, `_CFRelease` cleans up memory without leaks, all enumerated modes are registered as standard 60 Hz, mode selection succeeds, and startup completes flawlessly.
+
+---
+
+## ⚖️ Legal Disclaimer & Fan Preservation Notice
+
+* **Non-Profit Fan Project:** This project is strictly non-commercial, developed by passionate fans for the preservation of *The Sims 2* on modern Apple hardware.
+* **No DRM Circumvention / No Crack:** This patch does **NOT** bypass Apple FairPlay, App Store receipt validation, or any digital rights management. You **must** own a legally purchased copy of *The Sims 2: Super Collection* on the Mac App Store.
+* **Context:** Official support requests sent to Aspyr regarding this crash on ProMotion screens went unanswered for years. This fix is released under software interoperability exemptions (Directive 2009/24/EC Art. 6, and 17 U.S. Code § 1201(f)).
 
 ---
 
