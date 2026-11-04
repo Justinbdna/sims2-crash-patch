@@ -1,4 +1,4 @@
-# Sims 2: Super Collection — ProMotion (120 Hz) Compatibility Fix for macOS
+# Sims 2 Crash Patch — Super Collection on macOS (Apple Silicon)
 
 [![macOS](https://img.shields.io/badge/macOS-Apple%20Silicon%20%7C%20Intel-black.svg?style=flat&logo=apple)](https://apple.com)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
@@ -13,7 +13,7 @@ A permanent surgical binary patch and automated toolkit fixing the instant start
 On Apple Silicon MacBooks (M1/M2/M3/M4 Pro & Max) with 120 Hz ProMotion displays, *The Sims 2: Super Collection* crashes ~2 seconds after launch.
 Previously, the only workaround was manually throttling the entire macOS display refresh rate to 60 Hz in *System Settings > Displays*.
 
-This project permanently fixes the game binary so it runs at a smooth, stable 60 FPS without ever changing your Mac's 120 Hz ProMotion display settings.
+Since Aspyr has **not updated the game on the Mac App Store for over 5 years**, this community patch provides a permanent, reliable fix so the game runs at a smooth, stable 60 FPS without ever changing your Mac's 120 Hz ProMotion display settings.
 
 ---
 
@@ -89,8 +89,11 @@ The patch overrides the Quartz result immediately before CoreFoundation release,
 ## ⚖️ Legal Disclaimer & Fan Preservation Notice
 
 * **Non-Profit Fan Project:** This project is strictly non-commercial, developed by passionate fans for the preservation of *The Sims 2* on modern Apple hardware.
+* **5+ Years Without Official Updates:** The Mac App Store version has not received an update in over 5 years. Official support tickets to Aspyr regarding modern Apple Silicon crashes have remained unaddressed.
 * **No DRM Circumvention / No Crack:** This patch does **NOT** bypass Apple FairPlay, App Store receipt validation, or any digital rights management. You **must** own a legally purchased copy of *The Sims 2: Super Collection* on the Mac App Store.
-* **Context:** Official support requests sent to Aspyr regarding this crash on ProMotion screens went unanswered for years. This fix is released under software interoperability exemptions (Directive 2009/24/EC Art. 6, and 17 U.S. Code § 1201(f)).
+* **Legal Grounding:** This project is released under recognized software interoperability and preservation exemptions:
+  * **European Union (Directive 2009/24/EC, Article 6):** Authorizes reverse engineering and decompilation without rightholder authorization when indispensable to obtain information necessary to achieve interoperability of an independently created program with other programs/hardware.
+  * **United States (17 U.S. Code § 1201(f) - Reverse Engineering for Interoperability):** Authorizes reverse engineering a legally obtained computer program to identify and analyze elements necessary to achieve interoperability with other programs.
 
 ---
 
