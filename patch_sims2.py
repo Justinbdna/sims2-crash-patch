@@ -42,9 +42,14 @@ def apply_patch():
     print(f"[+] Binaire cible : {TARGET_EXE}")
 
     # 1. Sauvegarde originale
+    alt_backup = os.path.join(TARGET_APP, "Contents/MacOS/Sims2XP_Exe.backup")
     if not os.path.exists(BACKUP_EXE):
-        print(f"[+] Création de la sauvegarde : {BACKUP_EXE}")
-        shutil.copy2(TARGET_EXE, BACKUP_EXE)
+        if os.path.exists(alt_backup):
+            print(f"[+] Création de la sauvegarde de référence depuis {alt_backup} : {BACKUP_EXE}")
+            shutil.copy2(alt_backup, BACKUP_EXE)
+        else:
+            print(f"[+] Création de la sauvegarde : {BACKUP_EXE}")
+            shutil.copy2(TARGET_EXE, BACKUP_EXE)
     else:
         print(f"[i] Sauvegarde déjà existante : {BACKUP_EXE}")
 
