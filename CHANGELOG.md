@@ -1,0 +1,34 @@
+# Changelog
+
+All notable changes to **Sims 2 Crash Patch** (*The Sims 2: Super Collection* — Mac App Store Edition) are documented in this file.
+
+---
+
+## [1.2.1] - 2026-11-11
+
+### Added
+- **Pristine Backup Fingerprint Verification (`patch_sims2.command` & `restore_sims2.command`):** `Sims2XP_Exe.backup` is now created only when both original unpatched byte fingerprints (`0xfe6dc` and `0xfe73b`/`0xfe741`) are verified intact, preventing an already-patched binary from ever being archived as a backup. `restore_sims2.command` likewise verifies pristine fingerprints before restoring.
+- **Zero-Overwrite Save Migration (`patch_sims2.command`):** Completely removed `with replacing` from the Finder AppleScript migration. If `~/Library/Application Support/Aspyr/The Sims 2/` does not exist yet, Sandbox saves are duplicated directly into it; if it already exists, Sandbox contents are safely duplicated into a timestamped backup folder (`The Sims 2 (Sandbox Backup YYYY-MM-DD)`) with zero file overwrites.
+- **Atomic Binary Updates:** Both `patch_sims2.command` and `restore_sims2.command` now write to a temporary file (`Sims2XP_Exe.tmp.$$`) and perform an atomic POSIX `rename`/`mv` into `/Applications/The Sims 2.app/Contents/MacOS/Sims2XP_Exe`.
+- **Official Uninstaller (`restore_sims2.command`), `CHANGELOG.md`, and `.github/ISSUE_TEMPLATE/test-report.md`.**
+
+### Changed
+- **Dual-Location Cache Purge (`patch_sims2.command` & `clean_sims2_cache.command`):** Purges `Groups.cache`, `Accessory.cache`, and `cAstGroupCache.package` across both `~/Library/Application Support/Aspyr/The Sims 2/` (`rm -f`) and the legacy Sandbox container (moved to the macOS Trash via Finder Automation permission).
+- **Documentation (`README.md` & `README.txt`):** Updated bilingual (EN/FR) documentation covering the Non-Sandbox transition, Finder Automation permission, complete Gatekeeper steps on macOS 15+ / Sequoia / macOS 27 (including the 1-hour window and confirmation dialog), App Store reinstallation save behavior, and protective EU Directive 2009/24/EC Article 5(1) notice.
+- **Repository Hygiene:** Moved early Python/shell prototypes (`patch_sims2.py`, `patch_sims2.sh`, `restore_sims2.py`) into `legacy/`.
+
+---
+
+## [1.1.0] - 2026-11-04
+
+### Added
+- **Zero-Dependency Native Perl Patcher (`patch_sims2.command`):** Replaced `/usr/bin/python3` with preinstalled `/usr/bin/perl` to avoid triggering the 1 GB Xcode Command Line Developer Tools prompt (`libxcselect`).
+- **Dual Fingerprint-Anchored Binary Patch:** Combined Patch 1 (`0xfe6dc` primary 60 Hz lock) and Patch 2 (`0xfe741` fallback safety lock) into a single idempotent pass.
+- **Standalone Cache Cleaner (`clean_sims2_cache.command`):** Added Finder AppleScript delegation (`osascript`) to purge corrupted cache files via macOS Finder Automation permission.
+
+---
+
+## [1.0.0] - 2026-11-04
+
+### Added
+- Initial binary analysis (`FUN_1000fe510` & `FUN_10081a5c0`) and proof-of-concept 60 Hz refresh rate patch for 120 Hz ProMotion displays on Apple Silicon.
