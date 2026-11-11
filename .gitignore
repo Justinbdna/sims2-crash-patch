@@ -1,12 +1,27 @@
-# macOS
+# macOS system files
 .DS_Store
 .AppleDouble
 .LSOverride
+._*
 
-# Python
+# Binary backups & crash reports
+*.backup
+*.backup_original
+*.ips
+*.log
+
+# Environment & credentials
+.env
+.env.*
+
+# Python cache
 __pycache__/
 *.py[cod]
 *$py.class
 
-# Local builds / zips
+# Temporary directories & local release archives
+tmp/
+temp/
+scratch/
+.tmp/
 *.zip
