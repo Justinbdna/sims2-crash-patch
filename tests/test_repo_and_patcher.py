@@ -680,6 +680,19 @@ class TestWindowsToolkit(unittest.TestCase):
             self.assertTrue(ok3)
             self.assertEqual(exe.read_bytes(), orig)
 
+            # Truncated pre-existing backup must be repaired before patching
+            bak = Path(tmp) / "Sims2EP9.exe.backup"
+            bak.write_bytes(b"")
+            ok4, _ = wt.set_large_address_aware(exe, enable=True)
+            self.assertTrue(ok4)
+            self.assertEqual(bak.read_bytes(), orig)
+
+            # Size-mismatched backup (valid PE header but truncated trailing data) must be refused on restore
+            bak.write_bytes(orig + b"\x00" * 16)
+            ok5, msg5 = wt.restore_4gb_backup(exe)
+            self.assertFalse(ok5)
+            self.assertIn("size mismatch", msg5)
+
     def test_pe_rejects_invalid_file(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             bad = Path(tmp) / "NotPE.exe"

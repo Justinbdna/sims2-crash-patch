@@ -671,7 +671,9 @@ sub read_raw {
 
 sub write_atomic {
     my ($p, $buf, $mode) = @_;
+    die "Refusing to write through symlink: $p\n" if -l $p;
     my $tmp = "$p.tmp.$$";
+    unlink($tmp) if -e $tmp || -l $tmp;
     $active_tmp = $tmp;
     open(my $out, ">:raw", $tmp) or do {
         $active_tmp = undef;
@@ -825,7 +827,11 @@ install_managed_maxfiles_daemon() {
         return 1
     fi
     local tmp_plist
-    tmp_plist="$(mktemp /tmp/sims2_limit_maxfiles.XXXXXX)" || return 1
+    tmp_plist="$(umask 077 && mktemp "${TMPDIR:-/tmp}/sims2_limit_maxfiles.XXXXXX")" || return 1
+    if [ -L "$tmp_plist" ] || [ -L "$target_plist" ]; then
+        rm -f "$tmp_plist"
+        return 1
+    fi
     cat > "$tmp_plist" <<'PLISTEOF'
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -1023,7 +1029,9 @@ sub read_raw {
 
 sub write_atomic {
     my ($p, $buf, $mode) = @_;
+    die "Refusing to write through symlink: $p\n" if -l $p;
     my $tmp = "$p.tmp.$$";
+    unlink($tmp) if -e $tmp || -l $tmp;
     $active_tmp = $tmp;
     open(my $out, ">:raw", $tmp) or do {
         $active_tmp = undef;
@@ -1137,6 +1145,12 @@ PERLEOF
         PATCH_STATUS="FAILED (binary patch error)"
         log_diag "BINARY_PATCH FAILED"
         echo -e "${RED}[-] Le patch binaire a échoué / Binary patch failed.${NC}"
+        pause_exit 1
+    fi
+    if ! run_privileged "$EXE_PATH" chmod 755 "$EXE_PATH"; then
+        PATCH_STATUS="FAILED (chmod 755 error)"
+        log_diag "BINARY_PATCH CHMOD FAILED"
+        echo -e "${RED}[-] Impossible d'appliquer les permissions 0755 sur $EXE_PATH.${NC}"
         pause_exit 1
     fi
     PATCH_STATUS="OK (60 Hz verrouillé / locked)"

@@ -395,10 +395,18 @@ main() {
 
     echo ""
     echo -e "${BOLD}[2/3] Restauration atomique & Re-signature (codesign)...${NC}"
+    if [ -L "$SOURCE_BACKUP" ] || [ -L "$EXE_PATH" ]; then
+        RESTORE_STATUS="FAILED (symlink target refused)"
+        log_diag "RESTORE FAILED symlink refused"
+        echo -e "${RED}[-] Erreur de sécurité : lien symbolique inattendu sur le binaire ou la sauvegarde.${NC}"
+        pause_exit 1
+    fi
     local TMP_RESTORE="$EXE_PATH.tmp.$$"
+    run_privileged "$APP_PATH" rm -f "$TMP_RESTORE" 2>/dev/null
     if ! run_privileged "$APP_PATH" cp -f "$SOURCE_BACKUP" "$TMP_RESTORE" || \
        ! run_privileged "$APP_PATH" chmod 755 "$TMP_RESTORE" || \
-       ! run_privileged "$APP_PATH" mv -f "$TMP_RESTORE" "$EXE_PATH"; then
+       ! run_privileged "$APP_PATH" mv -f "$TMP_RESTORE" "$EXE_PATH" || \
+       ! run_privileged "$APP_PATH" chmod 755 "$EXE_PATH"; then
         run_privileged "$APP_PATH" rm -f "$TMP_RESTORE" 2>/dev/null
         RESTORE_STATUS="FAILED (atomic restore error)"
         log_diag "RESTORE FAILED"
