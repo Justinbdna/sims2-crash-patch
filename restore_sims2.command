@@ -25,9 +25,51 @@ REAL_USER=""
 REAL_UID=""
 REAL_HOME=""
 APP_REQUIRES_SUDO=1
+RESTORE_STATUS=""
+LOG_FILE=""
+LOG_FINALIZED=0
+
+init_diagnostic_log() {
+    local label="${1:-restore_sims2.command v1.3.0}"
+    [ -z "${REAL_HOME:-}" ] && return 0
+    local log_dir="${SIMS2_LOG_DIR:-$REAL_HOME/Library/Logs/Sims2-Crash-Patch}"
+    run_as_real_user mkdir -p "$log_dir" >/dev/null 2>&1 || return 0
+    LOG_FILE="$log_dir/latest.log"
+    if [ -f "$LOG_FILE" ]; then
+        run_as_real_user mv -f "$LOG_FILE" "$log_dir/previous.log" >/dev/null 2>&1 || true
+    fi
+    local os_ver arch_name
+    os_ver="$(sw_vers -productVersion 2>/dev/null || echo 'unknown')"
+    arch_name="$(uname -m 2>/dev/null || echo 'unknown')"
+    run_as_real_user sh -c 'cat > "$1"' _ "$LOG_FILE" <<LOGEOF 2>/dev/null || LOG_FILE=""
+=== Sims 2 Crash Patch — Journal Technique / Diagnostic Log ===
+Script : $label
+Date   : $(date '+%Y-%m-%d %H:%M:%S %z')
+User   : ${REAL_USER:-unknown} (uid=${REAL_UID:-?})
+macOS  : $os_ver ($arch_name)
+App    : ${APP_PATH:-unknown}
+LOGEOF
+}
+
+log_diag() {
+    [ -z "${LOG_FILE:-}" ] && return 0
+    local msg="$1"
+    run_as_real_user sh -c 'printf "[%s] %s\n" "$(date +%H:%M:%S)" "$2" >> "$1"' _ "$LOG_FILE" "$msg" 2>/dev/null || true
+}
+
+finish_diagnostic_log() {
+    local code="${1:-0}"
+    [ -z "${LOG_FILE:-}" ] && return 0
+    [ "${LOG_FINALIZED:-0}" -eq 1 ] && return 0
+    LOG_FINALIZED=1
+    log_diag "EXIT code=$code"
+    [ -n "${RESTORE_STATUS:-}" ] && log_diag "SUMMARY restore=$RESTORE_STATUS"
+    echo -e "  ${CYAN}[i] Journal technique / Log :${NC} $LOG_FILE"
+}
 
 pause_exit() {
     local code="${1:-0}"
+    finish_diagnostic_log "$code"
     echo ""
     if [ "${SIMS2_NONINTERACTIVE:-0}" = "1" ]; then
         exit "$code"
@@ -73,7 +115,7 @@ resolve_real_user() {
 }
 
 run_as_real_user() {
-    if [ "$(id -u)" -eq 0 ]; then
+    if [ "$(id -u)" -eq 0 ] && [ "${SIMS2_LIB_ONLY:-0}" != "1" ]; then
         if [ -n "${REAL_UID:-}" ] && /bin/launchctl print "user/$REAL_UID" >/dev/null 2>&1; then
             /bin/launchctl asuser "$REAL_UID" /usr/bin/sudo -H -u "$REAL_USER" "$@"
         else
@@ -89,7 +131,7 @@ run_privileged() {
     shift
     if [ "${SIMS2_LIB_ONLY:-0}" = "1" ] && [ "$scope_target" != "$MANAGED_MAXFILES_PLIST" ]; then
         case "$scope_target" in
-            /tmp/*|/var/folders/*|/private/tmp/*|/private/var/folders/*)
+            /tmp/*|/var/folders/*|/private/tmp/*|/private/var/folders/*|[A-Za-z]:/*|/[a-zA-Z]/*|*/[Tt]emp/*|*/_temp/*)
                 "$@"
                 return $?
                 ;;
@@ -280,8 +322,11 @@ main() {
         pause_exit 1
     fi
 
+    init_diagnostic_log "restore_sims2.command v1.3.0"
+
     # 1. Verify the game is not currently running
     if pgrep -x "Sims2XP_Exe" >/dev/null 2>&1 || pgrep -x "AppBundleExe" >/dev/null 2>&1; then
+        RESTORE_STATUS="ABORTED (game running)"
         echo -e "${YELLOW}[!] Attention / Warning:${NC} Le jeu est actuellement en cours d'exécution."
         echo "    Veuillez fermer Les Sims 2 avant de restaurer le binaire d'origine."
         echo "    Please quit The Sims 2 before restoring the original binary."
@@ -290,11 +335,13 @@ main() {
 
     # 2. Locate application bundle (/Applications or ~/Applications)
     if ! locate_app_bundle; then
+        RESTORE_STATUS="FAILED (app not found)"
         echo -e "${RED}[-] Erreur / Error:${NC} Jeu introuvable / Game not found at:"
         echo "    /Applications/The Sims 2.app/Contents/MacOS/Sims2XP_Exe"
         echo "    (ni dans ~/Applications/The Sims 2.app)"
         pause_exit 1
     fi
+    log_diag "TARGET app=$APP_PATH sudo_required=$APP_REQUIRES_SUDO"
 
     # 3. Locate and verify a pristine backup file
     local SOURCE_BACKUP=""
@@ -353,13 +400,19 @@ main() {
        ! run_privileged "$APP_PATH" chmod 755 "$TMP_RESTORE" || \
        ! run_privileged "$APP_PATH" mv -f "$TMP_RESTORE" "$EXE_PATH"; then
         run_privileged "$APP_PATH" rm -f "$TMP_RESTORE" 2>/dev/null
+        RESTORE_STATUS="FAILED (atomic restore error)"
+        log_diag "RESTORE FAILED"
         echo -e "${RED}[-] Échec de la restauration atomique / Atomic restore failed.${NC}"
         pause_exit 1
     fi
 
     if sign_and_verify_app "$APP_PATH"; then
+        RESTORE_STATUS="OK (original binary restored & codesign strict verified)"
+        log_diag "RESTORE OK + CODESIGN OK"
         echo -e "${GREEN}[+] Signature locale appliquée et vérifiée (--strict) / Ad-hoc signature applied & verified.${NC}"
     else
+        RESTORE_STATUS="FAILED (codesign error)"
+        log_diag "CODESIGN FAILED"
         pause_exit 1
     fi
 

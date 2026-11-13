@@ -121,11 +121,24 @@
       Système -> Utilisateurs et groupes), puis relancez patch_sims2.command.
 
    CAS 4 : Erreur « Not authorized to send Apple events to Finder (-1743) »
-           ou vous avez cliqué « Ne pas autoriser » par erreur
-   -> NE LANCEZ PAS LES SIMS 2 tout de suite (sinon le jeu créera un profil vide).
-   -> Ouvrez Réglages Système -> Confidentialité et sécurité -> Automatisation.
-   -> Dépliez « Terminal » et activez l'interrupteur « Finder ».
-   -> Relancez simplement patch_sims2.command : il terminera la copie des saves.
+           ou « vous ne disposez pas des autorisations requises » (-5000)
+   -> Si erreur -1743 (Automatisation refusée) :
+      Activez Réglages Système -> Confidentialité et sécurité -> Automatisation
+      -> Terminal -> Finder, puis relancez patch_sims2.command.
+   -> Si erreur « autorisations requises / -5000 » alors que vous avez cliqué
+      Autoriser : macOS protège le conteneur App Store contre les copies auto.
+      • Si vous aviez déjà des sauvegardes dans Application Support, vous
+        pouvez lancer le jeu normalement.
+      • Sinon, copiez à la main dans le Finder (Cmd+Maj+G) :
+        ~/Library/Containers/com.aspyr.sims2.appstore/Data/Library/Application Support/Aspyr/The Sims 2/
+        vers ~/Library/Application Support/Aspyr/The Sims 2/ (ou accordez
+        Accès complet au disque à Terminal dans Réglages Système).
+
+   CAS 4B : Partager un rapport clair si quelque chose ne marche pas
+   -> Chaque exécution des scripts enregistre un journal technique propre
+      (0 % CPU en arrière-plan, aucun mot de passe enregistré) dans :
+      ~/Library/Logs/Sims2-Crash-Patch/latest.log
+      Copiez-collez ce fichier (et Documents/Logs du jeu si besoin) !
 
    CAS 5 : Le jeu démarre mais mes anciens quartiers / familles semblent absents
    -> Regardez dans ~/Library/Application Support/Aspyr/ (Finder : menu Aller ->
@@ -230,9 +243,18 @@
      password (not Apple ID unless identical).
    - Case 3 (Standard non-Admin account): Switch to an Admin account on the Mac
      or grant Admin rights in System Settings -> Users & Groups.
-   - Case 4 (Finder Automation denied / -1743 error): DO NOT launch The Sims 2
-     yet! Enable System Settings -> Privacy & Security -> Automation -> Terminal
-     -> Finder, then re-run patch_sims2.command to complete save migration.
+   - Case 4 (Finder Automation denied -1743 OR Container permissions -5000):
+     For -1743: enable System Settings -> Privacy & Security -> Automation ->
+     Terminal -> Finder, then re-run patch_sims2.command.
+     For -5000 ("do not have permission" after clicking Allow): macOS blocks
+     scripted reads from App Store Sandbox containers. Open Finder (Cmd+Shift+G)
+     at ~/Library/Containers/com.aspyr.sims2.appstore/Data/Library/Application Support/Aspyr/The Sims 2/
+     and drag Neighborhoods/Downloads into ~/Library/Application Support/Aspyr/The Sims 2/
+     (or grant Full Disk Access to Terminal). Note: if you already have active
+     saves in Application Support, you can still launch normally.
+   - Case 4B (Sharing diagnostic logs): Each script run saves a lightweight log
+     (0% background CPU, zero passwords saved) to:
+     ~/Library/Logs/Sims2-Crash-Patch/latest.log
    - Case 5 (Old saves appear missing -> Sandbox Backup folder): Check
      ~/Library/Application Support/Aspyr/ for "The Sims 2 (Sandbox Backup ...)"
      and merge Neighborhoods/Downloads while the game is closed.

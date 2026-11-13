@@ -181,7 +181,8 @@ class TestMacScriptsIntegrity(unittest.TestCase):
     def test_a2_osascript_capture_and_default_branches(self) -> None:
         patch_text = (ROOT_DIR / "patch_sims2.command").read_text(encoding="utf-8")
         clean_text = (ROOT_DIR / "clean_sims2_cache.command").read_text(encoding="utf-8")
-        self.assertIn("/usr/bin/osascript - \"$DEST_FOLDER_NAME\" 2>&1", patch_text)
+        self.assertIn('/usr/bin/osascript - "$dest_folder_name" 2>&1', patch_text)
+        self.assertIn('MIGRATE_RESULT="$(run_finder_migration_osascript "$DEST_FOLDER_NAME")"', patch_text)
         self.assertIn("/usr/bin/osascript 2>&1", patch_text)
         self.assertIn("/usr/bin/osascript 2>&1", clean_text)
 
@@ -542,6 +543,14 @@ class TestMacScriptsIntegrity(unittest.TestCase):
             self.assertEqual(r_keep_foreign.returncode, 0, r_keep_foreign.stderr or r_keep_foreign.stdout)
             self.assertTrue(foreign_plist.is_file())
 
+            # Windows-style temporary paths must also bypass sudo under SIMS2_LIB_ONLY=1
+            for script in ("patch_sims2.command", "clean_sims2_cache.command", "restore_sims2.command"):
+                r_win = self._run_bash_lib(
+                    script,
+                    'run_privileged "C:/Users/runneradmin/AppData/Local/Temp/managed.plist" true',
+                )
+                self.assertEqual(r_win.returncode, 0, f"{script} Windows temp bypass failed: {r_win.stderr or r_win.stdout}")
+
     def test_v13_zero_clt_and_ux_docs_and_clean_menu_exit(self) -> None:
         clt_tools_rx = re.compile(r"(?<![#\w/.-])(python3|swift|git|clang|xcodebuild|objdump|cc)\b")
         for script_name in ("patch_sims2.command", "clean_sims2_cache.command", "restore_sims2.command"):
@@ -570,19 +579,68 @@ class TestMacScriptsIntegrity(unittest.TestCase):
         if sys.platform == "darwin":
             bash_bin = vp.find_bash()
             self.assertIsNotNone(bash_bin)
-            env = dict(os.environ)
-            env["SIMS2_NONINTERACTIVE"] = "1"
-            res_quit = subprocess.run(
-                [bash_bin, "./clean_sims2_cache.command"],
-                cwd=str(ROOT_DIR),
-                env=env,
-                input="4\n",
-                capture_output=True,
-                text=True,
-            )
-            self.assertEqual(res_quit.returncode, 0, res_quit.stderr or res_quit.stdout)
-            self.assertIn("[1]", res_quit.stdout)
-            self.assertIn("[4]", res_quit.stdout)
+            with tempfile.TemporaryDirectory() as tmp:
+                env = dict(os.environ)
+                env["SIMS2_NONINTERACTIVE"] = "1"
+                env["SIMS2_LOG_DIR"] = tmp
+                res_quit = subprocess.run(
+                    [bash_bin, "./clean_sims2_cache.command"],
+                    cwd=str(ROOT_DIR),
+                    env=env,
+                    input="4\n",
+                    capture_output=True,
+                    text=True,
+                )
+                self.assertEqual(res_quit.returncode, 0, res_quit.stderr or res_quit.stdout)
+                self.assertIn("[1]", res_quit.stdout)
+                self.assertIn("[4]", res_quit.stdout)
+
+    def test_v13_container_permission_error_and_diagnostic_logs(self) -> None:
+        # 1. Container access (-5000 / autorisations requises) with existing active saves -> MIGRATION_FAILED=2 (non-blocking)
+        r_soft = self._run_bash_lib(
+            "patch_sims2.command",
+            'handle_migration_result "$1" 0 "BACKUP" 1 "The Sims 2 (Sandbox Backup 2026-11-13)"; printf "FAILED=%s\\nKIND=%s\\nSTATUS=%s\\n" "$MIGRATION_FAILED" "$MIGRATION_ERROR_KIND" "$MIGRATION_STATUS"',
+            "ERROR:Impossible d’effectuer l’opération car vous ne disposez pas des autorisations requises. (-5000)",
+        )
+        self.assertEqual(r_soft.returncode, 0, r_soft.stderr or r_soft.stdout)
+        self.assertIn("FAILED=2", r_soft.stdout)
+        self.assertIn("KIND=CONTAINER_ACCESS", r_soft.stdout)
+        self.assertNotIn("Automatisation", r_soft.stdout)
+
+        # 2. Container access (-5000) when target_nonempty=0 -> MIGRATION_FAILED=1 + CONTAINER_ACCESS + manual Finder guidance
+        r_hard = self._run_bash_lib(
+            "patch_sims2.command",
+            'handle_migration_result "$1" 0 "DIRECT" 0 "The Sims 2"; printf "FAILED=%s\\nKIND=%s\\n" "$MIGRATION_FAILED" "$MIGRATION_ERROR_KIND"',
+            "ERROR:Impossible d’effectuer l’opération car vous ne disposez pas des autorisations requises. (-5000)",
+        )
+        self.assertEqual(r_hard.returncode, 0, r_hard.stderr or r_hard.stdout)
+        self.assertIn("FAILED=1", r_hard.stdout)
+        self.assertIn("KIND=CONTAINER_ACCESS", r_hard.stdout)
+        self.assertIn("Accès complet au disque", r_hard.stdout)
+
+        # 3. Partial copy when active saves already exist -> MIGRATION_FAILED=2
+        r_partial = self._run_bash_lib(
+            "patch_sims2.command",
+            'handle_migration_result "PARTIAL:2|Music|err (-5000)" 0 "BACKUP" 1 "Sandbox Backup"',
+        )
+        self.assertEqual(r_partial.returncode, 0, r_partial.stderr or r_partial.stdout)
+        self.assertIn("partielle", r_partial.stdout)
+
+        # 4. Lightweight diagnostic log creation & rotation across all 3 .command scripts
+        for script in ("patch_sims2.command", "clean_sims2_cache.command", "restore_sims2.command"):
+            with tempfile.TemporaryDirectory() as tmp:
+                r_log = self._run_bash_lib(
+                    script,
+                    'REAL_USER="tester"; REAL_UID="$(id -u)"; REAL_HOME="$1"; SIMS2_LOG_DIR="$1/logs"; init_diagnostic_log "test-run-1"; log_diag "STEP_ONE"; finish_diagnostic_log 0; LOG_FINALIZED=0; init_diagnostic_log "test-run-2"; log_diag "STEP_TWO"; finish_diagnostic_log 0',
+                    Path(tmp).as_posix(),
+                )
+                self.assertEqual(r_log.returncode, 0, f"{script} log failed: {r_log.stderr or r_log.stdout}")
+                latest = Path(tmp) / "logs" / "latest.log"
+                prev = Path(tmp) / "logs" / "previous.log"
+                self.assertTrue(latest.is_file(), f"Missing latest.log for {script}")
+                self.assertTrue(prev.is_file(), f"Missing rotated previous.log for {script}")
+                self.assertIn("STEP_TWO", latest.read_text(encoding="utf-8"))
+                self.assertIn("STEP_ONE", prev.read_text(encoding="utf-8"))
 
 
 

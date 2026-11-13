@@ -25,10 +25,53 @@ USERPROPS_STATUS=""
 MAXFILES_SOFT=""
 MAXFILES_HARD=""
 CC_MAXFILES_STATUS=""
+CACHE_STATUS=""
 MANAGED_MAXFILES_PLIST="/Library/LaunchDaemons/limit.maxfiles.plist"
+LOG_FILE=""
+LOG_FINALIZED=0
+
+init_diagnostic_log() {
+    local label="${1:-clean_sims2_cache.command v1.3.0}"
+    [ -z "${REAL_HOME:-}" ] && return 0
+    local log_dir="${SIMS2_LOG_DIR:-$REAL_HOME/Library/Logs/Sims2-Crash-Patch}"
+    run_as_real_user mkdir -p "$log_dir" >/dev/null 2>&1 || return 0
+    LOG_FILE="$log_dir/latest.log"
+    if [ -f "$LOG_FILE" ]; then
+        run_as_real_user mv -f "$LOG_FILE" "$log_dir/previous.log" >/dev/null 2>&1 || true
+    fi
+    local os_ver arch_name
+    os_ver="$(sw_vers -productVersion 2>/dev/null || echo 'unknown')"
+    arch_name="$(uname -m 2>/dev/null || echo 'unknown')"
+    run_as_real_user sh -c 'cat > "$1"' _ "$LOG_FILE" <<LOGEOF 2>/dev/null || LOG_FILE=""
+=== Sims 2 Crash Patch — Journal Technique / Diagnostic Log ===
+Script : $label
+Date   : $(date '+%Y-%m-%d %H:%M:%S %z')
+User   : ${REAL_USER:-unknown} (uid=${REAL_UID:-?})
+macOS  : $os_ver ($arch_name)
+LOGEOF
+}
+
+log_diag() {
+    [ -z "${LOG_FILE:-}" ] && return 0
+    local msg="$1"
+    run_as_real_user sh -c 'printf "[%s] %s\n" "$(date +%H:%M:%S)" "$2" >> "$1"' _ "$LOG_FILE" "$msg" 2>/dev/null || true
+}
+
+finish_diagnostic_log() {
+    local code="${1:-0}"
+    [ -z "${LOG_FILE:-}" ] && return 0
+    [ "${LOG_FINALIZED:-0}" -eq 1 ] && return 0
+    LOG_FINALIZED=1
+    log_diag "EXIT code=$code"
+    [ -n "${CACHE_STATUS:-}" ] && log_diag "SUMMARY caches=$CACHE_STATUS"
+    [ -n "${USERPROPS_STATUS:-}" ] && log_diag "SUMMARY userProps=$USERPROPS_STATUS"
+    [ -n "${CC_MAXFILES_STATUS:-}" ] && log_diag "SUMMARY cc_maxfiles=$CC_MAXFILES_STATUS"
+    echo -e "  ${CYAN}[i] Journal technique / Log :${NC} $LOG_FILE"
+}
 
 pause_exit() {
     local code="${1:-0}"
+    finish_diagnostic_log "$code"
     echo ""
     if [ "${SIMS2_NONINTERACTIVE:-0}" = "1" ]; then
         exit "$code"
@@ -75,7 +118,7 @@ resolve_real_user() {
 
 # Run a command in the real user's Aqua/WindowServer session when invoked via sudo
 run_as_real_user() {
-    if [ "$(id -u)" -eq 0 ]; then
+    if [ "$(id -u)" -eq 0 ] && [ "${SIMS2_LIB_ONLY:-0}" != "1" ]; then
         if [ -n "${REAL_UID:-}" ] && /bin/launchctl print "user/$REAL_UID" >/dev/null 2>&1; then
             /bin/launchctl asuser "$REAL_UID" /usr/bin/sudo -H -u "$REAL_USER" "$@"
         else
@@ -91,7 +134,7 @@ run_privileged() {
     shift
     if [ "${SIMS2_LIB_ONLY:-0}" = "1" ] && [ "$scope_target" != "$MANAGED_MAXFILES_PLIST" ]; then
         case "$scope_target" in
-            /tmp/*|/var/folders/*|/private/tmp/*|/private/var/folders/*)
+            /tmp/*|/var/folders/*|/private/tmp/*|/private/var/folders/*|[A-Za-z]:/*|/[a-zA-Z]/*|*/[Tt]emp/*|*/_temp/*)
                 "$@"
                 return $?
                 ;;
@@ -605,10 +648,21 @@ run_menu_choice() {
     local TARGET_DATA_DIR="$2"
 
     case "$choice" in
+        1|2|3)
+            init_diagnostic_log "clean_sims2_cache.command v1.3.0 (menu=$choice)"
+            ;;
+    esac
+
+    case "$choice" in
         1)
             echo ""
             echo -e "${BOLD}[1/1] Purge des caches corrompus (Actif + Sandbox)...${NC}"
             purge_all_caches "$TARGET_DATA_DIR"
+            if [ "$SANDBOX_FAILED" -eq 0 ]; then
+                CACHE_STATUS="Purge réussie (Actif + Sandbox)"
+            else
+                CACHE_STATUS="Actif traité ; avertissement Sandbox ($SANDBOX_FAILED)"
+            fi
             echo ""
             if [ "$SANDBOX_FAILED" -eq 0 ]; then
                 echo -e "${GREEN}${BOLD}========================================================================${NC}"
