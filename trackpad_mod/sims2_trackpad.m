@@ -54,7 +54,8 @@ static double gScrollAccumX = 0.0;
 static double gTwistAccum = 0.0;
 static double gPinchAccum = 0.0;
 static BOOL gIsTwisting = NO;
-static BOOL gSuppressCurrentScroll = NO;
+static __weak NSEvent *gSuppressedScrollEvent = nil;
+static __weak NSEvent *gForcedNonInvertedEvent = nil;
 static BOOL gForceScrollNonInverted = NO;
 
 static BOOL gSpoofMiddleButton = NO;
@@ -269,6 +270,22 @@ static void post_rotation_key(BOOL rotateRight) {
     }
 }
 
+static id resolve_window_listener(void) {
+    id listener = gWindowListener;
+    if (listener) {
+        return listener;
+    }
+    Class listenerCls = objc_getClass("Cocoa_WindowListener");
+    NSWindow *win = [NSApp keyWindow];
+    id delegate = win ? [win delegate] : nil;
+    if (delegate && (!listenerCls || [delegate isKindOfClass:listenerCls]) &&
+        [delegate respondsToSelector:@selector(scrollWheel:)]) {
+        gWindowListener = delegate;
+        return delegate;
+    }
+    return nil;
+}
+
 static void post_pinch_zoom_scroll(int direction) {
     CGEventRef cgEv = CGEventCreateScrollWheelEvent(NULL, kCGScrollEventUnitLine, 2, (int32_t)direction, 0);
     if (!cgEv) {
@@ -280,7 +297,7 @@ static void post_pinch_zoom_scroll(int direction) {
         return;
     }
 
-    id listener = gWindowListener;
+    id listener = resolve_window_listener();
     if (listener && gOrigScrollWheelIMP) {
         typedef void (*ScrollFn)(id, SEL, NSEvent *);
         BOOL prevForce = gForceScrollNonInverted;
@@ -290,11 +307,13 @@ static void post_pinch_zoom_scroll(int direction) {
         return;
     }
 
+    /* Guarantee non-inversion even if first pinch happens before gWindowListener is captured */
+    gForcedNonInvertedEvent = scrollEv;
     [NSApp postEvent:scrollEv atStart:NO];
 }
 
 static void handle_scroll_event(NSEvent *event) {
-    gSuppressCurrentScroll = NO;
+    gSuppressedScrollEvent = nil;
     if (![event hasPreciseScrollingDeltas]) {
         return; // External mouse wheel or synthetic pinch line scroll: keep native behavior
     }
@@ -309,13 +328,13 @@ static void handle_scroll_event(NSEvent *event) {
 
     if (momentum != NSEventPhaseNone) {
         if (gScrollAxis == Sims2ScrollAxisRotateX || gIsTwisting) {
-            gSuppressCurrentScroll = YES;
+            gSuppressedScrollEvent = event;
         }
         return;
     }
 
     if (gIsTwisting) {
-        gSuppressCurrentScroll = YES;
+        gSuppressedScrollEvent = event;
         return;
     }
 
@@ -343,7 +362,7 @@ static void handle_scroll_event(NSEvent *event) {
     }
 
     if (gScrollAxis == Sims2ScrollAxisRotateX) {
-        gSuppressCurrentScroll = YES;
+        gSuppressedScrollEvent = event;
         if ((gScrollAccumX > 0.0 && fingerRightDx < -1.0) ||
             (gScrollAccumX < 0.0 && fingerRightDx > 1.0)) {
             gScrollAccumX = 0.0;
@@ -505,12 +524,21 @@ static NSEvent *swizzled_nextEventMatchingMask(id self, SEL _cmd, NSEventMask ma
 
 static void swizzled_scrollWheel(id self, SEL _cmd, NSEvent *event) {
     gWindowListener = self;
-    if (gSuppressCurrentScroll) {
+    if (event && event == gSuppressedScrollEvent) {
+        gSuppressedScrollEvent = nil;
         return;
+    }
+    BOOL isForcedEvent = (event && event == gForcedNonInvertedEvent);
+    if (isForcedEvent) {
+        gForceScrollNonInverted = YES;
     }
     typedef void (*Fn)(id, SEL, NSEvent *);
     if (gOrigScrollWheelIMP) {
         ((Fn)gOrigScrollWheelIMP)(self, _cmd, event);
+    }
+    if (isForcedEvent) {
+        gForceScrollNonInverted = NO;
+        gForcedNonInvertedEvent = nil;
     }
 }
 
@@ -541,7 +569,7 @@ static NSEventModifierFlags swizzled_classModifierFlags(id self, SEL _cmd) {
 }
 
 static BOOL swizzled_isDirectionInvertedFromDevice(id self, SEL _cmd) {
-    if (gForceScrollNonInverted) {
+    if (gForceScrollNonInverted || (self && self == gForcedNonInvertedEvent)) {
         return NO;
     }
     typedef BOOL (*Fn)(id, SEL);
@@ -554,7 +582,7 @@ static void handle_option_mouse_down(id self, SEL _cmd, NSEvent *event, IMP orig
     if (!origIMP) {
         return;
     }
-    if (gEnableOptionOrbit && (([event modifierFlags] & NSEventModifierFlagOption) != 0)) {
+    if (gEnableOptionOrbit && !gOptionMiddleDragActive && (([event modifierFlags] & NSEventModifierFlagOption) != 0)) {
         clear_sdl_option_modifier_state(self, event);
         gOptionMiddleDragActive = YES;
         gOptionDragWasRight = isRight;
@@ -569,13 +597,13 @@ static void handle_option_mouse_down(id self, SEL _cmd, NSEvent *event, IMP orig
     ((Fn)origIMP)(self, _cmd, event);
 }
 
-static void handle_option_mouse_drag(id self, SEL _cmd, NSEvent *event, IMP origIMP) {
+static void handle_option_mouse_drag(id self, SEL _cmd, NSEvent *event, IMP origIMP, BOOL isRight) {
     gWindowListener = self;
     typedef void (*Fn)(id, SEL, NSEvent *);
     if (!origIMP) {
         return;
     }
-    if (gOptionMiddleDragActive) {
+    if (gOptionMiddleDragActive && (isRight == gOptionDragWasRight)) {
         gSpoofMiddleButton = YES;
         gMaskOptionModifier = YES;
         ((Fn)origIMP)(self, _cmd, event);
@@ -586,13 +614,13 @@ static void handle_option_mouse_drag(id self, SEL _cmd, NSEvent *event, IMP orig
     ((Fn)origIMP)(self, _cmd, event);
 }
 
-static void handle_option_mouse_up(id self, SEL _cmd, NSEvent *event, IMP origIMP) {
+static void handle_option_mouse_up(id self, SEL _cmd, NSEvent *event, IMP origIMP, BOOL isRight) {
     gWindowListener = self;
     typedef void (*Fn)(id, SEL, NSEvent *);
     if (!origIMP) {
         return;
     }
-    if (gOptionMiddleDragActive) {
+    if (gOptionMiddleDragActive && (isRight == gOptionDragWasRight)) {
         gOptionMiddleDragActive = NO;
         gOptionDragWasRight = NO;
         gLastMouseDownWindow = nil;
@@ -611,11 +639,11 @@ static void swizzled_mouseDown(id self, SEL _cmd, NSEvent *event) {
 }
 
 static void swizzled_mouseUp(id self, SEL _cmd, NSEvent *event) {
-    handle_option_mouse_up(self, _cmd, event, gOrigMouseUpIMP);
+    handle_option_mouse_up(self, _cmd, event, gOrigMouseUpIMP, NO);
 }
 
 static void swizzled_mouseDragged(id self, SEL _cmd, NSEvent *event) {
-    handle_option_mouse_drag(self, _cmd, event, gOrigMouseDraggedIMP);
+    handle_option_mouse_drag(self, _cmd, event, gOrigMouseDraggedIMP, NO);
 }
 
 static void swizzled_rightMouseDown(id self, SEL _cmd, NSEvent *event) {
@@ -623,11 +651,11 @@ static void swizzled_rightMouseDown(id self, SEL _cmd, NSEvent *event) {
 }
 
 static void swizzled_rightMouseUp(id self, SEL _cmd, NSEvent *event) {
-    handle_option_mouse_up(self, _cmd, event, gOrigRightMouseUpIMP);
+    handle_option_mouse_up(self, _cmd, event, gOrigRightMouseUpIMP, YES);
 }
 
 static void swizzled_rightMouseDragged(id self, SEL _cmd, NSEvent *event) {
-    handle_option_mouse_drag(self, _cmd, event, gOrigRightMouseDraggedIMP);
+    handle_option_mouse_drag(self, _cmd, event, gOrigRightMouseDraggedIMP, YES);
 }
 
 /*
@@ -654,7 +682,8 @@ static void reset_gesture_and_key_state(id listener) {
     gScrollAccumX = 0.0;
     gTwistAccum = 0.0;
     gPinchAccum = 0.0;
-    gSuppressCurrentScroll = NO;
+    gSuppressedScrollEvent = nil;
+    gForcedNonInvertedEvent = nil;
     gForceScrollNonInverted = NO;
 }
 

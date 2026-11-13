@@ -29,35 +29,34 @@
    - Hints SDL2 fullscreen Space/Dock (`SDL_VIDEO_MAC_FULLSCREEN_SPACES`, `SDL_ALLOW_TOPMOST`, etc.) + garde `swizzled_mouseMoved:` hors focus.
    - Gestes trackpad : `Option (⌥)` + clic-glissé (`SDL_BUTTON_MIDDLE` + masquage `NSEventModifierFlagOption`), pincement 2 doigts (`NSEventTypeMagnify` -> zoom `scrollWheel`), swipe horizontal 2 doigts & rotation (`NSEventTypeRotate`) -> touches `,`/`.` résolues via Carbon `UCKeyTranslate` (AZERTY/QWERTY) maintenues `75 ms`.
 
-### Points d'Audit Trouvés sur `staging` (à traiter avant `v1.4.0`)
-1. **`trackpad_mod/sims2_trackpad.m` vs `libsims2_trackpad.dylib` (Important — sans casser la synchro binaire) :**
-   - *Règle d'or depuis Windows / en distanciel :* ne jamais modifier `sims2_trackpad.m` sur `staging` sans recompiler `trackpad_mod/libsims2_trackpad.dylib` sur macOS (`build_trackpad.sh`), sinon le source et la `.dylib` embarquée divergent.
-   - **Cas limites repérés dans `sims2_trackpad.m` (pour une future branche `fix/trackpad-edge-cases` à recompiler sur Mac / artefact CI macOS) :**
-     - *Conflit clic gauche/droit pendant `Option`+drag (L551–607) :* `handle_option_mouse_down` ne vérifie pas `!gOptionMiddleDragActive` et `handle_option_mouse_up` ne vérifie pas que le `mouseUp:`/`rightMouseUp:` correspond au bouton d'origine (`gOptionDragWasRight`). Un clic secondaire accidentel en cours de glissé peut terminer l'orbite ou envoyer un faux `SDL_BUTTON_MIDDLE`.
-     - *Premier pincement avant tout mouvement souris (L283–294) :* si `gWindowListener` est encore `nil`, le fallback `[NSApp postEvent:scrollEv atStart:NO]` n'active pas `gForceScrollNonInverted = YES` (risque d'inversion sur le tout premier pinch avec défilement naturel).
-     - *Suppression scroll (L297/508) :* `gSuppressCurrentScroll` est un simple booléen global plutôt que la référence exacte de l'`NSEvent` dépilé.
-2. **`Graphics Rules.sgr` (`patch_sims2.command` L17 & L1054) :**
-   - À vérifier sur Mac : est-ce que `/Applications/The Sims 2.app` utilise uniquement `Contents/Resources/Config/Graphics Rules.sgr`, ou existe-t-il aussi des copies sous `Contents/Assets/.../TSData/Res/Config/Graphics Rules.sgr` ?
-   - Si un bloc `# Override defaults (SIM-281,416)` contient une ligne `# commentaire` au milieu du bloc, la regex actuelle s'arrête à ce `#`.
-3. **Collision de numéro de version avant release (`v1.3.1` vs `v1.4.0`) :**
-   - `v1.3.1` est déjà publié sur GitHub (`acec191`). `staging` porte encore `Version: 1.3.1` et `[1.3.1]` dans `CHANGELOG.md` / `README.*` alors que les tests Trackpad/Graphics Rules s'appellent `test_v14_*`. Ne jamais re-taguer `v1.3.1` : passer tout en **`v1.4.0`** uniquement lorsque les tests en jeu sur Mac seront validés.
-4. **Durcissement CI & Packaging déjà appliqué sur `feat/v1.4-audit-and-macos-ci` :**
-   - `.github/workflows/ci-and-release.yml` exécute désormais `verify` sur `ubuntu-latest`, `windows-latest` **et `macos-latest`** (compilation `clang -arch x86_64` de `sims2_trackpad.m` + `codesign --verify --strict` + tests macOS) sur `main`, `staging`, `feat/**`, `fix/**`, `audit/**`, `chore/**` et les PRs.
-   - Correction du bug potentiel de nom de branche contenant `/` (`feat/...`) dans `package_releases()` (`scripts/verify_and_package.py`) et validation `LF`/`bash -n` ajoutée sur `trackpad_mod/build_trackpad.sh`.
+### Points d'Audit Résolus & Points Restants sur `staging` (avant `v1.4.0`)
+1. **`trackpad_mod/sims2_trackpad.m` + `libsims2_trackpad.dylib` — Corrigés & recompilés sur Mac :**
+   - *Conflit clic gauche/droit pendant `Option`+drag :* `handle_option_mouse_down` vérifie `!gOptionMiddleDragActive`, et `handle_option_mouse_drag` / `handle_option_mouse_up` vérifient `isRight == gOptionDragWasRight`.
+   - *Premier pincement avant tout mouvement souris :* `resolve_window_listener()` résout `[[NSApp keyWindow] delegate]` si possible, et le fallback `[NSApp postEvent:]` protège l'`NSEvent` ciblé via `gForcedNonInvertedEvent`.
+   - *Suppression scroll par événement exact :* `gSuppressCurrentScroll` remplacé par la référence `NSEvent *` exacte (`gSuppressedScrollEvent`).
+   - `.dylib` recompilée sur Mac via `./trackpad_mod/build_trackpad.sh` et signée (`codesign --verify --strict`).
+2. **`Graphics Rules.sgr` (`patch_sims2.command` L17 & L1054) — Vérifié & renforcé :**
+   - Vérifié dans `/Applications/The Sims 2.app/Contents/` : 19 copies existent dans les packs `Assets`, mais `config-log.txt` confirme que le binaire macOS Aspyr lit `Contents/Resources/Config/Graphics Rules.sgr`.
+   - La regex `# Override defaults (SIM-281,416)` tolère désormais les commentaires `#` intermédiaires et ne s'arrête qu'aux séparateurs `#####`, `endif` ou `end`.
+3. **Collision de numéro de version avant release (`v1.3.1` vs `v1.4.0`) — Restant à faire après tests en jeu :**
+   - `v1.3.1` est déjà publié sur GitHub (`acec191`). `staging` conserve encore `1.3.1` dans les entêtes/docs en attendant la validation finale : passer tout en **`v1.4.0`** uniquement lorsque les tests en jeu sur Mac seront validés, puis merger `staging` -> `main` et taguer `v1.4.0`.
+4. **Durcissement CI & Packaging — Intégré sur `staging` :**
+   - `.github/workflows/ci-and-release.yml` exécute `verify` sur `ubuntu-latest`, `windows-latest` **et `macos-latest`** (compilation `clang -arch x86_64 -Wall -Wextra` de `sims2_trackpad.m` + `codesign --verify --strict` + tests macOS).
+   - Sanitisation du nom de branche (`/`) dans `package_releases()` (`scripts/verify_and_package.py`) et validation `LF`/`bash -n` ajoutée sur `trackpad_mod/build_trackpad.sh`.
 
 ---
 
-## 3. Checklist de Tests Réels sur MacBook Pro (Quand tu rentreras sur Mac)
+## 3. Checklist de Tests Réels sur MacBook Pro (Prochaine étape en jeu)
 
-- [ ] Vérifier les emplacements réels dans l'app bundle : `find "/Applications/The Sims 2.app/Contents" -name "Graphics Rules.sgr"`
-- [ ] Recompiler (si `sims2_trackpad.m` a été modifié sur une branche `fix/*`) : `./trackpad_mod/build_trackpad.sh`
-- [ ] Lancer `python3 scripts/verify_and_package.py` sur macOS
+- [x] Vérifier les emplacements réels dans l'app bundle (`Contents/Resources/Config/Graphics Rules.sgr` confirmé via `config-log.txt`)
+- [x] Recompiler `libsims2_trackpad.dylib` sur Mac : `./trackpad_mod/build_trackpad.sh` + `codesign --verify --strict`
+- [x] Lancer `python3 scripts/verify_and_package.py` sur macOS (`25/25 OK`)
 - [ ] Lancer `./patch_sims2.command` et vérifier `latest.log`, `LC_LOAD_WEAK_DYLIB` (`otool -L "/Applications/The Sims 2.app/Contents/MacOS/Sims2XP_Exe"`), `codesign --verify --deep --strict`
 - [ ] Tester en jeu *Les Sims 2* (clavier AZERTY puis QWERTY, `SIMS2_TRACKPAD_DEBUG=1` au besoin) :
-  - [ ] Pincement 2 doigts = zoom avant/arrière naturel non inversé
+  - [ ] Pincement 2 doigts = zoom avant/arrière naturel non inversé (dès le 1er geste)
   - [ ] Swipe horizontal 2 doigts & rotation 2 doigts = rotation `,`/`.` fluide sans conflit avec le zoom vertical
-  - [ ] `Option (⌥)` + clic-glissé = orbite 3D libre + pitch, et relâchement propre si perte de focus (`Cmd+Tab`)
+  - [ ] `Option (⌥)` + clic-glissé = orbite 3D libre + pitch, sans conflit clic gauche/droit et relâchement propre sur `Cmd+Tab`
   - [ ] Plein écran Space SDL2 + masquage du Dock + `Cmd+Tab` sans téléportation curseur
-  - [ ] Effets graphiques `$High` / résolutions Retina dans les options du jeu
+  - [ ] Effets graphiques `$High` / résolutions Retina dans les options du jeu (`MacBook-Pro-*-config-log.txt`)
 - [ ] Lancer `./restore_sims2.command` et vérifier restauration complète (`Sims2XP_Exe`, `Graphics Rules.sgr`, suppression `libsims2_trackpad.dylib`, `codesign --verify --strict`)
-- [ ] Uniquement après tous les `[x]` ci-dessus : passer les versions à `v1.4.0`, merger `staging` -> `main`, puis taguer `v1.4.0`.
+- [ ] Uniquement après tous les `[x]` ci-dessus : passer les versions à `v1.4.0`, merger `staging` -> `main`, taguer `v1.4.0`, puis passer le dépôt en Public.

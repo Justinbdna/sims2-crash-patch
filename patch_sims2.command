@@ -1051,7 +1051,7 @@ $raw =~ s/\b(uintProp[ \t]+maxResHeight[ \t]+)2048\b/${1}3200/g;
 
 my $override_hdr = "# Override defaults (SIM-281,416)";
 my $banner = "# Patched by sims2-crash-patch (Apple Silicon & Retina Rules)\n";
-my $found_override = ($raw =~ s{([ \t]*\Q$override_hdr\E\r?\n(?:(?!\r?\n[ \t]*(?:#|endif\b|end\b)).)*)}{
+my $found_override = ($raw =~ s{([ \t]*\Q$override_hdr\E\r?\n(?:(?!\r?\n[ \t]*(?:#{5,}|endif\b|end\b)).)*)}{
     my $blk = $1;
     $blk =~ s/\b(setOption[ \t]+(?:EffectsQuality|LightingQuality|Shadows|MaterialDetail)[ \t]+)\$Medium\b/${1}\$High/g;
     my ($indent) = ($blk =~ /^([ \t]*)/);

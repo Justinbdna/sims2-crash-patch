@@ -672,8 +672,10 @@ class TestMacScriptsIntegrity(unittest.TestCase):
             "# Override defaults (SIM-281,416)\n"
             "setOption EffectsQuality        $Medium\n"
             "setOption LightingQuality       $Medium\n"
+            "# inline hardware note\n"
             "setOption Shadows               $Medium\n"
             "setOption MaterialDetail        $Medium\n"
+            "endif\n"
         )
 
         with tempfile.TemporaryDirectory() as tmp:
@@ -866,6 +868,11 @@ class TestMacScriptsIntegrity(unittest.TestCase):
         self.assertIn("rightMouseDown:", src_m)
         self.assertIn("rightMouseDragged:", src_m)
         self.assertIn("mouseDragged:", src_m)
+        self.assertIn("!gOptionMiddleDragActive", src_m)
+        self.assertIn("isRight == gOptionDragWasRight", src_m)
+        self.assertIn("gSuppressedScrollEvent", src_m)
+        self.assertIn("gForcedNonInvertedEvent", src_m)
+        self.assertIn("resolve_window_listener", src_m)
 
         # Compiled dylib header check (Mach-O 64-bit x86_64 MH_DYLIB)
         raw = dylib.read_bytes()
