@@ -38,6 +38,8 @@ MAC_RELEASE_FILES = (
     Path("clean_sims2_cache.command"),
     Path("restore_sims2.command"),
     Path("README.txt"),
+    Path("trackpad_mod/libsims2_trackpad.dylib"),
+    Path("trackpad_mod/sims2_trackpad.m"),
 )
 
 WINDOWS_RELEASE_DIR = Path("windows")
@@ -170,8 +172,10 @@ def package_releases(version: str, out_dir: Path) -> tuple[Path, Path]:
     with zipfile.ZipFile(mac_zip, "w", compression=zipfile.ZIP_DEFLATED) as zf:
         for rel in MAC_RELEASE_FILES:
             src = ROOT_DIR / rel
-            data = src.read_bytes().replace(b"\r\n", b"\n")
-            mode = 0o755 if rel.suffix in (".command", ".sh") else 0o644
+            data = src.read_bytes()
+            if rel.suffix not in (".dylib", ".so", ".dll", ".exe"):
+                data = data.replace(b"\r\n", b"\n")
+            mode = 0o755 if rel.suffix in (".command", ".sh", ".dylib") else 0o644
             _zip_write_bytes(zf, rel.as_posix(), data, mode)
 
     win_zip = out_dir / f"sims2-crash-patch-windows-{clean_ver}.zip"

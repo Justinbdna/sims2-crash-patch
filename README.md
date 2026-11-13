@@ -29,6 +29,8 @@
 * ✅ **Zéro dépendance externe :** Utilise exclusivement `/usr/bin/perl`, `/usr/bin/codesign`, `/usr/sbin/dseditgroup` et `/usr/bin/osascript` (AppleScript + JXA) natifs — ne déclenche jamais l'installation Xcode de 1 Go (`libxcselect`).
 * ✅ **Migration des sauvegardes garantie sans écrasement :** Copie vos sauvegardes Sandbox via la **permission Automatisation Finder** vers `~/Library/Application Support/Aspyr/The Sims 2/` (ou vers `The Sims 2 (Sandbox Backup YYYY-MM-DD)` si des données actives existent déjà).
 * ✅ **Protection automatique `userProps.xml` (`v1.3.0`) :** Inspecte `activeDeviceDisplayMode`, crée une sauvegarde de retour (`Config/userProps.xml.backup`) avant toute retouche, et ne corrige que les modes invalides, absents de CoreGraphics/NSScreen ou ≠ 60 Hz / 32 bpp.
+* ✅ **Règles graphiques Retina / Apple Silicon (`Graphics Rules.sgr`) :** Sauvegarde l'original (`Graphics Rules.sgr.backup`), débloque les résolutions jusqu'à `5120x3200`, passe le profil par défaut en `$High` (effets, éclairage, ombres, matériaux) et relève le fallback VRAM (`textureMemory`) à `1024 Mo`.
+* ✅ **Module Trackpad natif MacBook (`libsims2_trackpad.dylib`) :** Auto-chargé dans `Sims2XP_Exe` via `LC_LOAD_WEAK_DYLIB` sans Xcode : **`Option (⌥)` + clic-glissé** = orbite 3D libre + inclinaison verticale (pitch), **pincement à 2 doigts** = zoom `+/-`, **swipe horizontal ou rotation à 2 doigts** = rotation caméra `,`/`.`.
 * ✅ **Diagnostic Mods/CC & `maxfiles` (`v1.3.0`) :** Compte vos `.package` dans `Downloads/`, alerte si des `.zip`/`.rar`/`.7z` s'y trouvent ou si vous approchez du plafond de `10 240`, et propose `[o/N]` l'installation d'un `LaunchDaemon` géré uniquement si `launchctl limit maxfiles` hard < `10 240`.
 * ✅ **Utilitaire de maintenance à menu interactif (`clean_sims2_cache.command` `v1.3.0`) :** `[1]` Purger les caches *(Entrée par défaut)*, `[2]` Réinitialiser l'affichage `userProps.xml`, `[3]` Diagnostiquer les Mods & `maxfiles`, `[4]` Quitter.
 
@@ -38,9 +40,9 @@
 
 | Script | Rôle | Mot de passe Admin (`sudo`) ? |
 | :--- | :--- | :--- |
-| **`patch_sims2.command`** | Installateur principal : vérifie les droits Admin, localise le jeu (`/Applications` ou `~/Applications`), vérifie et sauvegarde le binaire intègre, applique le double patch 60 Hz, re-signe `--strict`, migre les sauvegardes sans écrasement, purge les caches, protège `userProps.xml` et diagnostique CC/`maxfiles`. | **Oui** (si l'app est dans `/Applications`, ou pour installer le `LaunchDaemon` optionnel) |
+| **`patch_sims2.command`** | Installateur principal : vérifie les droits Admin, localise le jeu (`/Applications` ou `~/Applications`), vérifie et sauvegarde le binaire intègre, applique le double patch 60 Hz, patch `Graphics Rules.sgr` (`5120x3200`, `$High`, `1024 Mo`, `.backup`), installe et injecte `libsims2_trackpad.dylib` (`LC_LOAD_WEAK_DYLIB`), re-signe `--strict`, migre les sauvegardes sans écrasement, purge les caches, protège `userProps.xml` et diagnostique CC/`maxfiles`. | **Oui** (si l'app est dans `/Applications`, ou pour installer le `LaunchDaemon` optionnel) |
 | **`clean_sims2_cache.command`** | Outil de maintenance interactif `[1/2/3/4]` : `[1]` Purge des caches (Actif + Sandbox), `[2]` Reset résolution `userProps.xml` + `.backup`, `[3]` Diagnostic Mods/CC & `maxfiles`, `[4]` Quitter. | **Non** (sauf option `[3]` si vous acceptez d'installer `limit.maxfiles.plist`) |
-| **`restore_sims2.command`** | Désinstallateur officiel : vérifie l'intégrité de `Sims2XP_Exe.backup`, restaure atomiquement le binaire d'origine, re-signe `--strict` et supprime `/Library/LaunchDaemons/limit.maxfiles.plist` **uniquement** s'il porte le marqueur géré par ce patch. | **Oui** (si app dans `/Applications` ou `LaunchDaemon` géré présent) |
+| **`restore_sims2.command`** | Désinstallateur officiel : vérifie l'intégrité de `Sims2XP_Exe.backup`, restaure atomiquement le binaire d'origine et `Graphics Rules.sgr.backup`, retire `libsims2_trackpad.dylib`, re-signe `--strict` et supprime `/Library/LaunchDaemons/limit.maxfiles.plist` **uniquement** s'il porte le marqueur géré par ce patch. | **Oui** (si app dans `/Applications` ou `LaunchDaemon` géré présent) |
 
 ---
 
@@ -107,6 +109,11 @@
   - **Patch 1 (`0xfe6dc`) :** Neutralise `_CGDisplayModeGetRefreshRate` en forçant `60` (`0x3c`) dans `R15D` (`f20f1045d0f2440f2cf84889df` ➔ `41bf3c000000909090904889df`).
   - **Patch 2 (`0xfe741`) :** Verrouille la branche secondaire `_CVDisplayLink` en remplaçant `cmovnel %eax, %r15d` par 4 `NOP` (`41bf3c000000440f45f8c70300000000` ➔ `41bf3c00000090909090c70300000000`).
 * **Diagnostic système `maxfiles` (`Sims2XP_Exe`):** `0x1000b2920`–`0x1000b2970` appelle `getrlimit(RLIMIT_NOFILE)` puis `setrlimit(RLIMIT_NOFILE, min(rlim_max, 0x2800 = 10240))`.
+* **Optimisation `Graphics Rules.sgr` :** Sauvegarde `Graphics Rules.sgr.backup`, relève `textureMemory` de `32` à `1024` Mo, débloque `maxResWidth`/`maxResHeight` jusqu'à `5120x3200`, et bascule `EffectsQuality`, `LightingQuality`, `Shadows` et `MaterialDetail` sur `$High`.
+* **Module Trackpad Cocoa natif (`trackpad_mod/libsims2_trackpad.dylib`) :** Injecté via `LC_LOAD_WEAK_DYLIB` (`@executable_path/libsims2_trackpad.dylib`) sans Xcode ni CLT :
+  - `Option (⌥)` + clic-glissé : émulation `SDL_BUTTON_MIDDLE` pour orbite 3D libre et inclinaison verticale (pitch).
+  - Pincement à 2 doigts (`NSEventTypeMagnify`) : zoom `+/-`.
+  - Swipe horizontal ou rotation à 2 doigts : rotation caméra `,`/`.`.
 
 > *Ce projet est une initiative communautaire de préservation logicielle (article 5(1) de la directive européenne 2009/24/CE). Aucun binaire propriétaire n'est distribué ni aucun DRM contourné.*
 
@@ -128,9 +135,15 @@
 
 | Script | Role | Requires Admin (`sudo`)? |
 | :--- | :--- | :--- |
-| **`patch_sims2.command`** | Main installer: Admin check, `/Applications` + `~/Applications` support, verified backup + atomic 60 Hz patch, strict ad-hoc signing, zero-overwrite save migration, dual cache purge, `userProps.xml` protection (`.backup`), and CC/`maxfiles` check. | **Yes** (for `/Applications` or optional LaunchDaemon) |
+| **`patch_sims2.command`** | Main installer: Admin check, `/Applications` + `~/Applications` support, verified backup + atomic 60 Hz patch, `Graphics Rules.sgr` upgrade (`5120x3200`, `$High`, `1024 MB` VRAM fallback, `.backup`), `libsims2_trackpad.dylib` injection (`LC_LOAD_WEAK_DYLIB` without Xcode), strict ad-hoc signing, zero-overwrite save migration, dual cache purge, `userProps.xml` protection (`.backup`), and CC/`maxfiles` check. | **Yes** (for `/Applications` or optional LaunchDaemon) |
 | **`clean_sims2_cache.command`** | Interactive menu `[1/2/3/4]`: `[1]` Clean caches *(Default on Enter)*, `[2]` Reset `userProps.xml` resolution (60 Hz + `.backup`), `[3]` Check Mods/CC (`.package`/`.zip`) & `maxfiles`, `[4]` Quit. | **No** (unless opting `[y]` to install `limit.maxfiles.plist` in `[3]`) |
-| **`restore_sims2.command`** | Official uninstaller: verifies `Sims2XP_Exe.backup`, atomically restores original binary, re-signs strictly, and cleans `/Library/LaunchDaemons/limit.maxfiles.plist` **only** if tagged as managed by this patch. | **Yes** (when `/Applications` or managed plist exists) |
+| **`restore_sims2.command`** | Official uninstaller: verifies `Sims2XP_Exe.backup`, atomically restores original binary and `Graphics Rules.sgr.backup`, removes `libsims2_trackpad.dylib`, re-signs strictly, and cleans `/Library/LaunchDaemons/limit.maxfiles.plist` **only** if tagged as managed by this patch. | **Yes** (when `/Applications` or managed plist exists) |
+
+### Native MacBook Trackpad Controls (`libsims2_trackpad.dylib`)
+* **Option (`⌥`) + Click & Drag:** Free 3D camera orbit & vertical pitch (emulates middle mouse drag).
+* **Two-Finger Pinch:** Zoom in/out (`+`/`-`).
+* **Two-Finger Horizontal Swipe or Rotate:** Smooth camera rotation (`,`/`.`).
+* **Retina & High Graphics (`Graphics Rules.sgr`):** Unlocks resolutions up to `5120x3200`, sets `$High` shadows/lighting/effects/material defaults, raises `textureMemory` fallback to `1024` MB, and preserves `Graphics Rules.sgr.backup`.
 
 ## 3. Step-by-Step Installation & Beginner Tips (`v1.3.1`)
 

@@ -13,6 +13,14 @@
                                  • Sauvegarde le binaire d'origine vérifié
                                    (Sims2XP_Exe.backup)
                                  • Applique le double patch atomique 60 Hz
+                                 • Optimise Graphics Rules.sgr (résolutions
+                                   jusqu'à 5120x3200, profil $High ombres/textures,
+                                   fallback VRAM 1024 Mo, Graphics Rules.sgr.backup)
+                                 • Installe & injecte le module Trackpad natif
+                                   libsims2_trackpad.dylib via LC_LOAD_WEAK_DYLIB
+                                   sans Xcode (Option + clic-glissé = orbite 3D
+                                   libre + inclinaison verticale, pincement 2
+                                   doigts = zoom +/-, swipe/rotation 2 doigts = ,/.)
                                  • Re-signe l'application proprement
                                  • Copie vos sauvegardes Sandbox sans écraser
                                  • Purge les caches corrompus (Actif + Sandbox)
@@ -27,6 +35,8 @@
    - restore_sims2.command     : Désinstallateur officiel :
                                  • Vérifie l'intégrité de Sims2XP_Exe.backup
                                  • Restaure le binaire d'origine atomiquement
+                                   et restaure Graphics Rules.sgr.backup
+                                 • Retire libsims2_trackpad.dylib
                                  • Retire le LaunchDaemon maxfiles s'il a été
                                    installé par ce patch
                                  • Préserve vos sauvegardes et backups config
@@ -182,6 +192,11 @@
    - Patch binaire dual ancré dans FUN_1000fe510 (0xfe6dc -> 60 Hz / 0x3c dans R15D,
      0xfe741 -> NOPs sur branche _CVDisplayLink). Zéro dépendance Xcode CLT
      (/usr/bin/perl, /usr/bin/osascript, /usr/bin/codesign natifs uniquement).
+   - Graphics Rules.sgr : sauvegarde Graphics Rules.sgr.backup, déblocage jusqu'à
+     5120x3200, profil $High (ombres, éclairage, effets, matériaux), textureMemory 1024 Mo.
+   - Trackpad natif (libsims2_trackpad.dylib) : chargé via LC_LOAD_WEAK_DYLIB
+     sans Xcode : Option (⌥) + clic-glissé = orbite 3D libre + inclinaison
+     verticale, pincement 2 doigts = zoom +/-, swipe horizontal / rotation 2 doigts = ,/.
    - Ce projet est une initiative communautaire de préservation logicielle
      (article 5(1) de la directive européenne 2009/24/CE), sans distribution de
      fichiers du jeu ni contournement de DRM.
@@ -195,6 +210,14 @@
                                    (/Applications or ~/Applications)
                                  • Backs up verified original Sims2XP_Exe.backup
                                  • Applies atomic dual 60 Hz lock patch
+                                 • Upgrades Graphics Rules.sgr (up to 5120x3200,
+                                   $High shadows/textures, 1024 MB VRAM fallback,
+                                   saves Graphics Rules.sgr.backup)
+                                 • Installs & injects native Trackpad module
+                                   libsims2_trackpad.dylib via LC_LOAD_WEAK_DYLIB
+                                   without Xcode (Option + drag = free 3D orbit +
+                                   pitch, 2-finger pinch = zoom +/-, 2-finger
+                                   horizontal swipe/rotate = camera ,/.)
                                  • Re-signs app locally (ad-hoc, --strict check)
                                  • Copies Sandbox saves with zero overwrite
                                  • Purges corrupted caches (Active + Sandbox)
@@ -206,8 +229,10 @@
                                  [3] Check Mods/CC (.package/.zip) & maxfiles
                                  [4] Quit
    - restore_sims2.command     : Verifies Sims2XP_Exe.backup integrity, restores
-                                 original binary atomically, removes managed
-                                 limit.maxfiles.plist if installed by patch.
+                                 original binary & Graphics Rules.sgr.backup
+                                 atomically, removes libsims2_trackpad.dylib, and
+                                 removes managed limit.maxfiles.plist if installed
+                                 by patch.
 
 2. BEFORE YOU START: WHAT MACOS WILL ASK (HONESTY & BEGINNER NOTES)
    macOS protects users with several security prompts on first run:
