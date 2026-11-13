@@ -148,7 +148,15 @@ class TestMacScriptsIntegrity(unittest.TestCase):
         env = dict(os.environ)
         env["SIMS2_LIB_ONLY"] = "1"
         cmd = [bash_bin, "-c", f'set -u; source "./{script_name}"; {body}', "_", *args]
-        return subprocess.run(cmd, cwd=str(ROOT_DIR), env=env, capture_output=True, text=True)
+        return subprocess.run(
+            cmd,
+            cwd=str(ROOT_DIR),
+            env=env,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+        )
 
     def test_a1_dir_has_real_entries_ignores_finder_metadata(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
