@@ -30,6 +30,7 @@ MAC_UNIX_SCRIPTS = (
     Path("patch_sims2.command"),
     Path("clean_sims2_cache.command"),
     Path("restore_sims2.command"),
+    Path("trackpad_mod/build_trackpad.sh"),
     Path("legacy/patch_sims2.sh"),
 )
 
@@ -103,8 +104,8 @@ def verify_mac_scripts() -> list[str]:
         raw = full_path.read_bytes()
         if b"\r" in raw:
             errors.append(f"CRLF/CR detected in {rel} (macOS requires pure LF)")
-        if not raw.startswith(b"#!/bin/bash\n"):
-            errors.append(f"Missing #!/bin/bash LF shebang in {rel}")
+        if not (raw.startswith(b"#!/bin/bash\n") or raw.startswith(b"#!/usr/bin/env bash\n")):
+            errors.append(f"Missing #!/bin/bash or #!/usr/bin/env bash LF shebang in {rel}")
 
         if bash_bin:
             res = subprocess.run([bash_bin, "-n", str(full_path)], capture_output=True, text=True)
@@ -166,7 +167,8 @@ def _zip_write_bytes(
 def package_releases(version: str, out_dir: Path) -> tuple[Path, Path]:
     """Build clean separated macOS and Windows release ZIP archives."""
     out_dir.mkdir(parents=True, exist_ok=True)
-    clean_ver = f"v{version}" if version and version[0].isdigit() else version
+    safe_ver = re.sub(r'[\\/:*?"<>|\s]+', "-", version).strip("-") or "dev"
+    clean_ver = f"v{safe_ver}" if safe_ver[0].isdigit() else safe_ver
 
     mac_zip = out_dir / f"sims2-crash-patch-{clean_ver}.zip"
     with zipfile.ZipFile(mac_zip, "w", compression=zipfile.ZIP_DEFLATED) as zf:
