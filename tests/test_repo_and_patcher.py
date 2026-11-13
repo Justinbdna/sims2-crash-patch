@@ -826,6 +826,14 @@ class TestMacScriptsIntegrity(unittest.TestCase):
                 self.assertEqual(mode, 0o755)
                 self.assertEqual(zf.read("trackpad_mod/libsims2_trackpad.dylib"), expected_dylib)
 
+            # Branch names with '/' (e.g. feat/v1.4-audit) must sanitize cleanly to flat ZIP paths
+            branch_mac_zip, branch_win_zip = vp.package_releases("feat/test-branch", tmp_dir)
+            self.assertEqual(branch_mac_zip.parent, tmp_dir)
+            self.assertEqual(branch_mac_zip.name, "sims2-crash-patch-feat-test-branch.zip")
+            self.assertEqual(branch_win_zip.name, "sims2-crash-patch-windows-feat-test-branch.zip")
+            self.assertTrue(branch_mac_zip.is_file())
+            self.assertTrue(branch_win_zip.is_file())
+
     def test_v14_trackpad_dylib_sdl2_azerty_and_orbit_fixes(self) -> None:
         build_sh = (ROOT_DIR / "trackpad_mod" / "build_trackpad.sh").read_text(encoding="utf-8")
         src_m = (ROOT_DIR / "trackpad_mod" / "sims2_trackpad.m").read_text(encoding="utf-8")

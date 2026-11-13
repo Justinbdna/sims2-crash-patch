@@ -2,10 +2,10 @@ name: CI & Dual-Platform Release Build
 
 on:
   push:
-    branches: [main]
+    branches: [main, staging, "feat/**", "fix/**", "audit/**", "chore/**"]
     tags: ["v*"]
   pull_request:
-    branches: [main]
+    branches: [main, staging]
 
 permissions:
   contents: write
@@ -17,7 +17,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, windows-latest]
+        os: [ubuntu-latest, windows-latest, macos-latest]
 
     steps:
       - name: Checkout repository
@@ -27,6 +27,13 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: "3.13"
+
+      - name: Compile-check Trackpad module on macOS
+        if: runner.os == 'macOS'
+        run: |
+          clang -arch x86_64 -mmacosx-version-min=10.13 -dynamiclib -O2 -Wall -Wextra -fobjc-arc -framework Cocoa -framework Carbon -framework CoreGraphics -install_name "@executable_path/libsims2_trackpad.dylib" -o /tmp/libsims2_trackpad_ci.dylib trackpad_mod/sims2_trackpad.m
+          codesign --force --sign - /tmp/libsims2_trackpad_ci.dylib
+          codesign --verify --strict /tmp/libsims2_trackpad_ci.dylib
 
       - name: Run QA verification & cross-platform tests
         run: python scripts/verify_and_package.py
@@ -46,8 +53,9 @@ jobs:
 
       - name: Package Mac & Windows ZIPs
         run: |
-          VERSION="${GITHUB_REF_NAME:-dev}"
-          python scripts/verify_and_package.py --package --version "$VERSION"
+          RAW_VER="${GITHUB_REF_NAME:-dev}"
+          SAFE_VER="${RAW_VER//\//-}"
+          python scripts/verify_and_package.py --package --version "$SAFE_VER"
 
       - name: Upload workflow artifacts
         uses: actions/upload-artifact@v4
