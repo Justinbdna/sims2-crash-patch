@@ -1,179 +1,255 @@
 ================================================================================
-  THE SIMS 2: SUPER COLLECTION — PROMOTION 120Hz PATCH & CACHE FIX (v1.2.1)
-  Tested and validated on MacBook Pro (Apple Silicon M1 Pro, 120 Hz ProMotion
-  display, macOS 27.0) — Mac App Store Edition (com.aspyr.sims2.appstore)
+  THE SIMS 2: SUPER COLLECTION — PROMOTION 120Hz PATCH & STABILITY FIX (v1.3.0)
+  Tested on MacBook Pro (Apple Silicon M1 Pro, 120 Hz ProMotion, macOS 27.0)
+  Mac App Store Edition (com.aspyr.sims2.appstore)
 ================================================================================
+
+[FRANÇAIS] (English guide follows below / Version anglaise plus bas) ----------
+
+1. PRÉSENTATION & OUTILS INCLUS
+   - patch_sims2.command       : Installateur principal automatique :
+                                 • Vérifie la session Admin et trouve le jeu
+                                   (/Applications ou ~/Applications)
+                                 • Sauvegarde le binaire d'origine vérifié
+                                   (Sims2XP_Exe.backup)
+                                 • Applique le double patch atomique 60 Hz
+                                 • Re-signe l'application proprement
+                                 • Copie vos sauvegardes Sandbox sans écraser
+                                 • Purge les caches corrompus (Actif + Sandbox)
+                                 • Vérifie userProps.xml (écran externe/120 Hz)
+                                   et diagnostique vos Mods (.package / maxfiles)
+   - clean_sims2_cache.command : Utilitaire interactif avec menu [1 / 2 / 3 / 4]
+                                 (SANS mot de passe pour les caches / affichage) :
+                                 [1] Nettoyer les caches (appui sur Entrée)
+                                 [2] Réinitialiser la résolution (userProps.xml)
+                                 [3] Vérifier vos Mods (.package/.zip) & maxfiles
+                                 [4] Quitter
+   - restore_sims2.command     : Désinstallateur officiel :
+                                 • Vérifie l'intégrité de Sims2XP_Exe.backup
+                                 • Restaure le binaire d'origine atomiquement
+                                 • Retire le LaunchDaemon maxfiles s'il a été
+                                   installé par ce patch
+                                 • Préserve vos sauvegardes et backups config
+
+2. AVANT DE COMMENCER : CE QUE MACOS VA VOUS DEMANDER (HONNÊTETÉ & SÉCURITÉ)
+   Sur Mac, il est tout à fait normal que le système vous pose plusieurs questions
+   de sécurité lors de la première utilisation. Ne paniquez pas, voici pourquoi :
+
+   a) Blocage « Apple ne peut pas vérifier... » (Gatekeeper) :
+      Le script n'est pas payé/notarié via un compte Apple Developer à 99 $/an,
+      donc macOS le bloque par défaut au tout premier double-clic (voir Étape 3).
+   b) Mot de passe dans le Terminal INVISIBLE (100 % NORMAL !) :
+      Quand le Terminal affiche "Password:" (avec une petite clé), TAPEZ VOTRE
+      MOT DE PASSE MAC HABITUEL À L'AVEUGLE PUIS APPUYEZ SUR ENTRÉE.
+      IMPORTANT : AUCUN CARACTÈRE (ni '*', ni point, rien du tout !) ne
+      s'affiche quand vous tapez. Le curseur ne bouge même pas. Ce n'est PAS un
+      bug et votre clavier n'est PAS bloqué : c'est une règle de sécurité
+      normale de macOS pour que personne ne voie la longueur de votre mot de passe.
+   c) Pop-up « Terminal souhaite contrôler Finder » :
+      Indispensable pour copier vos anciennes sauvegardes et mods depuis le
+      dossier protégé du Mac App Store (Sandbox) vers votre dossier actif sans
+      rien perdre. Cliquez impérativement sur « Autoriser ».
+
+3. INSTALLATION PAS À PAS (UTILISATEUR DÉBUTANT)
+   Étape 1 : Décompressez complètement l'archive .zip dans Téléchargements ou sur
+             le Bureau (ne lancez pas le script depuis l'aperçu du fichier .zip).
+   Étape 2 : Fermez complètement Les Sims 2 (Cmd+Q, vérifiez dans le Dock) et
+             vérifiez qu'il est installé dans /Applications/The Sims 2.app
+             (ou ~/Applications/The Sims 2.app).
+   Étape 3 : Double-cliquez sur « patch_sims2.command ».
+   Étape 4 : SI MACOS BLOQUE LE SCRIPT (ALERTE GATEKEEPER AU 1ER LANCEMENT) :
+             1) Cliquez sur « Terminé » (ou « OK ») sur la fenêtre d'alerte.
+             2) Ouvrez Réglages Système -> Confidentialité et sécurité.
+             3) Faites défiler tout en bas jusqu'à la section « Sécurité ».
+             4) Vous verrez : « "patch_sims2.command" a été bloqué... » avec
+                un bouton « Ouvrir quand même » (valable ~1 heure après essai).
+             5) Cliquez sur « Ouvrir quand même », puis sur « Ouvrir » dans la
+                nouvelle fenêtre, et validez avec votre mot de passe ou Touch ID.
+   Étape 5 : Dans la fenêtre noire du Terminal :
+             - Vérifiez l'encadré d'explication affiché à l'écran.
+             - À la ligne « Password: », tapez votre mot de passe session Mac
+               (rien ne s'affichera à l'écran, c'est normal !) + Entrée.
+   Étape 6 : Si une fenêtre demande d'autoriser Terminal à contrôler le Finder :
+             Cliquez sur « Autoriser ».
+   Étape 7 : Si le script détecte une limite système maxfiles trop basse (< 10240)
+             pour vos mods, il vous propose [o/N] d'installer une configuration
+             système gérée (/Library/LaunchDaemons/limit.maxfiles.plist).
+             Répondez « o » puis Entrée si vous jouez avec beaucoup de CC, sinon
+             appuyez juste sur Entrée (= Non).
+   Étape 8 : Attendez « INSTALLATION TERMINÉE AVEC SUCCÈS / PATCH COMPLETE »
+             (ou si une action Finder est requise, suivez le message jaune AVANT
+             de lancer le jeu !), puis lancez Les Sims 2 depuis Launchpad !
+
+4. EMPLACEMENT DES SAUVEGARDES, MODS & GARDE-FOUS AUTOMATIQUES
+   - Pourquoi le jeu sort du Sandbox Apple :
+     La re-signature locale ad-hoc (codesign --force --deep --sign -) retire les
+     entitlements Mac App Store d'Aspyr sur AppBundleExe (car réinjecter des
+     entitlements App Store sans certificat payant Apple est refusé par macOS).
+   - Nouvel emplacement actif (très simple d'accès !) :
+     ~/Library/Application Support/Aspyr/The Sims 2/
+     Vos Mods/CC (.package décompressés) vont dans :
+     ~/Library/Application Support/Aspyr/The Sims 2/Downloads/
+   - Migration garantie sans écrasement :
+     • Si ce dossier est vide/absent, vos sauvegardes Sandbox y sont copiées.
+     • Si un dossier actif existe déjà, rien n'est écrasé : l'ancien contenu
+       Sandbox est dupliqué à côté dans :
+       ~/Library/Application Support/Aspyr/The Sims 2 (Sandbox Backup YYYY-MM-DD)/
+   - Protection écran externe / 120 Hz (userProps.xml) :
+     Si votre écran externe a été débranché ou si une vieille résolution/Hz
+     fait planter le jeu au démarrage, v1.3.0 crée d'abord une sauvegarde de
+     retour (Config/userProps.xml.backup) puis règle l'affichage en 60 Hz sûr.
+
+5. EN CAS D'ERREUR / CAS PRATIQUES (GUIDE DE DÉPANNAGE COMPLET)
+
+   CAS 1 : Double-clic bloqué (« Développeur non identifié / Logiciel malveillant »)
+   -> Voir Étape 4 ci-dessus (Réglages Système -> Confidentialité et sécurité ->
+      Ouvrir quand même). Répétez une seule fois si macOS bloque aussi
+      clean_sims2_cache.command ou restore_sims2.command au 1er lancement.
+
+   CAS 2 : « Je tape mon mot de passe dans Terminal mais rien ne s'écrit ! »
+           ou erreur « Sorry, try again »
+   -> C'est 100 % normal que rien ne s'affiche (aucune '*', sécurité macOS).
+   -> Vérifiez que la touche Verrouillage Majuscule (Caps Lock) n'est pas active
+      et que vous êtes bien en clavier français (AZERTY) / habituel.
+   -> Utilisez le mot de passe de votre session Mac (Touch ID ne fonctionne pas
+      directement dans sudo par défaut).
+
+   CAS 3 : « Compte non-Administrateur détecté » / « is not in the sudoers file »
+   -> Votre session macOS actuelle est un compte « Standard » (sans pouvoir
+      modifier /Applications). Connectez-vous sur la session Administrateur du
+      Mac (ou activez « Autoriser à administrer cet ordinateur » dans Réglages
+      Système -> Utilisateurs et groupes), puis relancez patch_sims2.command.
+
+   CAS 4 : Erreur « Not authorized to send Apple events to Finder (-1743) »
+           ou vous avez cliqué « Ne pas autoriser » par erreur
+   -> NE LANCEZ PAS LES SIMS 2 tout de suite (sinon le jeu créera un profil vide).
+   -> Ouvrez Réglages Système -> Confidentialité et sécurité -> Automatisation.
+   -> Dépliez « Terminal » et activez l'interrupteur « Finder ».
+   -> Relancez simplement patch_sims2.command : il terminera la copie des saves.
+
+   CAS 5 : Le jeu démarre mais mes anciens quartiers / familles semblent absents
+   -> Regardez dans ~/Library/Application Support/Aspyr/ (Finder : menu Aller ->
+      Aller au dossier... et collez ce chemin).
+   -> S'il existe un dossier « The Sims 2 (Sandbox Backup ...) », c'est que vous
+      aviez déjà lancé le jeu une fois hors Sandbox avant de migrer vos saves.
+      Vous pouvez copier manuellement vos quartiers (Neighborhoods) et
+      Downloads depuis ce backup vers « The Sims 2 » (jeu fermé).
+
+   CAS 6 : Le jeu plante au lancement après avoir débranché un écran externe ou
+           changé une résolution en jeu
+   -> Double-cliquez sur « clean_sims2_cache.command », tapez « 2 » puis Entrée :
+      il réinitialise la résolution dans userProps.xml en mode natif sûr à 60 Hz
+      tout en conservant une copie de secours userProps.xml.backup.
+
+   CAS 7 : Vos Mods / CC n'apparaissent pas ou le quartier plante au chargement
+   -> Double-cliquez sur « clean_sims2_cache.command » :
+      • Choix [1] (Entrée) : supprime les caches corrompus sans toucher à vos
+        familles ni vos mods.
+      • Choix [3] : compte vos .package et signale si des fichiers .zip/.rar/.7z
+        ont été oubliés dans Downloads/ (Les Sims 2 ne lit PAS les archives !).
+        Rappel technique : le moteur Sims2XP_Exe plafonne à 10 240 fichiers
+        ouverts en même temps ; au-delà de ~8 000–9 000 mods, pensez à fusionner
+        ou trier vos .package.
+
+   CAS 8 : « Permission denied » ou le script s'ouvre dans TextEdit au lieu du Terminal
+   -> Assurez-vous d'avoir bien DÉCOMPRESSÉ l'archive .zip (clic droit -> Ouvrir
+      avec Utilitaire d'archive). Si vous utilisez un outil tiers qui a retiré
+      les droits d'exécution, ouvrez Terminal, tapez « chmod +x  » (avec un
+      espace à la fin), glissez le fichier .command dans Terminal et Entrée.
+
+   CAS 9 : Revenir à l'état d'origine (avant le patch)
+   -> Double-cliquez sur « restore_sims2.command » (remet Sims2XP_Exe.backup,
+      re-signe l'app et supprime limit.maxfiles.plist si installé par le patch).
+   -> Pour retrouver la signature commerciale officielle Apple / Aspyr et le
+      Sandbox App Store : supprimez The Sims 2.app puis retéléchargez-le
+      gratuitement depuis le Mac App Store (vos données dans Application Support
+      ne sont jamais supprimées).
+
+6. PRÉCISIONS TECHNIQUES & MENTION LÉGALE
+   - Patch binaire dual ancré dans FUN_1000fe510 (0xfe6dc -> 60 Hz / 0x3c dans R15D,
+     0xfe741 -> NOPs sur branche _CVDisplayLink). Zéro dépendance Xcode CLT
+     (/usr/bin/perl, /usr/bin/osascript, /usr/bin/codesign natifs uniquement).
+   - Ce projet est une initiative communautaire de préservation logicielle
+     (article 5(1) de la directive européenne 2009/24/CE), sans distribution de
+     fichiers du jeu ni contournement de DRM.
+
 
 [ENGLISH] ----------------------------------------------------------------------
 
 1. OVERVIEW & INCLUDED TOOLS
-   - patch_sims2.command       : Main installer (verified pristine backup +
-                                 atomic 60 Hz binary patch + zero-overwrite save
-                                 migration + dual-location cache purge).
-   - clean_sims2_cache.command : Standalone cache cleaner (NO admin password!).
-   - restore_sims2.command     : Verifies and atomically restores the original
-                                 unpatched binary from Sims2XP_Exe.backup.
+   - patch_sims2.command       : Automatic main installer:
+                                 • Verifies Admin rights & locates app bundle
+                                   (/Applications or ~/Applications)
+                                 • Backs up verified original Sims2XP_Exe.backup
+                                 • Applies atomic dual 60 Hz lock patch
+                                 • Re-signs app locally (ad-hoc, --strict check)
+                                 • Copies Sandbox saves with zero overwrite
+                                 • Purges corrupted caches (Active + Sandbox)
+                                 • Validates/repairs userProps.xml (creates .backup)
+                                 • Checks CC/mods (.package/.zip) & maxfiles
+   - clean_sims2_cache.command : Interactive maintenance menu [1 / 2 / 3 / 4]:
+                                 [1] Clean caches (Default on Enter — no sudo)
+                                 [2] Reset display mode in userProps.xml (60 Hz)
+                                 [3] Check Mods/CC (.package/.zip) & maxfiles
+                                 [4] Quit
+   - restore_sims2.command     : Verifies Sims2XP_Exe.backup integrity, restores
+                                 original binary atomically, removes managed
+                                 limit.maxfiles.plist if installed by patch.
 
-2. STEP-BY-STEP INSTALLATION & GATEKEEPER (macOS 15+ / Sequoia / macOS 27)
-   Step 1: Make sure The Sims 2 is closed and installed in:
-           /Applications/The Sims 2.app
-   Step 2: Double-click "patch_sims2.command".
-   Step 3: IF BLOCKED BY GATEKEEPER (Security Alert on first double-click):
-           - Click "Done" (or "OK") on the alert dialog.
-           - Immediately open System Settings -> Privacy & Security.
-           - Scroll down to the "Security" section and click "Open Anyway"
-             next to patch_sims2.command (this button appears for about 1 hour
-             after a blocked launch attempt).
-           - Click "Open" in the confirmation dialog and authenticate with your
-             Mac login password or Touch ID.
-   Step 4: In Terminal, type your Mac administrator password when prompted and
-           press Enter (no characters appear while typing; this is normal).
-           Admin privileges are used solely to patch /Applications/The Sims 2.app.
-   Step 5: When macOS asks to allow Terminal to control Finder (standard Finder
-           Automation permission), click "Allow".
-   Step 6: Once "PATCH COMPLETE (v1.2.1)" appears, launch The Sims 2 normally
-           from Launchpad or Applications!
+2. BEFORE YOU START: WHAT MACOS WILL ASK (HONESTY & BEGINNER NOTES)
+   macOS protects users with several security prompts on first run:
+   a) Gatekeeper block ("Apple could not verify..."): Normal for unsigned
+      community .command tools (see Step 4 below).
+   b) INVISIBLE Password in Terminal (100% NORMAL!):
+      When Terminal says "Password:", type your normal Mac login password blind
+      and press Enter. ZERO characters (not even '*') or cursor movement appear
+      on screen. Your keyboard is NOT frozen — macOS hides all keystrokes here.
+   c) "Terminal wants access to control Finder": Click "Allow" so your existing
+      Mac App Store Sandbox saves can be duplicated safely without overwriting.
 
-3. IMPORTANT: NON-SANDBOX DATA FOLDER, SAVES & MODS (Downloads)
-   - Why the game runs outside the App Sandbox:
-     Re-signing the app locally (codesign --force --deep --sign -) removes
-     Aspyr's proprietary App Store entitlements on AppBundleExe, as re-signing
-     commercial App Store entitlements ad-hoc without a paid Apple Developer
-     certificate is unsupported and risks macOS launch policy rejection.
-   - Where your saves and mods are now located:
-     ~/Library/Application Support/Aspyr/The Sims 2/
-   - Major Benefit for Mods & Custom Content (CC):
-     You can now access your "Downloads" folder directly inside
-     ~/Library/Application Support/Aspyr/The Sims 2/Downloads/ without digging
-     into hidden macOS Sandbox containers!
-   - Safe, Zero-Overwrite Save Migration (Finder Automation Permission):
-     * If ~/Library/Application Support/Aspyr/The Sims 2/ does not exist yet,
-       patch_sims2.command duplicates your Sandbox container contents directly
-       into it.
-     * If ~/Library/Application Support/Aspyr/The Sims 2/ already exists, the
-       script NEVER overwrites any file ("with replacing" is prohibited).
-       Instead, it duplicates your legacy Sandbox saves into a timestamped
-       backup folder:
-       ~/Library/Application Support/Aspyr/The Sims 2 (Sandbox Backup YYYY-MM-DD)/
-       and notifies you in Terminal. Original Sandbox files are never deleted.
+3. STEP-BY-STEP INSTALLATION
+   Step 1: Extract the downloaded .zip archive completely (e.g. in Downloads).
+   Step 2: Quit The Sims 2 completely (Cmd+Q) and make sure The Sims 2.app is in
+           /Applications or ~/Applications.
+   Step 3: Double-click "patch_sims2.command".
+   Step 4: IF BLOCKED BY GATEKEEPER:
+           Click "Done"/"OK" -> open System Settings -> Privacy & Security ->
+           scroll down to Security -> click "Open Anyway" next to
+           patch_sims2.command (visible ~1h) -> click "Open" -> authenticate.
+   Step 5: In Terminal, read the pre-sudo notice, type your Mac Admin password
+           blindly (nothing appears while typing!), and press Enter.
+   Step 6: Click "Allow" if macOS asks Terminal to control Finder.
+   Step 7: If maxfiles hard limit < 10240, optionally answer "y" to install the
+           managed /Library/LaunchDaemons/limit.maxfiles.plist (press Enter = No).
+   Step 8: When "PATCH COMPLETE (v1.3.0)" appears, launch The Sims 2 normally!
 
-4. TECHNICAL SUMMARY
-   - Tested and validated on MacBook Pro (Apple Silicon M1 Pro, 120 Hz ProMotion
-     display, macOS 27.0).
-   - Patch 1 (0xfe6dc): Directly neutralizes the 120 Hz display reading by
-     locking R15D to 60 Hz (0x3c).
-   - Patch 2 (0xfe741): Secondary fallback safety lock in the _CVDisplayLink
-     branch (replaces CMOVNE with NOPs).
+4. PRACTICAL TROUBLESHOOTING CASES
+   - Case 1 (Gatekeeper block): Follow Step 4 above for any first-run .command.
+   - Case 2 (Password typing appears blank / "Sorry, try again"): Blank screen
+     typing is normal. Check Caps Lock & keyboard layout; use your Mac login
+     password (not Apple ID unless identical).
+   - Case 3 (Standard non-Admin account): Switch to an Admin account on the Mac
+     or grant Admin rights in System Settings -> Users & Groups.
+   - Case 4 (Finder Automation denied / -1743 error): DO NOT launch The Sims 2
+     yet! Enable System Settings -> Privacy & Security -> Automation -> Terminal
+     -> Finder, then re-run patch_sims2.command to complete save migration.
+   - Case 5 (Old saves appear missing -> Sandbox Backup folder): Check
+     ~/Library/Application Support/Aspyr/ for "The Sims 2 (Sandbox Backup ...)"
+     and merge Neighborhoods/Downloads while the game is closed.
+   - Case 6 (Crash after unplugging external monitor / bad resolution): Run
+     clean_sims2_cache.command -> option [2] (creates userProps.xml.backup
+     before resetting to your current display mode at 60 Hz).
+   - Case 7 (CC not showing or heavy-CC crashes): Run clean_sims2_cache.command
+     -> option [1] (clean caches) and option [3] (warns on leftover .zip/.rar/.7z
+     and checks the game's 10,240 open-file cap).
+   - Case 8 ("Permission denied" / opens in TextEdit): Extract via Archive
+     Utility first; if needed run `chmod +x /path/to/patch_sims2.command`.
+   - Case 9 (Full restore / App Store Sandbox): Run restore_sims2.command, or
+     delete The Sims 2.app and re-download free from the Mac App Store (files in
+     ~/Library/Application Support/Aspyr/ are never deleted, though the Sandbox
+     App Store version reads ~/Library/Containers/com.aspyr.sims2.appstore/).
 
-5. TROUBLESHOOTING & RESTORATION
-   - If a neighborhood ever fails to load after a crash or bad mod, double-click
-     "clean_sims2_cache.command". It deletes corrupted cache files
-     (Groups.cache, Accessory.cache, cAstGroupCache.package) in Application
-     Support (rm -f) and moves any residual Sandbox cache files to the macOS
-     Trash via Finder (without requiring sudo).
-   - To restore the original binary from Sims2XP_Exe.backup, double-click
-     "restore_sims2.command" (verifies pristine byte fingerprints before
-     performing an atomic restore).
-     Note on App Store Reinstallation & Saves:
-     To restore Aspyr's official commercial signature and re-enable Apple's
-     initial App Sandbox isolation, delete the app and re-download it for free
-     from the Mac App Store. Your files in ~/Library/Application Support/Aspyr/
-     are never deleted, but a reinstalled Mac App Store version (running inside
-     the Sandbox) will read from ~/Library/Containers/com.aspyr.sims2.appstore/
-     again (and will crash on startup if your screen is set to 120 Hz).
-
-6. LEGAL NOTICE
-   This project is a community-driven software preservation initiative,
-   conducted in the spirit of Article 5(1) of European Directive 2009/24/EC,
-   which permits the lawful acquirer of a computer program to correct errors so
-   that it may be used in accordance with its intended purpose.
-
-
-[FRANÇAIS] ---------------------------------------------------------------------
-
-1. PRÉSENTATION & OUTILS INCLUS
-   - patch_sims2.command       : Installateur principal (sauvegarde binaire
-                                 vérifiée + patch atomique 60 Hz + migration des
-                                 sauvegardes sans écrasement + double purge).
-   - clean_sims2_cache.command : Outil de purge des caches (SANS mot de passe !).
-   - restore_sims2.command     : Vérifie l'intégrité de Sims2XP_Exe.backup et
-                                 restaure le binaire d'origine de façon atomique.
-
-2. INSTALLATION PAS À PAS & PROCÉDURE GATEKEEPER (macOS 15+ / Sequoia / macOS 27)
-   Étape 1 : Vérifiez que Les Sims 2 est fermé et installé dans :
-             /Applications/The Sims 2.app
-   Étape 2 : Double-cliquez sur "patch_sims2.command".
-   Étape 3 : EN CAS D'ALERTE DE SÉCURITÉ GATEKEEPER AU PREMIER DOUBLE-CLIC :
-             - Fermez l'alerte ("Terminé" ou "OK").
-             - Ouvrez immédiatement Réglages Système -> Confidentialité et
-               sécurité.
-             - Faites défiler jusqu'à la section "Sécurité" et cliquez sur le
-               bouton "Ouvrir quand même" à côté de patch_sims2.command (ce
-               bouton s'affiche pendant environ 1 heure après une tentative
-               d'ouverture bloquée).
-             - Cliquez sur "Ouvrir" dans la fenêtre de confirmation puis validez
-               avec votre mot de passe de session Mac ou Touch ID.
-   Étape 4 : Dans le Terminal, entrez votre mot de passe administrateur Mac puis
-             appuyez sur Entrée (aucun caractère ne s'affiche, c'est normal).
-             Ce droit sert uniquement à modifier l'app dans /Applications.
-   Étape 5 : Lorsque macOS demande d'autoriser Terminal à contrôler le Finder
-             (permission Automatisation Finder), cliquez sur "Autoriser".
-   Étape 6 : Une fois le message "INSTALLATION TERMINÉE AVEC SUCCÈS (v1.2.1)"
-             affiché, lancez Les Sims 2 depuis le Launchpad ou Applications !
-
-3. SORTIE DU SANDBOX, EMPLACEMENT DES SAUVEGARDES & MODS (Downloads)
-   - Pourquoi l'application s'exécute hors du Sandbox :
-     La re-signature locale (codesign --force --deep --sign -) retire les
-     entitlements commerciaux d'Aspyr sur AppBundleExe, car réinjecter des
-     entitlements propres au Mac App Store sous une signature ad-hoc sans
-     certificat développeur Apple payant n'est pas supporté et expose à un refus
-     d'exécution par la politique de sécurité de macOS.
-   - Nouvel emplacement des sauvegardes et mods :
-     ~/Library/Application Support/Aspyr/The Sims 2/
-   - Avantage majeur pour les joueurs (Mods / CC) :
-     Vous accédez directement et facilement au dossier "Downloads" dans
-     ~/Library/Application Support/Aspyr/The Sims 2/Downloads/ pour installer
-     vos mods et contenus personnalisés sans passer par les conteneurs cachés
-     de macOS.
-   - Migration sécurisée sans écrasement (Permission Automatisation Finder) :
-     * Si ~/Library/Application Support/Aspyr/The Sims 2/ n'existe pas encore,
-       le script y duplique directement vos données depuis le conteneur Sandbox.
-     * Si ce dossier existe déjà, le script N'ÉCRASE RIEN ("with replacing" est
-       proscrit) : il duplique le contenu de votre ancien conteneur Sandbox dans
-       un sous-dossier de sécurité horodaté :
-       ~/Library/Application Support/Aspyr/The Sims 2 (Sandbox Backup YYYY-MM-DD)/
-       et vous prévient dans le Terminal. Vos originaux dans le Sandbox restent
-       intacts.
-
-4. PRÉCISIONS TECHNIQUES & ENVIRONNEMENT TESTÉ
-   - Testé et validé sur MacBook Pro (Apple Silicon M1 Pro, écran ProMotion
-     120 Hz, macOS 27.0).
-   - Patch 1 (0xfe6dc) : Neutralise directement la lecture du 120 Hz en forçant
-     60 Hz (0x3c) dans le registre R15D.
-   - Patch 2 (0xfe741) : Sert de verrouillage de sécurité de repli dans la
-     branche secondaire _CVDisplayLink.
-
-5. DÉPANNAGE & RESTAURATION DE L'ORIGINAL
-   - Si un quartier plante ultérieurement (suite à un arrêt forcé ou un mod
-     défectueux), double-cliquez sur "clean_sims2_cache.command" : il supprime
-     les caches corrompus (Groups.cache, Accessory.cache, cAstGroupCache.package)
-     dans Application Support (rm -f) et déplace ceux du conteneur Sandbox vers
-     la Corbeille macOS via le Finder (sans demander de mot de passe).
-   - Pour restaurer le binaire d'origine depuis Sims2XP_Exe.backup,
-     double-cliquez sur "restore_sims2.command" (vérifie la présence des octets
-     d'origine avant la restauration atomique).
-     Note sur la réinstallation depuis le Mac App Store et vos sauvegardes :
-     Pour rétablir la signature commerciale officielle d'Aspyr et réactiver
-     l'isolation Sandbox initiale d'Apple, supprimez l'application et
-     retéléchargez-la gratuitement depuis le Mac App Store. Vos données dans
-     ~/Library/Application Support/Aspyr/The Sims 2/ ne sont jamais supprimées,
-     mais une version Mac App Store réinstallée (en Sandbox) relira uniquement
-     le conteneur ~/Library/Containers/com.aspyr.sims2.appstore/... (et plantera
-     de nouveau au démarrage si votre écran est à 120 Hz).
-
-6. MENTION LÉGALE
-   Ce projet est une initiative communautaire de préservation logicielle,
-   s'inscrivant dans l'esprit de l'article 5(1) de la directive européenne
-   2009/24/CE autorisant la correction d'erreurs par l'acquéreur légitime d'un
-   logiciel pour en permettre une utilisation conforme à sa destination.
+5. TECHNICAL & LEGAL NOTICE
+   - Dual binary patch in FUN_1000fe510 (0xfe6dc + 0xfe741), zero Xcode CLT.
+   - Community software preservation under EU Directive 2009/24/EC Art. 5(1).
 ================================================================================
