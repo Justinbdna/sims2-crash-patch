@@ -3,7 +3,7 @@
 Cross-platform unit & integration test suite for sims2-crash-patch.
 
 Tests both:
-  1. macOS v1.2.1 patch/restore integrity (EOLs, syntax, Perl binary engine on synthetic Mach-O buffers)
+  1. macOS v1.3.0 patch/restore/cache integrity (EOLs, syntax, Perl binary & userProps engines, CC/maxfiles, UX)
   2. Windows Special Edition toolkit & trackpad state machine (PE32 4GB patch, userProps, caches, camera)
 """
 
@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
+import re
 import struct
 import subprocess
 import sys
@@ -77,14 +78,17 @@ class TestMacScriptsIntegrity(unittest.TestCase):
                     else:
                         self.assertEqual(mode, 0o644)
 
+    def _extract_binary_patch_perl(self) -> str:
+        patch_blocks = vp.extract_perl_blocks((ROOT_DIR / "patch_sims2.command").read_text(encoding="utf-8"))
+        self.assertEqual(len(patch_blocks), 2)
+        return next(b for b in patch_blocks if "f20f1045d0f2440f2cf84889df" in b)
+
     def test_perl_patch_and_restore_engines_on_synthetic_binary(self) -> None:
         perl_bin = vp.find_perl()
         if not perl_bin:
             self.skipTest("perl not available on PATH")
 
-        patch_blocks = vp.extract_perl_blocks((ROOT_DIR / "patch_sims2.command").read_text(encoding="utf-8"))
-        self.assertEqual(len(patch_blocks), 1)
-        patch_pl = patch_blocks[0]
+        patch_pl = self._extract_binary_patch_perl()
 
         with tempfile.TemporaryDirectory() as tmp:
             tmp_dir = Path(tmp)
@@ -264,8 +268,7 @@ class TestMacScriptsIntegrity(unittest.TestCase):
         if not perl_bin:
             self.skipTest("perl not available on PATH")
 
-        patch_blocks = vp.extract_perl_blocks((ROOT_DIR / "patch_sims2.command").read_text(encoding="utf-8"))
-        patch_pl = patch_blocks[0]
+        patch_pl = self._extract_binary_patch_perl()
 
         with tempfile.TemporaryDirectory() as tmp:
             tmp_dir = Path(tmp)
@@ -292,11 +295,11 @@ class TestMacScriptsIntegrity(unittest.TestCase):
         if not perl_bin:
             self.skipTest("perl not available on PATH")
 
-        patch_blocks = vp.extract_perl_blocks((ROOT_DIR / "patch_sims2.command").read_text(encoding="utf-8"))
+        patch_pl = self._extract_binary_patch_perl()
         with tempfile.TemporaryDirectory() as tmp:
             tmp_dir = Path(tmp)
             pl_path = tmp_dir / "patch.pl"
-            pl_path.write_text(patch_blocks[0], encoding="utf-8")
+            pl_path.write_text(patch_pl, encoding="utf-8")
 
             exe = tmp_dir / "Sims2XP_Exe"
             bak = tmp_dir / "Sims2XP_Exe.backup"
@@ -363,6 +366,224 @@ class TestMacScriptsIntegrity(unittest.TestCase):
             (broken_app / "Contents" / "MacOS").mkdir(parents=True)
             res_fail = self._run_bash_lib("patch_sims2.command", 'sign_and_verify_app "$1"', broken_app.as_posix())
             self.assertNotEqual(res_fail.returncode, 0)
+
+    def test_v13_userprops_xml_repair_and_backup_idempotency(self) -> None:
+        if not vp.find_perl():
+            self.skipTest("perl not available on PATH")
+
+        sample_tmpl = (
+            '<?xml version="1.0" encoding="utf-8"?>\n'
+            "<cGZPersistDBSegment>\n"
+            '  <AnyString key="activeDeviceDisplayMode" type="0x0c000000">{mode}</AnyString>\n'
+            "</cGZPersistDBSegment>\n"
+        )
+
+        for script in ("patch_sims2.command", "clean_sims2_cache.command"):
+            with tempfile.TemporaryDirectory() as tmp:
+                base = Path(tmp)
+
+                # 1. Missing userProps.xml must succeed without error
+                missing_xml = base / "missing.xml"
+                r_missing = self._run_bash_lib(
+                    script,
+                    'repair_userprops_xml "$1" "1800x1169" "1800x1169,1280x800" 0',
+                    missing_xml.as_posix(),
+                )
+                self.assertEqual(r_missing.returncode, 0, r_missing.stderr or r_missing.stdout)
+                self.assertFalse(missing_xml.with_suffix(".xml.backup").exists())
+
+                # 2. Valid 60 Hz mode in supported list must remain untouched without creating .backup
+                valid_xml = base / "valid.xml"
+                valid_text = sample_tmpl.format(mode="1800x1169x32x60")
+                valid_xml.write_text(valid_text, encoding="utf-8")
+                r_valid = self._run_bash_lib(
+                    script,
+                    'repair_userprops_xml "$1" "1800x1169" "1800x1169,1280x800" 0',
+                    valid_xml.as_posix(),
+                )
+                self.assertEqual(r_valid.returncode, 0, r_valid.stderr or r_valid.stdout)
+                self.assertEqual(valid_xml.read_text(encoding="utf-8"), valid_text)
+                self.assertFalse(Path(str(valid_xml) + ".backup").exists())
+
+                # 3. Supported resolution at 120 Hz preserves 1280x800, locks x32x60, creates .backup once
+                hz_xml = base / "hz120.xml"
+                orig_hz = sample_tmpl.format(mode="1280x800x32x120")
+                hz_xml.write_text(orig_hz, encoding="utf-8")
+                r_hz = self._run_bash_lib(
+                    script,
+                    'repair_userprops_xml "$1" "1800x1169" "1800x1169,1280x800" 0',
+                    hz_xml.as_posix(),
+                )
+                self.assertEqual(r_hz.returncode, 0, r_hz.stderr or r_hz.stdout)
+                self.assertIn(">1280x800x32x60<", hz_xml.read_text(encoding="utf-8"))
+                hz_bak = Path(str(hz_xml) + ".backup")
+                self.assertTrue(hz_bak.is_file())
+                self.assertEqual(hz_bak.read_text(encoding="utf-8"), orig_hz)
+
+                # Subsequent force_reset=1 resets resolution to current display WITHOUT overwriting .backup
+                r_force = self._run_bash_lib(
+                    script,
+                    'repair_userprops_xml "$1" "1800x1169" "1800x1169,1280x800" 1',
+                    hz_xml.as_posix(),
+                )
+                self.assertEqual(r_force.returncode, 0, r_force.stderr or r_force.stdout)
+                self.assertIn(">1800x1169x32x60<", hz_xml.read_text(encoding="utf-8"))
+                self.assertEqual(hz_bak.read_text(encoding="utf-8"), orig_hz)
+
+                # 4. Unplugged external monitor resolution (e.g. 3840x2160x32x60) falls back to live CUR
+                ext_xml = base / "external.xml"
+                orig_ext = sample_tmpl.format(mode="3840x2160x32x60")
+                ext_xml.write_text(orig_ext, encoding="utf-8")
+                r_ext = self._run_bash_lib(
+                    script,
+                    'repair_userprops_xml "$1" "1800x1169" "1800x1169,1280x800" 0',
+                    ext_xml.as_posix(),
+                )
+                self.assertEqual(r_ext.returncode, 0, r_ext.stderr or r_ext.stdout)
+                self.assertIn(">1800x1169x32x60<", ext_xml.read_text(encoding="utf-8"))
+                self.assertEqual(Path(str(ext_xml) + ".backup").read_text(encoding="utf-8"), orig_ext)
+
+                # 5. Malformed display mode & missing key handling
+                bad_xml = base / "malformed.xml"
+                bad_xml.write_text(sample_tmpl.format(mode="broken_value"), encoding="utf-8")
+                r_bad = self._run_bash_lib(
+                    script,
+                    'repair_userprops_xml "$1" "1800x1169" "1800x1169" 0',
+                    bad_xml.as_posix(),
+                )
+                self.assertEqual(r_bad.returncode, 0)
+                self.assertIn(">1800x1169x32x60<", bad_xml.read_text(encoding="utf-8"))
+
+                nokey_xml = base / "nokey.xml"
+                nokey_text = '<?xml version="1.0"?><cGZPersistDBSegment></cGZPersistDBSegment>\n'
+                nokey_xml.write_text(nokey_text, encoding="utf-8")
+                r_nokey = self._run_bash_lib(
+                    script,
+                    'repair_userprops_xml "$1" "1800x1169" "1800x1169" 0',
+                    nokey_xml.as_posix(),
+                )
+                self.assertEqual(r_nokey.returncode, 0)
+                self.assertEqual(nokey_xml.read_text(encoding="utf-8"), nokey_text)
+                self.assertFalse(Path(str(nokey_xml) + ".backup").exists())
+
+    def test_v13_count_cc_and_maxfiles_warnings(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            dl = Path(tmp) / "Downloads"
+            sub = dl / "Hair"
+            sub.mkdir(parents=True)
+            (dl / "mod1.package").write_bytes(b"DBPF")
+            (sub / "mod2.package").write_bytes(b"DBPF")
+            (sub / "._mod2.package").write_bytes(b"appledouble")
+            (dl / "unpacked.zip").write_bytes(b"PK")
+            (sub / "archive.rar").write_bytes(b"Rar!")
+
+            for script in ("patch_sims2.command", "clean_sims2_cache.command"):
+                res = self._run_bash_lib(
+                    script,
+                    'count_cc_and_check_maxfiles "$1" 0',
+                    dl.as_posix(),
+                )
+                self.assertEqual(res.returncode, 0, res.stderr or res.stdout)
+                self.assertIn("2 fichier(s) .package", res.stdout)
+                self.assertIn("2 archive(s) (.zip/.rar/.7z)", res.stdout)
+
+    def test_v13_locate_app_bundle_and_managed_daemon_safety(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp)
+            sys_app = base / "SysApps" / "The Sims 2.app"
+            user_app = base / "UserApps" / "The Sims 2.app"
+            (user_app / "Contents" / "MacOS").mkdir(parents=True)
+            user_exe = user_app / "Contents" / "MacOS" / "Sims2XP_Exe"
+            user_exe.write_bytes(b"dummy")
+
+            for script in ("patch_sims2.command", "restore_sims2.command"):
+                r_fallback = self._run_bash_lib(
+                    script,
+                    'locate_app_bundle "$1" "$2" && printf "APP=%s\\nSUDO=%s\\n" "$APP_PATH" "$APP_REQUIRES_SUDO"',
+                    sys_app.as_posix(),
+                    user_app.as_posix(),
+                )
+                self.assertEqual(r_fallback.returncode, 0, r_fallback.stderr or r_fallback.stdout)
+                self.assertIn(f"APP={user_app.as_posix()}", r_fallback.stdout)
+                self.assertIn("SUDO=0", r_fallback.stdout)
+
+                (sys_app / "Contents" / "MacOS").mkdir(parents=True, exist_ok=True)
+                (sys_app / "Contents" / "MacOS" / "Sims2XP_Exe").write_bytes(b"sys")
+                r_prefer = self._run_bash_lib(
+                    script,
+                    'locate_app_bundle "$1" "$2" && printf "APP=%s\\n" "$APP_PATH"',
+                    sys_app.as_posix(),
+                    user_app.as_posix(),
+                )
+                self.assertEqual(r_prefer.returncode, 0)
+                self.assertIn(f"APP={sys_app.as_posix()}", r_prefer.stdout)
+                # Remove sys_app dummy exe before next loop iteration
+                (sys_app / "Contents" / "MacOS" / "Sims2XP_Exe").unlink()
+
+            # Managed LaunchDaemon cleanup must remove ONLY plists with our marker
+            managed_plist = base / "managed.plist"
+            managed_plist.write_text("<!-- Managed by sims2-crash-patch -->\n<plist/>\n", encoding="utf-8")
+            foreign_plist = base / "foreign.plist"
+            foreign_plist.write_text("<!-- Custom user maxfiles -->\n<plist/>\n", encoding="utf-8")
+
+            r_clean_managed = self._run_bash_lib(
+                "restore_sims2.command",
+                'cleanup_managed_maxfiles_daemon "$1"',
+                managed_plist.as_posix(),
+            )
+            self.assertEqual(r_clean_managed.returncode, 0, r_clean_managed.stderr or r_clean_managed.stdout)
+            self.assertFalse(managed_plist.exists())
+
+            r_keep_foreign = self._run_bash_lib(
+                "restore_sims2.command",
+                'cleanup_managed_maxfiles_daemon "$1"',
+                foreign_plist.as_posix(),
+            )
+            self.assertEqual(r_keep_foreign.returncode, 0, r_keep_foreign.stderr or r_keep_foreign.stdout)
+            self.assertTrue(foreign_plist.is_file())
+
+    def test_v13_zero_clt_and_ux_docs_and_clean_menu_exit(self) -> None:
+        clt_tools_rx = re.compile(r"(?<![#\w/.-])(python3|swift|git|clang|xcodebuild|objdump|cc)\b")
+        for script_name in ("patch_sims2.command", "clean_sims2_cache.command", "restore_sims2.command"):
+            text = (ROOT_DIR / script_name).read_text(encoding="utf-8")
+            self.assertIn("Version: 1.3.0", text)
+            non_comment = "\n".join(ln for ln in text.splitlines() if not ln.lstrip().startswith("#"))
+            # Remove heredoc text/URLs isn't needed if no CLT tool word appears in code lines
+            for line in non_comment.splitlines():
+                if "echo" in line or "cat " in line:
+                    continue
+                self.assertIsNone(
+                    clt_tools_rx.search(line),
+                    f"Potential Xcode CLT shim invocation in {script_name}: {line}",
+                )
+
+        readme_txt = (ROOT_DIR / "README.txt").read_text(encoding="utf-8")
+        readme_md = (ROOT_DIR / "README.md").read_text(encoding="utf-8")
+        changelog = (ROOT_DIR / "CHANGELOG.md").read_text(encoding="utf-8")
+        for doc_text in (readme_txt, readme_md):
+            self.assertIn("v1.3.0", doc_text)
+            self.assertIn("Gatekeeper", doc_text)
+            self.assertIn("userProps.xml.backup", doc_text)
+            self.assertIn("Autoriser", doc_text)
+        self.assertIn("[1.3.0]", changelog)
+
+        if sys.platform == "darwin":
+            bash_bin = vp.find_bash()
+            self.assertIsNotNone(bash_bin)
+            env = dict(os.environ)
+            env["SIMS2_NONINTERACTIVE"] = "1"
+            res_quit = subprocess.run(
+                [bash_bin, "./clean_sims2_cache.command"],
+                cwd=str(ROOT_DIR),
+                env=env,
+                input="4\n",
+                capture_output=True,
+                text=True,
+            )
+            self.assertEqual(res_quit.returncode, 0, res_quit.stderr or res_quit.stdout)
+            self.assertIn("[1]", res_quit.stdout)
+            self.assertIn("[4]", res_quit.stdout)
+
 
 
 class TestWindowsToolkit(unittest.TestCase):

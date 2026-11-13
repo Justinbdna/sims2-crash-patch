@@ -1,7 +1,7 @@
 #!/bin/bash
 # ==============================================================================
 # The Sims 2: Super Collection — Official Binary Restore Utility
-# Version: 1.2.2
+# Version: 1.3.0
 # Verifies pristine fingerprints before atomically restoring Sims2XP_Exe.backup.
 # ==============================================================================
 
@@ -11,6 +11,7 @@ APP_PATH="/Applications/The Sims 2.app"
 EXE_PATH="$APP_PATH/Contents/MacOS/Sims2XP_Exe"
 BACKUP_PATH="$APP_PATH/Contents/MacOS/Sims2XP_Exe.backup"
 ALT_BACKUP_PATH="$APP_PATH/Contents/MacOS/Sims2XP_Exe.backup_original"
+MANAGED_MAXFILES_PLIST="/Library/LaunchDaemons/limit.maxfiles.plist"
 
 # ANSI Colors
 RED='\033[0;31m'
@@ -20,17 +21,73 @@ CYAN='\033[0;36m'
 BOLD='\033[1m'
 NC='\033[0m'
 
+REAL_USER=""
+REAL_UID=""
+REAL_HOME=""
+APP_REQUIRES_SUDO=1
+
 pause_exit() {
     local code="${1:-0}"
     echo ""
+    if [ "${SIMS2_NONINTERACTIVE:-0}" = "1" ]; then
+        exit "$code"
+    fi
     read -r -p "Appuyez sur Entrée pour fermer / Press Enter to close..."
     exit "$code"
+}
+
+# Resolve the real logged-in macOS user, UID, and $HOME (never /var/root)
+resolve_real_user() {
+    if [ "$(id -u)" -eq 0 ]; then
+        REAL_USER="${SUDO_USER:-$(logname 2>/dev/null || stat -f '%Su' /dev/console 2>/dev/null || echo '')}"
+    else
+        REAL_USER="$(id -un)"
+    fi
+
+    if [ -z "$REAL_USER" ] || [ "$REAL_USER" = "root" ]; then
+        REAL_USER="$(stat -f '%Su' /dev/console 2>/dev/null || echo '')"
+    fi
+
+    if [ -z "$REAL_USER" ] || [ "$REAL_USER" = "root" ]; then
+        echo -e "${RED}[-] Erreur / Error:${NC} Impossible de déterminer l'utilisateur courant (non-root)."
+        return 1
+    fi
+
+    REAL_UID="$(id -u "$REAL_USER" 2>/dev/null || echo '')"
+    if [ -z "$REAL_UID" ] || ! [ "$REAL_UID" -gt 0 ] 2>/dev/null; then
+        echo -e "${RED}[-] Erreur / Error:${NC} UID utilisateur invalide pour $REAL_USER ($REAL_UID)."
+        return 1
+    fi
+
+    REAL_HOME="$(dscl . -read "/Users/$REAL_USER" NFSHomeDirectory 2>/dev/null | sed -n 's/^NFSHomeDirectory: //p')"
+    if [ -z "$REAL_HOME" ] || [ ! -d "$REAL_HOME" ]; then
+        REAL_HOME="$(eval echo "~$REAL_USER")"
+    fi
+
+    if [ -z "$REAL_HOME" ] || [ "$REAL_HOME" = "/var/root" ] || [ ! -d "$REAL_HOME" ]; then
+        echo -e "${RED}[-] Erreur / Error:${NC} Répertoire personnel invalide ($REAL_HOME)."
+        return 1
+    fi
+
+    return 0
+}
+
+run_as_real_user() {
+    if [ "$(id -u)" -eq 0 ]; then
+        if [ -n "${REAL_UID:-}" ] && /bin/launchctl print "user/$REAL_UID" >/dev/null 2>&1; then
+            /bin/launchctl asuser "$REAL_UID" /usr/bin/sudo -H -u "$REAL_USER" "$@"
+        else
+            /usr/bin/sudo -H -u "$REAL_USER" "$@"
+        fi
+    else
+        "$@"
+    fi
 }
 
 run_privileged() {
     local scope_target="$1"
     shift
-    if [ "${SIMS2_LIB_ONLY:-0}" = "1" ]; then
+    if [ "${SIMS2_LIB_ONLY:-0}" = "1" ] && [ "$scope_target" != "$MANAGED_MAXFILES_PLIST" ]; then
         case "$scope_target" in
             /tmp/*|/var/folders/*|/private/tmp/*|/private/var/folders/*)
                 "$@"
@@ -38,7 +95,101 @@ run_privileged() {
                 ;;
         esac
     fi
+    if [ "$APP_REQUIRES_SUDO" -eq 0 ] && [ "$scope_target" != "$MANAGED_MAXFILES_PLIST" ]; then
+        run_as_real_user "$@"
+        return $?
+    fi
     sudo "$@"
+}
+
+# Locate The Sims 2.app in /Applications (preferred) or ~/Applications
+locate_app_bundle() {
+    local sys_app="${1:-/Applications/The Sims 2.app}"
+    local user_app="${2:-$REAL_HOME/Applications/The Sims 2.app}"
+
+    if [ -f "$sys_app/Contents/MacOS/Sims2XP_Exe" ]; then
+        APP_PATH="$sys_app"
+        APP_REQUIRES_SUDO=1
+        if [ "$(id -u)" -ne 0 ] && [ -w "$APP_PATH/Contents/MacOS/Sims2XP_Exe" ] && [ -w "$APP_PATH/Contents/MacOS" ]; then
+            APP_REQUIRES_SUDO=0
+        fi
+    elif [ -f "$user_app/Contents/MacOS/Sims2XP_Exe" ]; then
+        APP_PATH="$user_app"
+        APP_REQUIRES_SUDO=0
+        if [ "$(id -u)" -ne 0 ] && { [ ! -w "$APP_PATH/Contents/MacOS/Sims2XP_Exe" ] || [ ! -w "$APP_PATH/Contents/MacOS" ]; }; then
+            APP_REQUIRES_SUDO=1
+        fi
+        echo -e "${YELLOW}[i] Jeu détecté dans votre dossier personnel :${NC} $APP_PATH"
+    else
+        APP_PATH="$sys_app"
+        APP_REQUIRES_SUDO=1
+        EXE_PATH="$APP_PATH/Contents/MacOS/Sims2XP_Exe"
+        BACKUP_PATH="$APP_PATH/Contents/MacOS/Sims2XP_Exe.backup"
+        ALT_BACKUP_PATH="$APP_PATH/Contents/MacOS/Sims2XP_Exe.backup_original"
+        return 1
+    fi
+
+    EXE_PATH="$APP_PATH/Contents/MacOS/Sims2XP_Exe"
+    BACKUP_PATH="$APP_PATH/Contents/MacOS/Sims2XP_Exe.backup"
+    ALT_BACKUP_PATH="$APP_PATH/Contents/MacOS/Sims2XP_Exe.backup_original"
+    return 0
+}
+
+check_admin_rights() {
+    local target_user="${1:-$REAL_USER}"
+    if [ "$(id -u)" -eq 0 ]; then
+        return 0
+    fi
+    if /usr/sbin/dseditgroup -o checkmember -m "$target_user" admin >/dev/null 2>&1; then
+        return 0
+    fi
+    if id -Gn "$target_user" 2>/dev/null | grep -qw "admin"; then
+        return 0
+    fi
+    return 1
+}
+
+print_non_admin_error() {
+    echo -e "${RED}[-] Compte non-Administrateur détecté ($REAL_USER) / Non-Administrator account:${NC}"
+    echo "    Votre session macOS est un compte « Standard » sans droits Administrateur."
+    echo "    -> Connectez-vous sur une session Administrateur puis relancez restore_sims2.command."
+    echo ""
+    echo "    Your macOS account is Standard (non-Admin). Log into an Admin account to run restore_sims2.command."
+}
+
+print_pre_sudo_guidance() {
+    echo -e "${CYAN}------------------------------------------------------------------------${NC}"
+    echo -e "  ${BOLD}CE QUI VA SE PASSER / WHAT TO EXPECT NEXT :${NC}"
+    echo "  Tapez votre mot de passe Mac puis appuyez sur Entrée."
+    echo -e "  ${YELLOW}NOTE : Aucun caractère (ni '*', ni point) ne s'affichera quand vous tapez,${NC}"
+    echo -e "  ${YELLOW}c'est une sécurité normale de macOS (le clavier fonctionne bien).${NC}"
+    echo ""
+    echo "  Enter your Mac Admin password and press Enter."
+    echo -e "  ${YELLOW}NOTE: No characters or '*' appear while typing — this is normal on Mac.${NC}"
+    echo -e "${CYAN}------------------------------------------------------------------------${NC}"
+    echo ""
+}
+
+cleanup_managed_maxfiles_daemon() {
+    local target_plist="${1:-$MANAGED_MAXFILES_PLIST}"
+    if [ ! -f "$target_plist" ]; then
+        return 0
+    fi
+    if grep -q "Managed by sims2-crash-patch" "$target_plist" 2>/dev/null; then
+        if [ "$target_plist" = "$MANAGED_MAXFILES_PLIST" ]; then
+            run_privileged "$target_plist" /bin/launchctl unload -w "$target_plist" >/dev/null 2>&1 || true
+        fi
+        if run_privileged "$target_plist" rm -f "$target_plist"; then
+            echo -e "${GREEN}[+] LaunchDaemon maxfiles géré par le patch supprimé :${NC} $target_plist"
+            return 0
+        else
+            echo -e "${YELLOW}[!] Impossible de supprimer $target_plist (droits insuffisants).${NC}"
+            return 1
+        fi
+    else
+        echo -e "${YELLOW}[i] Fichier conservé :${NC} $target_plist (créé hors sims2-crash-patch, non modifié)."
+        return 0
+    fi
 }
 
 sign_and_verify_app() {
@@ -121,9 +272,13 @@ PERLEOF
 main() {
     echo -e "${CYAN}${BOLD}"
     echo "========================================================================"
-    echo "  The Sims 2 — Utilitaire de Restauration / Restore Utility (v1.2.2)    "
+    echo "  The Sims 2 — Utilitaire de Restauration / Restore Utility (v1.3.0)    "
     echo "========================================================================"
     echo -e "${NC}"
+
+    if ! resolve_real_user; then
+        pause_exit 1
+    fi
 
     # 1. Verify the game is not currently running
     if pgrep -x "Sims2XP_Exe" >/dev/null 2>&1 || pgrep -x "AppBundleExe" >/dev/null 2>&1; then
@@ -133,7 +288,15 @@ main() {
         pause_exit 1
     fi
 
-    # 2. Locate and verify a pristine backup file
+    # 2. Locate application bundle (/Applications or ~/Applications)
+    if ! locate_app_bundle; then
+        echo -e "${RED}[-] Erreur / Error:${NC} Jeu introuvable / Game not found at:"
+        echo "    /Applications/The Sims 2.app/Contents/MacOS/Sims2XP_Exe"
+        echo "    (ni dans ~/Applications/The Sims 2.app)"
+        pause_exit 1
+    fi
+
+    # 3. Locate and verify a pristine backup file
     local SOURCE_BACKUP=""
     if is_pristine_binary "$BACKUP_PATH"; then
         SOURCE_BACKUP="$BACKUP_PATH"
@@ -160,28 +323,40 @@ main() {
     echo -e "${GREEN}[+] Empreintes d'origine vérifiées dans / Verified pristine backup:${NC} $(basename "$SOURCE_BACKUP")"
     echo ""
 
-    # 3. Request sudo authorization
-    echo -e "${BOLD}[1/2] Autorisation administrateur / Administrator authorization${NC}"
-    echo "      Requise pour restaurer le binaire d'origine dans /Applications."
-    echo ""
+    # 4. Request sudo authorization only if needed
+    local needs_daemon_sudo=0
+    if [ -f "$MANAGED_MAXFILES_PLIST" ] && grep -q "Managed by sims2-crash-patch" "$MANAGED_MAXFILES_PLIST" 2>/dev/null; then
+        needs_daemon_sudo=1
+    fi
 
-    if ! sudo -v; then
-        echo -e "${RED}[-] Échec d'authentification / Authentication failed.${NC}"
-        pause_exit 1
+    echo -e "${BOLD}[1/3] Vérification des droits & autorisation administrateur...${NC}"
+    if [ "$APP_REQUIRES_SUDO" -eq 1 ] || [ "$needs_daemon_sudo" -eq 1 ]; then
+        if ! check_admin_rights "$REAL_USER"; then
+            print_non_admin_error
+            pause_exit 1
+        fi
+        if [ "$(id -u)" -ne 0 ]; then
+            print_pre_sudo_guidance
+        fi
+        if ! sudo -v; then
+            echo -e "${RED}[-] Échec d'authentification / Authentication failed.${NC}"
+            pause_exit 1
+        fi
+    else
+        echo -e "${GREEN}[+] Droits utilisateur suffisants pour $APP_PATH (sudo non requis).${NC}"
     fi
 
     echo ""
-    echo -e "${BOLD}[*] Restauration atomique depuis / Atomic restore from:${NC} $(basename "$SOURCE_BACKUP")"
+    echo -e "${BOLD}[2/3] Restauration atomique & Re-signature (codesign)...${NC}"
     local TMP_RESTORE="$EXE_PATH.tmp.$$"
-    if ! sudo cp -f "$SOURCE_BACKUP" "$TMP_RESTORE" || ! sudo chmod 755 "$TMP_RESTORE" || ! sudo mv -f "$TMP_RESTORE" "$EXE_PATH"; then
-        sudo rm -f "$TMP_RESTORE" 2>/dev/null
+    if ! run_privileged "$APP_PATH" cp -f "$SOURCE_BACKUP" "$TMP_RESTORE" || \
+       ! run_privileged "$APP_PATH" chmod 755 "$TMP_RESTORE" || \
+       ! run_privileged "$APP_PATH" mv -f "$TMP_RESTORE" "$EXE_PATH"; then
+        run_privileged "$APP_PATH" rm -f "$TMP_RESTORE" 2>/dev/null
         echo -e "${RED}[-] Échec de la restauration atomique / Atomic restore failed.${NC}"
         pause_exit 1
     fi
 
-    # 4. Re-sign application bundle locally & verify strictly
-    echo ""
-    echo -e "${BOLD}[2/2] Re-signature locale & vérification (codesign)...${NC}"
     if sign_and_verify_app "$APP_PATH"; then
         echo -e "${GREEN}[+] Signature locale appliquée et vérifiée (--strict) / Ad-hoc signature applied & verified.${NC}"
     else
@@ -189,8 +364,19 @@ main() {
     fi
 
     echo ""
+    echo -e "${BOLD}[3/3] Nettoyage optionnel (LaunchDaemon maxfiles géré & backups config)...${NC}"
+    cleanup_managed_maxfiles_daemon "$MANAGED_MAXFILES_PLIST"
+
+    local USERPROPS_BAK="$REAL_HOME/Library/Application Support/Aspyr/The Sims 2/Config/userProps.xml.backup"
+    if [ -f "$USERPROPS_BAK" ]; then
+        echo -e "${GREEN}[i] Config affichage :${NC} Votre sauvegarde userProps.xml.backup est intacte dans"
+        echo "    $USERPROPS_BAK"
+        echo "    (renommez-la en userProps.xml si vous souhaitez rétablir exactement l'ancien fichier)."
+    fi
+
+    echo ""
     echo -e "${GREEN}${BOLD}========================================================================${NC}"
-    echo -e "${GREEN}${BOLD}  RESTAURATION TERMINÉE / RESTORATION COMPLETE (v1.2.2)                 ${NC}"
+    echo -e "${GREEN}${BOLD}  RESTAURATION TERMINÉE / RESTORATION COMPLETE (v1.3.0)                 ${NC}"
     echo -e "${GREEN}${BOLD}========================================================================${NC}"
     echo ""
     echo "Le binaire d'origine (vérifié intègre) a été restauré. Note : pour rétablir"

@@ -4,6 +4,30 @@ All notable changes to **Sims 2 Crash Patch** (*The Sims 2: Super Collection* â€
 
 ---
 
+## [1.3.0] - 2026-11-13
+
+### Added
+- **Conservative `userProps.xml` Display Safety & Backup (`patch_sims2.command` & `clean_sims2_cache.command`):** Queries live CoreGraphics/NSScreen display modes via zero-CLT JXA (`osascript -l JavaScript`), creates an atomic one-time `Config/userProps.xml.backup` before any modification, and repairs only invalid, external/absent, malformed, or non-`60 Hz` / non-`32 bpp` `activeDeviceDisplayMode` entries.
+- **CC / Mods & `maxfiles` Diagnostics (`patch_sims2.command` & `clean_sims2_cache.command`):** Counts `.package` files inside `Downloads/`, warns on unextracted `.zip`/`.rar`/`.7z` archives ignored by the game and high CC counts approaching `Sims2XP_Exe`'s `10 240` `RLIMIT_NOFILE` ceiling, checks `launchctl limit maxfiles`, and offers `[o/N]` installation of a tagged `/Library/LaunchDaemons/limit.maxfiles.plist` (`<!-- Managed by sims2-crash-patch -->`) only when numeric `hard < 10240`.
+- **Interactive Maintenance Menu (`clean_sims2_cache.command`):** Added `[1]` Clean caches *(Default on Enter)*, `[2]` Reset `userProps.xml` screen resolution, `[3]` CC & `maxfiles` diagnostic, and `[4]` Quit.
+- **`~/Applications/The Sims 2.app` Support, Admin Check & Honest Beginner UX:** Added `locate_app_bundle` (`/Applications` fallback to `~/Applications`), `dseditgroup` Admin check before `sudo`, pre-`sudo` invisible-password explanation banner, managed daemon cleanup in `restore_sims2.command` (only removes plists carrying the `Managed by sims2-crash-patch` marker), and complete EN/FR troubleshooting cases in `README.txt` and `README.md`.
+
+### Changed
+- **Release Packager (`scripts/verify_and_package.py`):** Bumped default `--version` to `v1.3.0`.
+
+---
+
+## [1.2.2] - 2026-11-12
+
+### Fixed
+- **macOS Hardening (`A1`â€“`A7`):**
+  - Ignored Finder metadata files (`.DS_Store`, `.localized`, `._*`) when deciding direct vs. `Sandbox Backup` migration (`dir_has_real_entries` + AppleScript item filter).
+  - Captured AppleScript stdout/stderr (`2>&1`) and flagged `MIGRATION_FAILED=1` with TCC `-1743` Automatisation Finder recovery steps when migration cannot complete.
+  - Resolved the real desktop user/UID/home (`resolve_real_user` + `launchctl asuser`) even under `sudo` so saves and Aqua Finder AppleEvents never target `/var/root`.
+  - Guaranteed temporary file cleanup on `write_atomic` failures (`chmod`/`rename`), repaired corrupted `Sims2XP_Exe.backup` from pristine executables, cleaned AppleDouble/detritus xattrs before strict `codesign --verify --deep --strict`, and removed unused `File::Copy`.
+
+---
+
 ## [1.2.1] - 2026-11-11
 
 ### Added
