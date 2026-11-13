@@ -1,8 +1,8 @@
-# 💎 Sims 2 Crash Patch — ProMotion 120 Hz & Stability Fix (`v1.3.0`)
+# 💎 Sims 2 Crash Patch — ProMotion 120 Hz & Stability Fix (`v1.3.1`)
 
 [![macOS](https://img.shields.io/badge/macOS-Apple%20Silicon-black.svg?style=flat&logo=apple)](https://apple.com)
 [![Tested on](https://img.shields.io/badge/Tested%20on-M1%20Pro%20%7C%20120Hz%20%7C%20macOS%2027.0-success)](https://apple.com)
-[![Version](https://img.shields.io/badge/Release-v1.3.0-blue.svg)](https://github.com/Justinbdna/sims2-crash-patch/releases)
+[![Version](https://img.shields.io/badge/Release-v1.3.1-blue.svg)](https://github.com/Justinbdna/sims2-crash-patch/releases)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
 > **FR :** Correctif 60 FPS au démarrage, migration de sauvegardes sans écrasement, protection d'affichage (`userProps.xml`), diagnostic Mods/CC (`maxfiles`) et menu de maintenance pour *The Sims 2: Super Collection* (Mac App Store, Aspyr) sur Mac Apple Silicon ProMotion 120 Hz.  
@@ -24,7 +24,7 @@
 3. **Crash au chargement d'un quartier (caches corrompus) ou saturation Mods/CC :**
    Les fermetures brutales corrompent `Groups.cache`, `Accessory.cache` et `cAstGroupCache.package`. De plus, `Sims2XP_Exe` relève au lancement sa limite de fichiers ouverts à `10 240` (`setrlimit(RLIMIT_NOFILE, min(rlim_max, 10240))`) : une archive `.zip`/`.rar` oubliée ou une limite système basse peut perturber le jeu.
 
-### Ce que fait cette suite d'outils (`v1.3.0`)
+### Ce que fait cette suite d'outils (`v1.3.1`)
 * ✅ **Votre écran Mac reste à 120 Hz ProMotion** tout en verrouillant le jeu sur **60 Hz** via un patch binaire atomique (`Sims2XP_Exe.backup` vérifié intègre avant modification).
 * ✅ **Zéro dépendance externe :** Utilise exclusivement `/usr/bin/perl`, `/usr/bin/codesign`, `/usr/sbin/dseditgroup` et `/usr/bin/osascript` (AppleScript + JXA) natifs — ne déclenche jamais l'installation Xcode de 1 Go (`libxcselect`).
 * ✅ **Migration des sauvegardes garantie sans écrasement :** Copie vos sauvegardes Sandbox via la **permission Automatisation Finder** vers `~/Library/Application Support/Aspyr/The Sims 2/` (ou vers `The Sims 2 (Sandbox Backup YYYY-MM-DD)` si des données actives existent déjà).
@@ -52,7 +52,7 @@
 > 2. **Le mot de passe dans le Terminal est 100 % INVISIBLE :** Quand le Terminal demande `Password:`, tapez votre mot de passe session Mac puis appuyez sur **Entrée**. **Aucun caractère (`*`, point ou espace) ne s'affichera pendant la frappe** : ce n'est pas un bug et votre clavier n'est pas bloqué, c'est la sécurité normale de macOS.
 > 3. **Pop-up « Terminal souhaite contrôler Finder » :** Cliquez impérativement sur **Autoriser** pour copier vos sauvegardes hors du conteneur protégé du Mac App Store.
 
-1. Téléchargez **`sims2-crash-patch-v1.3.0.zip`** depuis la page [Releases](https://github.com/Justinbdna/sims2-crash-patch/releases) et **décompressez-le** complètement (par exemple dans *Téléchargements* ou sur le *Bureau*).
+1. Téléchargez **`sims2-crash-patch-v1.3.1.zip`** depuis la page [Releases](https://github.com/Justinbdna/sims2-crash-patch/releases) et **décompressez-le** complètement (par exemple dans *Téléchargements* ou sur le *Bureau*).
 2. **Fermez complètement *Les Sims 2*** (`Cmd + Q`, vérifiez que le point sous l'icône du Dock a disparu) et vérifiez que `The Sims 2.app` est dans `/Applications` (ou `~/Applications`).
 3. Double-cliquez sur **`patch_sims2.command`**.
 4. **Si macOS bloque le script (Gatekeeper sur macOS 15+ / Sequoia / macOS 27) :**
@@ -65,7 +65,7 @@
    - Tapez votre mot de passe administrateur Mac à l'aveugle puis appuyez sur **Entrée**.
 6. Lorsque macOS affiche **« Terminal souhaite contrôler Finder »**, cliquez sur **Autoriser**.
 7. Si le script détecte une limite `hard maxfiles < 10240`, il propose `[o/N]` d'installer `/Library/LaunchDaemons/limit.maxfiles.plist` (`o` pour installer, ou `Entrée` pour ignorer).
-8. Dès que `INSTALLATION TERMINÉE AVEC SUCCÈS / PATCH COMPLETE (v1.3.0) !` apparaît (sauf si un message jaune vous demande de finir l'autorisation Finder d'abord !), lancez *Les Sims 2* normalement depuis le Launchpad ou `/Applications` !
+8. Dès que `INSTALLATION TERMINÉE AVEC SUCCÈS / PATCH COMPLETE (v1.3.1) !` apparaît (sauf si un message jaune vous demande de finir l'autorisation Finder d'abord !), lancez *Les Sims 2* normalement depuis le Launchpad ou `/Applications` !
 
 ---
 
@@ -132,7 +132,7 @@
 | **`clean_sims2_cache.command`** | Interactive menu `[1/2/3/4]`: `[1]` Clean caches *(Default on Enter)*, `[2]` Reset `userProps.xml` resolution (60 Hz + `.backup`), `[3]` Check Mods/CC (`.package`/`.zip`) & `maxfiles`, `[4]` Quit. | **No** (unless opting `[y]` to install `limit.maxfiles.plist` in `[3]`) |
 | **`restore_sims2.command`** | Official uninstaller: verifies `Sims2XP_Exe.backup`, atomically restores original binary, re-signs strictly, and cleans `/Library/LaunchDaemons/limit.maxfiles.plist` **only** if tagged as managed by this patch. | **Yes** (when `/Applications` or managed plist exists) |
 
-## 3. Step-by-Step Installation & Beginner Tips (`v1.3.0`)
+## 3. Step-by-Step Installation & Beginner Tips (`v1.3.1`)
 
 > [!IMPORTANT]
 > **Upfront expectations on macOS:**
@@ -140,7 +140,7 @@
 > * **Terminal password typing is INVISIBLE:** When Terminal prompts `Password:`, type your Mac login password blindly and press **Enter**. **Zero characters (no `*`, no dots)** appear on screen — this is standard macOS security, not a bug.
 > * **"Terminal wants access to control Finder":** Click **Allow** so your App Store Sandbox saves can be safely copied.
 
-1. Download **`sims2-crash-patch-v1.3.0.zip`** from [Releases](https://github.com/Justinbdna/sims2-crash-patch/releases) and fully extract it (e.g. into Downloads or Desktop).
+1. Download **`sims2-crash-patch-v1.3.1.zip`** from [Releases](https://github.com/Justinbdna/sims2-crash-patch/releases) and fully extract it (e.g. into Downloads or Desktop).
 2. Quit *The Sims 2* completely (`Cmd+Q`) and ensure `The Sims 2.app` is in `/Applications` (or `~/Applications`).
 3. Double-click **`patch_sims2.command`**.
 4. **If blocked by Gatekeeper (macOS 15+ / Sequoia / macOS 27):**
@@ -148,7 +148,7 @@
 5. Read the on-screen pre-`sudo` box, type your Mac Admin password blindly (nothing prints while typing!), and press **Enter**.
 6. Click **Allow** when macOS asks Terminal to control **Finder**.
 7. If `hard maxfiles < 10240` is detected, optionally enter `y` to install the managed `/Library/LaunchDaemons/limit.maxfiles.plist` (or press Enter for No).
-8. Once `INSTALLATION TERMINÉE AVEC SUCCÈS / PATCH COMPLETE (v1.3.0) !` appears (if a yellow Finder warning appears instead, follow it *before* launching!), launch *The Sims 2* from Launchpad or `/Applications`!
+8. Once `INSTALLATION TERMINÉE AVEC SUCCÈS / PATCH COMPLETE (v1.3.1) !` appears (if a yellow Finder warning appears instead, follow it *before* launching!), launch *The Sims 2* from Launchpad or `/Applications`!
 
 ## 4. Practical Troubleshooting Cases
 

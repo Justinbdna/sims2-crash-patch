@@ -1,5 +1,5 @@
 ================================================================================
-  THE SIMS 2: SUPER COLLECTION — PROMOTION 120Hz PATCH & STABILITY FIX (v1.3.0)
+  THE SIMS 2: SUPER COLLECTION — PROMOTION 120Hz PATCH & STABILITY FIX (v1.3.1)
   Tested on MacBook Pro (Apple Silicon M1 Pro, 120 Hz ProMotion, macOS 27.0)
   Mac App Store Edition (com.aspyr.sims2.appstore)
 ================================================================================
@@ -234,7 +234,7 @@
    Step 6: Click "Allow" if macOS asks Terminal to control Finder.
    Step 7: If maxfiles hard limit < 10240, optionally answer "y" to install the
            managed /Library/LaunchDaemons/limit.maxfiles.plist (press Enter = No).
-   Step 8: When "PATCH COMPLETE (v1.3.0)" appears, launch The Sims 2 normally!
+   Step 8: When "PATCH COMPLETE (v1.3.1)" appears, launch The Sims 2 normally!
 
 4. PRACTICAL TROUBLESHOOTING CASES
    - Case 1 (Gatekeeper block): Follow Step 4 above for any first-run .command.
