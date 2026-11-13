@@ -472,7 +472,11 @@ install_managed_maxfiles_daemon() {
     fi
 
     local tmp_plist
-    tmp_plist="$(mktemp /tmp/sims2_limit_maxfiles.XXXXXX)" || return 1
+    tmp_plist="$(umask 077 && mktemp "${TMPDIR:-/tmp}/sims2_limit_maxfiles.XXXXXX")" || return 1
+    if [ -L "$tmp_plist" ] || [ -L "$target_plist" ]; then
+        rm -f "$tmp_plist"
+        return 1
+    fi
     cat > "$tmp_plist" <<'PLISTEOF'
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">

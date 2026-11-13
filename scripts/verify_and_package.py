@@ -12,6 +12,7 @@ Works identically on Windows, macOS, and Linux (Python 3 stdlib only):
 from __future__ import annotations
 
 import argparse
+import hashlib
 import os
 from pathlib import Path
 import py_compile
@@ -187,6 +188,13 @@ def package_releases(version: str, out_dir: Path) -> tuple[Path, Path]:
             elif item.suffix in (".py", ".md", ".txt"):
                 raw = raw.replace(b"\r\n", b"\n")
             _zip_write_bytes(zf, rel_arc, raw, 0o644)
+
+    sums_path = out_dir / "SHA256SUMS.txt"
+    sums_lines = []
+    for archive in (mac_zip, win_zip):
+        digest = hashlib.sha256(archive.read_bytes()).hexdigest()
+        sums_lines.append(f"{digest}  {archive.name}\n")
+    sums_path.write_text("".join(sums_lines), encoding="utf-8", newline="\n")
 
     return mac_zip, win_zip
 

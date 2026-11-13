@@ -178,8 +178,17 @@ def set_large_address_aware(exe_path: Path, enable: bool = True) -> tuple[bool, 
         return True, f"4GB (LARGEADDRESSAWARE) {state_label}: {exe_path.name}"
 
     backup_path = exe_path.with_name(f"{exe_path.name}.backup")
-    if enable and not backup_path.exists():
-        shutil.copy2(exe_path, backup_path)
+    if enable:
+        need_backup = not backup_path.exists()
+        if not need_backup:
+            bak_status = inspect_pe(backup_path)
+            if (
+                not bak_status.is_valid_pe32
+                or backup_path.stat().st_size != exe_path.stat().st_size
+            ):
+                need_backup = True
+        if need_backup:
+            shutil.copy2(exe_path, backup_path)
 
     buf = bytearray(exe_path.read_bytes())
     pe_offset = struct.unpack_from("<I", buf, 0x3C)[0]
@@ -205,12 +214,18 @@ def set_large_address_aware(exe_path: Path, enable: bool = True) -> tuple[bool, 
 def restore_4gb_backup(exe_path: Path) -> tuple[bool, str]:
     """Restore <exe>.backup over <exe> atomically after validating PE integrity."""
     backup_path = exe_path.with_name(f"{exe_path.name}.backup")
-    if not backup_path.is_file():
+    if not backup_path.is_file() or backup_path.is_symlink():
         return False, f"Aucune sauvegarde trouvee / Backup not found: {backup_path}"
 
     status = inspect_pe(backup_path)
     if not status.is_valid_pe32:
         return False, f"Sauvegarde invalide / Invalid PE32 backup: {status.error}"
+
+    if exe_path.is_file() and backup_path.stat().st_size != exe_path.stat().st_size:
+        return False, (
+            f"Taille de sauvegarde incoherente / Backup size mismatch: "
+            f"{backup_path.stat().st_size} != {exe_path.stat().st_size}"
+        )
 
     atomic_write_bytes(exe_path, backup_path.read_bytes())
     return True, f"Binaire restaure depuis / Restored from: {backup_path.name}"
