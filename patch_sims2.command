@@ -28,6 +28,8 @@ REAL_HOME=""
 APP_REQUIRES_SUDO=1
 MIGRATION_STATUS=""
 MIGRATION_FAILED=0
+MIGRATION_ERROR_KIND=""
+PATCH_STATUS=""
 CACHE_STATUS=""
 USERPROPS_STATUS=""
 CC_MAXFILES_STATUS=""
@@ -35,9 +37,54 @@ DISPLAY_CUR=""
 DISPLAY_MODES=""
 MAXFILES_SOFT=""
 MAXFILES_HARD=""
+LOG_FILE=""
+LOG_FINALIZED=0
+
+init_diagnostic_log() {
+    local label="${1:-patch_sims2.command v1.3.0}"
+    [ -z "${REAL_HOME:-}" ] && return 0
+    local log_dir="${SIMS2_LOG_DIR:-$REAL_HOME/Library/Logs/Sims2-Crash-Patch}"
+    run_as_real_user mkdir -p "$log_dir" >/dev/null 2>&1 || return 0
+    LOG_FILE="$log_dir/latest.log"
+    if [ -f "$LOG_FILE" ]; then
+        run_as_real_user mv -f "$LOG_FILE" "$log_dir/previous.log" >/dev/null 2>&1 || true
+    fi
+    local os_ver arch_name
+    os_ver="$(sw_vers -productVersion 2>/dev/null || echo 'unknown')"
+    arch_name="$(uname -m 2>/dev/null || echo 'unknown')"
+    run_as_real_user sh -c 'cat > "$1"' _ "$LOG_FILE" <<LOGEOF 2>/dev/null || LOG_FILE=""
+=== Sims 2 Crash Patch — Journal Technique / Diagnostic Log ===
+Script : $label
+Date   : $(date '+%Y-%m-%d %H:%M:%S %z')
+User   : ${REAL_USER:-unknown} (uid=${REAL_UID:-?})
+macOS  : $os_ver ($arch_name)
+App    : $APP_PATH
+LOGEOF
+}
+
+log_diag() {
+    [ -z "${LOG_FILE:-}" ] && return 0
+    local msg="$1"
+    run_as_real_user sh -c 'printf "[%s] %s\n" "$(date +%H:%M:%S)" "$2" >> "$1"' _ "$LOG_FILE" "$msg" 2>/dev/null || true
+}
+
+finish_diagnostic_log() {
+    local code="${1:-0}"
+    [ -z "${LOG_FILE:-}" ] && return 0
+    [ "${LOG_FINALIZED:-0}" -eq 1 ] && return 0
+    LOG_FINALIZED=1
+    log_diag "EXIT code=$code"
+    [ -n "${PATCH_STATUS:-}" ] && log_diag "SUMMARY patch=$PATCH_STATUS"
+    [ -n "${MIGRATION_STATUS:-}" ] && log_diag "SUMMARY migration=$MIGRATION_STATUS (failed=$MIGRATION_FAILED kind=${MIGRATION_ERROR_KIND:-none})"
+    [ -n "${CACHE_STATUS:-}" ] && log_diag "SUMMARY caches=$CACHE_STATUS"
+    [ -n "${USERPROPS_STATUS:-}" ] && log_diag "SUMMARY userProps=$USERPROPS_STATUS"
+    [ -n "${CC_MAXFILES_STATUS:-}" ] && log_diag "SUMMARY cc_maxfiles=$CC_MAXFILES_STATUS"
+    echo -e "  ${CYAN}[i] Journal technique / Log :${NC} $LOG_FILE"
+}
 
 pause_exit() {
     local code="${1:-0}"
+    finish_diagnostic_log "$code"
     echo ""
     if [ "${SIMS2_NONINTERACTIVE:-0}" = "1" ]; then
         exit "$code"
@@ -84,7 +131,7 @@ resolve_real_user() {
 
 # Run a command in the real user's Aqua/WindowServer session when invoked via sudo
 run_as_real_user() {
-    if [ "$(id -u)" -eq 0 ]; then
+    if [ "$(id -u)" -eq 0 ] && [ "${SIMS2_LIB_ONLY:-0}" != "1" ]; then
         if [ -n "${REAL_UID:-}" ] && /bin/launchctl print "user/$REAL_UID" >/dev/null 2>&1; then
             /bin/launchctl asuser "$REAL_UID" /usr/bin/sudo -H -u "$REAL_USER" "$@"
         else
@@ -98,9 +145,9 @@ run_as_real_user() {
 run_privileged() {
     local scope_target="$1"
     shift
-    if [ "${SIMS2_LIB_ONLY:-0}" = "1" ]; then
+    if [ "${SIMS2_LIB_ONLY:-0}" = "1" ] && [ "$scope_target" != "$MANAGED_MAXFILES_PLIST" ]; then
         case "$scope_target" in
-            /tmp/*|/var/folders/*|/private/tmp/*|/private/var/folders/*)
+            /tmp/*|/var/folders/*|/private/tmp/*|/private/var/folders/*|[A-Za-z]:/*|/[a-zA-Z]/*|*/[Tt]emp/*|*/_temp/*)
                 "$@"
                 return $?
                 ;;
@@ -198,13 +245,25 @@ dir_has_real_entries() {
 
 is_tcc_automation_error() {
     local msg="$1"
-    printf '%s\n' "$msg" | grep -qiE '(-1743|1743|not authorized to send apple events|apple ?event|non autoris)'
+    printf '%s\n' "$msg" | grep -qiE '(-1743|1743|not authorized to send apple events|apple ?event)'
+}
+
+is_container_access_error() {
+    local msg="$1"
+    printf '%s\n' "$msg" | grep -qiE '(-5000|autorisations requises|vous ne disposez pas des autorisations|operation not permitted|permission denied|privileges|access denied)'
 }
 
 print_finder_automation_help() {
     echo "    -> Permission Automatisation Finder requise / Finder Automation permission required."
     echo "    -> Réglages Système -> Confidentialité et sécurité -> Automatisation -> Terminal -> activez Finder."
     echo "    -> System Settings -> Privacy & Security -> Automation -> Terminal -> enable Finder."
+}
+
+print_container_access_help() {
+    echo "    -> macOS protège l'accès automatisé au conteneur Sandbox (erreur système -5000 / droits conteneur)."
+    echo "    -> Solution manuelle sûre (Finder) : Cmd+Maj+G -> ~/Library/Containers/com.aspyr.sims2.appstore/Data/Library/Application Support/Aspyr/The Sims 2/"
+    echo "       et copiez vos dossiers (Neighborhoods, Downloads) vers ~/Library/Application Support/Aspyr/The Sims 2/."
+    echo "    -> (Ou activez Accès complet au disque pour Terminal dans Réglages Système -> Confidentialité et sécurité.)"
 }
 
 sign_and_verify_app() {
@@ -246,6 +305,119 @@ sign_and_verify_app() {
     return 0
 }
 
+run_finder_migration_osascript() {
+    local dest_folder_name="$1"
+    run_as_real_user /usr/bin/osascript - "$dest_folder_name" 2>&1 <<'OSAEOF'
+on run argv
+    set destFolderName to item 1 of argv
+    tell application "Finder"
+        with timeout of 3600 seconds
+            try
+                set homePath to (path to home folder as text)
+                set sourcePath to homePath & "Library:Containers:com.aspyr.sims2.appstore:Data:Library:Application Support:Aspyr:The Sims 2:"
+                set aspyrBasePath to homePath & "Library:Application Support:Aspyr:"
+
+                if not (exists folder sourcePath) then
+                    return "NO_SOURCE"
+                end if
+
+                set sourceFolder to folder sourcePath
+                set sourceItems to every item of sourceFolder
+                if (count of sourceItems) is 0 then
+                    return "EMPTY_SOURCE"
+                end if
+
+                set aspyrFolder to folder aspyrBasePath
+                if not (exists folder destFolderName of aspyrFolder) then
+                    make new folder at aspyrFolder with properties {name:destFolderName}
+                end if
+                set destFolder to folder destFolderName of aspyrFolder
+
+                set copiedCount to 0
+                set failedList to {}
+                set firstErr to ""
+                repeat with anItem in sourceItems
+                    set itemName to name of anItem
+                    if itemName is not ".DS_Store" and itemName is not ".localized" and itemName does not start with "._" then
+                        if not (exists item itemName of destFolder) then
+                            try
+                                duplicate anItem to destFolder
+                                set copiedCount to copiedCount + 1
+                            on error errItemMsg number errItemNum
+                                if firstErr is "" then
+                                    set firstErr to (errItemMsg & " (" & errItemNum & ")")
+                                end if
+                                set end of failedList to itemName
+                            end try
+                        end if
+                    end if
+                end repeat
+
+                if copiedCount is 0 then
+                    if (count of failedList) > 0 then
+                        return "ERROR:" & firstErr
+                    end if
+                    return "EMPTY_SOURCE"
+                end if
+
+                if (count of failedList) > 0 then
+                    set oldDelims to AppleScript's text item delimiters
+                    set AppleScript's text item delimiters to ", "
+                    set failedStr to failedList as text
+                    set AppleScript's text item delimiters to oldDelims
+                    return "PARTIAL:" & copiedCount & "|" & failedStr & "|" & firstErr
+                end if
+                return "OK"
+            on error errMsg number errNum
+                return "ERROR:" & errMsg & " (" & errNum & ")"
+            end try
+        end timeout
+    end tell
+end run
+OSAEOF
+}
+
+run_finder_cache_purge_osascript() {
+    run_as_real_user /usr/bin/osascript 2>&1 <<'OSAEOF'
+tell application "Finder"
+    with timeout of 300 seconds
+        set oldDelims to AppleScript's text item delimiters
+        try
+            set containerPath to (path to home folder as text) & "Library:Containers:com.aspyr.sims2.appstore:Data:Library:Application Support:Aspyr:The Sims 2:"
+            if not (exists folder containerPath) then
+                set AppleScript's text item delimiters to oldDelims
+                return "NO_CONTAINER"
+            end if
+
+            set targetFolder to folder containerPath
+            set cacheFiles to {"Groups.cache", "Accessory.cache", "cAstGroupCache.package"}
+            set deletedList to {}
+
+            repeat with fName in cacheFiles
+                if exists file fName of targetFolder then
+                    delete file fName of targetFolder
+                    set end of deletedList to (fName as text)
+                end if
+            end repeat
+
+            if (count of deletedList) is 0 then
+                set AppleScript's text item delimiters to oldDelims
+                return "ALREADY_CLEAN"
+            else
+                set AppleScript's text item delimiters to ", "
+                set resStr to deletedList as text
+                set AppleScript's text item delimiters to oldDelims
+                return "DELETED:" & resStr
+            end if
+        on error errMsg
+            set AppleScript's text item delimiters to oldDelims
+            return "ERROR:" & errMsg
+        end try
+    end timeout
+end tell
+OSAEOF
+}
+
 handle_migration_result() {
     local result="$1"
     local rc="$2"
@@ -253,10 +425,11 @@ handle_migration_result() {
     local target_nonempty="$4"
     local dest_folder="$5"
     MIGRATION_FAILED=0
+    MIGRATION_ERROR_KIND=""
 
     if [ "$rc" -ne 0 ]; then
         case "$result" in
-            ERROR:*) ;;
+            ERROR:*|PARTIAL:*) ;;
             *) result="ERROR:${result:-osascript exit code $rc}" ;;
         esac
     fi
@@ -276,6 +449,26 @@ handle_migration_result() {
                 MIGRATION_STATUS="Archivées dans '$dest_folder' (zéro écrasement)"
             fi
             ;;
+        PARTIAL:*)
+            local rest="${result#PARTIAL:}"
+            local copied_n="${rest%%|*}"
+            local tail="${rest#*|}"
+            local failed_items="${tail%%|*}"
+            local first_err="${tail#*|}"
+            log_diag "MIGRATION PARTIAL copied=$copied_n failed=$failed_items err=$first_err"
+            echo -e "${YELLOW}[!] Migration Sandbox partielle ($copied_n élément(s) copié(s), ignoré(s) : $failed_items) :${NC} $first_err"
+            if [ "$target_nonempty" -eq 1 ]; then
+                MIGRATION_FAILED=2
+                MIGRATION_ERROR_KIND="CONTAINER_ACCESS"
+                echo -e "${GREEN}[i] Vos sauvegardes actives dans Application Support sont déjà intactes et utilisables.${NC}"
+                MIGRATION_STATUS="Actives intactes + archive Sandbox partielle ('$dest_folder')"
+            else
+                MIGRATION_FAILED=1
+                MIGRATION_ERROR_KIND="CONTAINER_ACCESS"
+                print_container_access_help
+                MIGRATION_STATUS="Copie partielle (vérifiez $failed_items)"
+            fi
+            ;;
         NO_SOURCE|EMPTY_SOURCE)
             if [ "$target_nonempty" -eq 1 ]; then
                 echo -e "${GREEN}[i] Sauvegardes Application Support conservées (aucun conteneur Sandbox à migrer).${NC}"
@@ -287,22 +480,53 @@ handle_migration_result() {
             ;;
         ERROR:*)
             local err_msg="${result#ERROR:}"
-            MIGRATION_FAILED=1
-            echo -e "${YELLOW}[!] Avertissement lors de la copie Finder:${NC} $err_msg"
+            log_diag "MIGRATION ERROR rc=$rc msg=$err_msg"
             if is_tcc_automation_error "$err_msg"; then
+                MIGRATION_FAILED=1
+                MIGRATION_ERROR_KIND="TCC_AUTOMATION"
+                echo -e "${YELLOW}[!] Avertissement Automatisation Finder :${NC} $err_msg"
                 print_finder_automation_help
                 MIGRATION_STATUS="Permission Finder refusée (-1743) / Finder Automation denied"
+            elif is_container_access_error "$err_msg"; then
+                MIGRATION_ERROR_KIND="CONTAINER_ACCESS"
+                if [ "$target_nonempty" -eq 1 ]; then
+                    MIGRATION_FAILED=2
+                    echo -e "${GREEN}[i] Sauvegardes actives conservées dans Application Support.${NC}"
+                    echo -e "${YELLOW}[i] Note Sandbox :${NC} macOS bloque l'archivage automatique de l'ancien conteneur ($err_msg)."
+                    echo "    Aucune action nécessaire sauf si vous voulez récupérer d'anciennes parties Sandbox à la main via Finder."
+                    MIGRATION_STATUS="Actives intactes (archive Sandbox protégée par macOS)"
+                else
+                    MIGRATION_FAILED=1
+                    echo -e "${YELLOW}[!] Accès conteneur Sandbox bloqué par macOS :${NC} $err_msg"
+                    print_container_access_help
+                    MIGRATION_STATUS="Conteneur Sandbox protégé par macOS (-5000 / voir instructions)"
+                fi
             else
+                MIGRATION_FAILED=1
+                MIGRATION_ERROR_KIND="OTHER"
+                echo -e "${YELLOW}[!] Avertissement lors de la copie Finder :${NC} $err_msg"
                 MIGRATION_STATUS="Avertissement Finder (voir message ci-dessus)"
             fi
             ;;
         *)
             MIGRATION_FAILED=1
+            log_diag "MIGRATION UNEXPECTED rc=$rc out=$result"
             echo -e "${YELLOW}[!] Réponse Finder inattendue / Unexpected Finder response:${NC} ${result:-<vide / empty>} (code $rc)"
             if is_tcc_automation_error "$result"; then
+                MIGRATION_ERROR_KIND="TCC_AUTOMATION"
                 print_finder_automation_help
                 MIGRATION_STATUS="Permission Finder refusée (-1743) / Finder Automation denied"
+            elif is_container_access_error "$result"; then
+                MIGRATION_ERROR_KIND="CONTAINER_ACCESS"
+                if [ "$target_nonempty" -eq 1 ]; then
+                    MIGRATION_FAILED=2
+                    MIGRATION_STATUS="Actives intactes (archive Sandbox protégée par macOS)"
+                else
+                    print_container_access_help
+                    MIGRATION_STATUS="Conteneur Sandbox protégé par macOS"
+                fi
             else
+                MIGRATION_ERROR_KIND="OTHER"
                 MIGRATION_STATUS="Erreur Finder inattendue (code $rc)"
             fi
             ;;
@@ -712,20 +936,24 @@ main() {
         pause_exit 1
     fi
 
-    local ASPYR_BASE_DIR="$REAL_HOME/Library/Application Support/Aspyr"
-    local TARGET_DATA_DIR="$ASPYR_BASE_DIR/The Sims 2"
-
-    echo -e "[i] Session utilisateur détectée / Active user: ${BOLD}$REAL_USER${NC} ($REAL_HOME)"
-    echo ""
-
     # 1. Verify application presence (supports /Applications or ~/Applications)
     if ! locate_app_bundle; then
+        init_diagnostic_log "patch_sims2.command v1.3.0"
+        log_diag "ERROR game not found (/Applications or ~/Applications)"
         echo -e "${RED}[-] Erreur / Error:${NC} Jeu introuvable / Game not found at:"
         echo "    /Applications/The Sims 2.app/Contents/MacOS/Sims2XP_Exe"
         echo "    (ni dans ~/Applications/The Sims 2.app)"
         echo "    Vérifiez que The Sims 2: Super Collection est bien installé."
         pause_exit 1
     fi
+
+    init_diagnostic_log "patch_sims2.command v1.3.0"
+    local ASPYR_BASE_DIR="$REAL_HOME/Library/Application Support/Aspyr"
+    local TARGET_DATA_DIR="$ASPYR_BASE_DIR/The Sims 2"
+    log_diag "START active_dir=$TARGET_DATA_DIR sudo_required=$APP_REQUIRES_SUDO"
+
+    echo -e "[i] Session utilisateur détectée / Active user: ${BOLD}$REAL_USER${NC} ($REAL_HOME)"
+    echo ""
 
     # 2. Verify the game is not currently running
     if pgrep -x "Sims2XP_Exe" >/dev/null 2>&1 || pgrep -x "AppBundleExe" >/dev/null 2>&1; then
@@ -906,17 +1134,22 @@ if ($changed) {
 }
 PERLEOF
     then
+        PATCH_STATUS="FAILED (binary patch error)"
+        log_diag "BINARY_PATCH FAILED"
         echo -e "${RED}[-] Le patch binaire a échoué / Binary patch failed.${NC}"
         pause_exit 1
     fi
-    local PATCH_STATUS="OK (60 Hz verrouillé / locked)"
+    PATCH_STATUS="OK (60 Hz verrouillé / locked)"
+    log_diag "BINARY_PATCH OK"
 
     # 5. Ad-hoc Local Code Signing + Strict Verification
     echo ""
     echo -e "${BOLD}[3/6] Re-signature locale ad-hoc & vérification (codesign)...${NC}"
     if sign_and_verify_app "$APP_PATH"; then
         echo -e "${GREEN}[+] Signature locale appliquée et vérifiée (--strict) / Ad-hoc signature applied & verified.${NC}"
+        log_diag "CODESIGN OK --strict"
     else
+        log_diag "CODESIGN FAILED"
         pause_exit 1
     fi
 
@@ -932,14 +1165,24 @@ PERLEOF
         TARGET_EXISTS_NONEMPTY=1
     fi
 
-    local EXISTING_SANDBOX_BACKUP
-    EXISTING_SANDBOX_BACKUP="$(find "$ASPYR_BASE_DIR" -maxdepth 1 -type d -name "The Sims 2 (Sandbox Backup*)" 2>/dev/null | head -n 1)"
+    local EXISTING_SANDBOX_BACKUP=""
+    local cand_bak
+    while IFS= read -r cand_bak; do
+        [ -n "$cand_bak" ] || continue
+        if [ -n "$(find "$cand_bak" -type f ! -name '.DS_Store' ! -name '.localized' ! -name '._*' 2>/dev/null | head -n 1)" ]; then
+            EXISTING_SANDBOX_BACKUP="$cand_bak"
+            break
+        fi
+    done <<FINDBAK
+$(find "$ASPYR_BASE_DIR" -maxdepth 1 -type d -name "The Sims 2 (Sandbox Backup*)" 2>/dev/null)
+FINDBAK
 
     if [ "$TARGET_EXISTS_NONEMPTY" -eq 1 ] && [ -n "$EXISTING_SANDBOX_BACKUP" ]; then
         echo -e "${GREEN}[i] Dossier Application Support actif et sauvegarde Sandbox déjà archivée :${NC}"
         echo "    -> $(basename "$EXISTING_SANDBOX_BACKUP")"
         echo "    Aucune donnée écrasée / No data overwritten."
         MIGRATION_STATUS="Intactes + Archive Sandbox conservée / Active + Sandbox backup kept"
+        log_diag "MIGRATION SKIPPED already_archived=$(basename "$EXISTING_SANDBOX_BACKUP")"
     else
         local TODAY_STAMP BACKUP_FOLDER_NAME MIGRATE_MODE DEST_FOLDER_NAME
         TODAY_STAMP="$(date +%Y-%m-%d)"
@@ -956,57 +1199,57 @@ PERLEOF
             DEST_FOLDER_NAME="$BACKUP_FOLDER_NAME"
         fi
 
+        local DEST_PREEXISTED=0
+        [ -e "$ASPYR_BASE_DIR/$DEST_FOLDER_NAME" ] && DEST_PREEXISTED=1
+
         run_as_real_user mkdir -p "$ASPYR_BASE_DIR"
 
-        local MIGRATE_RESULT MIGRATE_RC
-        MIGRATE_RESULT="$(run_as_real_user /usr/bin/osascript - "$DEST_FOLDER_NAME" 2>&1 <<'OSAEOF'
-on run argv
-    set destFolderName to item 1 of argv
-    tell application "Finder"
-        with timeout of 3600 seconds
-            try
-                set homePath to (path to home folder as text)
-                set sourcePath to homePath & "Library:Containers:com.aspyr.sims2.appstore:Data:Library:Application Support:Aspyr:The Sims 2:"
-                set aspyrBasePath to homePath & "Library:Application Support:Aspyr:"
+        local SANDBOX_DATA_DIR="$REAL_HOME/Library/Containers/com.aspyr.sims2.appstore/Data/Library/Application Support/Aspyr/The Sims 2"
+        local MIGRATE_RESULT="" MIGRATE_RC=0
 
-                if not (exists folder sourcePath) then
-                    return "NO_SOURCE"
-                end if
+        if run_as_real_user ls "$SANDBOX_DATA_DIR" >/dev/null 2>&1; then
+            log_diag "MIGRATION strategy=posix mode=$MIGRATE_MODE dest=$DEST_FOLDER_NAME"
+            if ! dir_has_real_entries "$SANDBOX_DATA_DIR"; then
+                MIGRATE_RESULT="EMPTY_SOURCE"
+            else
+                local DEST_FULL="$ASPYR_BASE_DIR/$DEST_FOLDER_NAME"
+                run_as_real_user mkdir -p "$DEST_FULL"
+                local copied_posix=0 failed_posix=0 src_item base_name
+                for src_item in "$SANDBOX_DATA_DIR"/*; do
+                    [ -e "$src_item" ] || continue
+                    base_name="$(basename "$src_item")"
+                    case "$base_name" in
+                        .DS_Store|.localized|._*) continue ;;
+                    esac
+                    if [ ! -e "$DEST_FULL/$base_name" ]; then
+                        if run_as_real_user cp -Rp "$src_item" "$DEST_FULL/$base_name" 2>/dev/null; then
+                            copied_posix=$((copied_posix + 1))
+                        else
+                            failed_posix=$((failed_posix + 1))
+                        fi
+                    fi
+                done
+                if [ "$copied_posix" -eq 0 ] && [ "$failed_posix" -eq 0 ]; then
+                    MIGRATE_RESULT="EMPTY_SOURCE"
+                elif [ "$failed_posix" -gt 0 ] && [ "$copied_posix" -eq 0 ]; then
+                    MIGRATE_RESULT="ERROR:Operation not permitted (-5000)"
+                elif [ "$failed_posix" -gt 0 ]; then
+                    MIGRATE_RESULT="PARTIAL:$copied_posix|$failed_posix item(s)|POSIX copy error"
+                else
+                    MIGRATE_RESULT="OK"
+                fi
+            fi
+        else
+            log_diag "MIGRATION strategy=finder mode=$MIGRATE_MODE dest=$DEST_FOLDER_NAME"
+            MIGRATE_RESULT="$(run_finder_migration_osascript "$DEST_FOLDER_NAME")"
+            MIGRATE_RC=$?
+        fi
 
-                set sourceFolder to folder sourcePath
-                set sourceItems to every item of sourceFolder
-                if (count of sourceItems) is 0 then
-                    return "EMPTY_SOURCE"
-                end if
-
-                set aspyrFolder to folder aspyrBasePath
-                if not (exists folder destFolderName of aspyrFolder) then
-                    make new folder at aspyrFolder with properties {name:destFolderName}
-                end if
-                set destFolder to folder destFolderName of aspyrFolder
-
-                set copiedCount to 0
-                repeat with anItem in sourceItems
-                    set itemName to name of anItem
-                    if itemName is not ".DS_Store" and itemName is not ".localized" and itemName does not start with "._" then
-                        duplicate anItem to destFolder
-                        set copiedCount to copiedCount + 1
-                    end if
-                end repeat
-
-                if copiedCount is 0 then
-                    return "EMPTY_SOURCE"
-                end if
-                return "OK"
-            on error errMsg
-                return "ERROR:" & errMsg
-            end try
-        end timeout
-    end tell
-end run
-OSAEOF
-)"
-        MIGRATE_RC=$?
+        if [ "$MIGRATE_MODE" = "BACKUP" ] && [ "$DEST_PREEXISTED" -eq 0 ] && [ -d "$ASPYR_BASE_DIR/$DEST_FOLDER_NAME" ]; then
+            if [ -z "$(find "$ASPYR_BASE_DIR/$DEST_FOLDER_NAME" -type f ! -name '.DS_Store' ! -name '.localized' ! -name '._*' 2>/dev/null | head -n 1)" ]; then
+                run_as_real_user rm -rf "$ASPYR_BASE_DIR/$DEST_FOLDER_NAME" >/dev/null 2>&1 || true
+            fi
+        fi
 
         handle_migration_result "$MIGRATE_RESULT" "$MIGRATE_RC" "$MIGRATE_MODE" "$TARGET_EXISTS_NONEMPTY" "$DEST_FOLDER_NAME"
     fi
@@ -1035,45 +1278,7 @@ OSAEOF
     fi
 
     local SANDBOX_CACHE_RESULT SANDBOX_CACHE_RC
-    SANDBOX_CACHE_RESULT="$(run_as_real_user /usr/bin/osascript 2>&1 <<'OSAEOF'
-tell application "Finder"
-    with timeout of 300 seconds
-        set oldDelims to AppleScript's text item delimiters
-        try
-            set containerPath to (path to home folder as text) & "Library:Containers:com.aspyr.sims2.appstore:Data:Library:Application Support:Aspyr:The Sims 2:"
-            if not (exists folder containerPath) then
-                set AppleScript's text item delimiters to oldDelims
-                return "NO_CONTAINER"
-            end if
-
-            set targetFolder to folder containerPath
-            set cacheFiles to {"Groups.cache", "Accessory.cache", "cAstGroupCache.package"}
-            set deletedList to {}
-
-            repeat with fName in cacheFiles
-                if exists file fName of targetFolder then
-                    delete file fName of targetFolder
-                    set end of deletedList to (fName as text)
-                end if
-            end repeat
-
-            if (count of deletedList) is 0 then
-                set AppleScript's text item delimiters to oldDelims
-                return "ALREADY_CLEAN"
-            else
-                set AppleScript's text item delimiters to ", "
-                set resStr to deletedList as text
-                set AppleScript's text item delimiters to oldDelims
-                return "DELETED:" & resStr
-            end if
-        on error errMsg
-            set AppleScript's text item delimiters to oldDelims
-            return "ERROR:" & errMsg
-        end try
-    end timeout
-end tell
-OSAEOF
-)"
+    SANDBOX_CACHE_RESULT="$(run_finder_cache_purge_osascript)"
     SANDBOX_CACHE_RC=$?
 
     handle_sandbox_cache_result "$SANDBOX_CACHE_RESULT" "$SANDBOX_CACHE_RC"
@@ -1100,15 +1305,28 @@ OSAEOF
         echo -e "  • ${BOLD}CC / Limite macOS    :${NC} $CC_MAXFILES_STATUS"
         echo ""
         echo -e "  ${YELLOW}[!] NE LANCEZ PAS ENCORE LES SIMS 2 !${NC}"
-        echo "      Vos sauvegardes Sandbox n'ont pas encore pu être copiées."
-        echo "      Si vous lancez le jeu maintenant, un nouveau profil vierge sera créé."
-        echo "      Activez Terminal → Finder dans Réglages Système > Confidentialité et sécurité > Automatisation,"
-        echo "      puis relancez simplement patch_sims2.command pour terminer la copie."
-        echo ""
-        echo -e "  ${YELLOW}[!] DO NOT LAUNCH THE SIMS 2 YET!${NC}"
-        echo "      Your Sandbox saves could not be copied yet (a fresh launch now would create an empty profile)."
-        echo "      Enable Terminal → Finder in System Settings > Privacy & Security > Automation,"
-        echo "      then re-run patch_sims2.command to complete the migration."
+        if [ "$MIGRATION_ERROR_KIND" = "TCC_AUTOMATION" ]; then
+            echo "      Vos sauvegardes Sandbox n'ont pas encore pu être copiées (Automatisation refusée)."
+            echo "      Activez Terminal → Finder dans Réglages Système > Confidentialité et sécurité > Automatisation,"
+            echo "      puis relancez simplement patch_sims2.command pour terminer la copie."
+            echo ""
+            echo -e "  ${YELLOW}[!] DO NOT LAUNCH THE SIMS 2 YET!${NC}"
+            echo "      Enable Terminal → Finder in System Settings > Privacy & Security > Automation,"
+            echo "      then re-run patch_sims2.command to complete the migration."
+        elif [ "$MIGRATION_ERROR_KIND" = "CONTAINER_ACCESS" ]; then
+            echo "      macOS a bloqué la copie automatique depuis le conteneur App Store (erreur droits conteneur)."
+            echo "      1) Ouvrez dans Finder (Cmd+Maj+G) : ~/Library/Containers/com.aspyr.sims2.appstore/Data/Library/Application Support/Aspyr/The Sims 2/"
+            echo "      2) Copiez Neighborhoods et Downloads vers ~/Library/Application Support/Aspyr/The Sims 2/"
+            echo "      (Ou activez Réglages Système > Confidentialité et sécurité > Accès complet au disque > Terminal puis relancez.)"
+            echo ""
+            echo -e "  ${YELLOW}[!] DO NOT LAUNCH THE SIMS 2 YET!${NC}"
+            echo "      macOS blocked scripted read inside the Sandbox container (-5000)."
+            echo "      Copy Neighborhoods/Downloads manually in Finder into ~/Library/Application Support/Aspyr/The Sims 2/"
+            echo "      (or grant Full Disk Access to Terminal and re-run patch_sims2.command)."
+        else
+            echo "      Vos sauvegardes Sandbox n'ont pas encore pu être copiées (voir message Finder ci-dessus)."
+            echo "      Consultez le journal ~/Library/Logs/Sims2-Crash-Patch/latest.log avant de relancer."
+        fi
         echo "========================================================================"
 
         pause_exit 1
@@ -1125,6 +1343,12 @@ OSAEOF
     echo -e "  • ${BOLD}Purge des Caches     :${NC} $CACHE_STATUS"
     echo -e "  • ${BOLD}Affichage userProps  :${NC} $USERPROPS_STATUS"
     echo -e "  • ${BOLD}CC / Limite macOS    :${NC} $CC_MAXFILES_STATUS"
+    if [ "$MIGRATION_FAILED" -eq 2 ]; then
+        echo ""
+        echo -e "  ${YELLOW}[i] Note Sandbox :${NC} Vos parties actives dans Application Support sont prêtes et intactes."
+        echo "      Si d'anciennes parties manquent encore, copiez-les à la main depuis le Finder :"
+        echo "      Cmd+Maj+G -> ~/Library/Containers/com.aspyr.sims2.appstore/Data/Library/Application Support/Aspyr/The Sims 2/"
+    fi
     echo ""
     echo "  👉 Vous pouvez maintenant démarrer Les Sims 2 depuis le Launchpad"
     echo "     ou votre dossier Applications (en gardant votre écran Mac à 120 Hz) !"
