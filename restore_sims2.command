@@ -1,7 +1,7 @@
 #!/bin/bash
 # ==============================================================================
 # The Sims 2: Super Collection — Official Binary Restore Utility
-# Version: 1.3.0
+# Version: 1.3.1
 # Verifies pristine fingerprints before atomically restoring Sims2XP_Exe.backup.
 # ==============================================================================
 
@@ -30,7 +30,7 @@ LOG_FILE=""
 LOG_FINALIZED=0
 
 init_diagnostic_log() {
-    local label="${1:-restore_sims2.command v1.3.0}"
+    local label="${1:-restore_sims2.command v1.3.1}"
     [ -z "${REAL_HOME:-}" ] && return 0
     local log_dir="${SIMS2_LOG_DIR:-$REAL_HOME/Library/Logs/Sims2-Crash-Patch}"
     run_as_real_user mkdir -p "$log_dir" >/dev/null 2>&1 || return 0
@@ -314,7 +314,7 @@ PERLEOF
 main() {
     echo -e "${CYAN}${BOLD}"
     echo "========================================================================"
-    echo "  The Sims 2 — Utilitaire de Restauration / Restore Utility (v1.3.0)    "
+    echo "  The Sims 2 — Utilitaire de Restauration / Restore Utility (v1.3.1)    "
     echo "========================================================================"
     echo -e "${NC}"
 
@@ -322,7 +322,7 @@ main() {
         pause_exit 1
     fi
 
-    init_diagnostic_log "restore_sims2.command v1.3.0"
+    init_diagnostic_log "restore_sims2.command v1.3.1"
 
     # 1. Verify the game is not currently running
     if pgrep -x "Sims2XP_Exe" >/dev/null 2>&1 || pgrep -x "AppBundleExe" >/dev/null 2>&1; then
@@ -437,7 +437,7 @@ main() {
 
     echo ""
     echo -e "${GREEN}${BOLD}========================================================================${NC}"
-    echo -e "${GREEN}${BOLD}  RESTAURATION TERMINÉE / RESTORATION COMPLETE (v1.3.0)                 ${NC}"
+    echo -e "${GREEN}${BOLD}  RESTAURATION TERMINÉE / RESTORATION COMPLETE (v1.3.1)                 ${NC}"
     echo -e "${GREEN}${BOLD}========================================================================${NC}"
     echo ""
     echo "Le binaire d'origine (vérifié intègre) a été restauré. Note : pour rétablir"

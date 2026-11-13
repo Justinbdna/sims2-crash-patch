@@ -4,6 +4,14 @@ All notable changes to **Sims 2 Crash Patch** (*The Sims 2: Super Collection* â€
 
 ---
 
+## [1.3.1] - 2026-11-13
+
+### Changed & Fixed
+- **Clean Release Packaging (`v1.3.1`):** Removed `SHA256SUMS.txt` generation and attachment from `scripts/verify_and_package.py` and `.github/workflows/ci-and-release.yml` so GitHub Releases ship only the macOS ZIP, Windows ZIP, and automatic source archives; bumped packager default `--version` and script headers to `v1.3.1`.
+- **Hardened Temp Files, Permissions & Windows Backup Validation (Audit Brique 1):** Enforced `umask 077` + `${TMPDIR:-/tmp}` + symlink checks around `limit.maxfiles.plist` creation, enforced `chmod 755` + symlink refusal on atomic `Sims2XP_Exe` updates/restores, and added `.backup` file size validation in `windows/sims2_windows_toolkit.py`.
+
+---
+
 ## [1.3.0] - 2026-11-13
 
 ### Added
