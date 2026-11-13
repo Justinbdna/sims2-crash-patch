@@ -6,8 +6,12 @@ All notable changes to **Sims 2 Crash Patch** (*The Sims 2: Super Collection* �
 
 ## [1.3.1] - 2026-11-13
 
+### Added
+- **Étape 3A — Retina & High Graphics Rules (`Graphics Rules.sgr`):** `patch_sims2.command` now creates an atomic `Graphics Rules.sgr.backup`, unlocks resolutions up to `5120x3200`, raises the `textureMemory` fallback from `32` to `1024` MB, and upgrades `# Override defaults (SIM-281,416)` (`EffectsQuality`, `LightingQuality`, `Shadows`, `MaterialDetail`) to `$High`; `restore_sims2.command` restores `Graphics Rules.sgr.backup` atomically.
+- **Étape 3B — Native MacBook Trackpad Module (`trackpad_mod/libsims2_trackpad.dylib`):** Bundled and auto-injected into `Sims2XP_Exe` via `LC_LOAD_WEAK_DYLIB` (`@executable_path/libsims2_trackpad.dylib`) with zero Xcode CLT dependency: `Option (⌥)` + click-drag for 360° free 3D orbit + vertical pitch, 2-finger pinch (`NSEventTypeMagnify`) for zoom `+/-`, and 2-finger horizontal swipe / rotation for smooth `,`/`.` camera rotation; removed cleanly by `restore_sims2.command`.
+
 ### Changed & Fixed
-- **Clean Release Packaging (`v1.3.1`):** Removed `SHA256SUMS.txt` generation and attachment from `scripts/verify_and_package.py` and `.github/workflows/ci-and-release.yml` so GitHub Releases ship only the macOS ZIP, Windows ZIP, and automatic source archives; bumped packager default `--version` and script headers to `v1.3.1`.
+- **Clean Release Packaging (`v1.3.1`):** Removed `SHA256SUMS.txt` generation and attachment from `scripts/verify_and_package.py` and `.github/workflows/ci-and-release.yml` so GitHub Releases ship only the macOS ZIP, Windows ZIP, and automatic source archives; bumped packager default `--version` and script headers to `v1.3.1`. Added `trackpad_mod/libsims2_trackpad.dylib` (mode `0755`, binary-safe without `\r\n` mangling) and `trackpad_mod/sims2_trackpad.m` to the macOS release ZIP.
 - **Hardened Temp Files, Permissions & Windows Backup Validation (Audit Brique 1):** Enforced `umask 077` + `${TMPDIR:-/tmp}` + symlink checks around `limit.maxfiles.plist` creation, enforced `chmod 755` + symlink refusal on atomic `Sims2XP_Exe` updates/restores, and added `.backup` file size validation in `windows/sims2_windows_toolkit.py`.
 
 ---

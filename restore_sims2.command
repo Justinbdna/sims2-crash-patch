@@ -11,6 +11,9 @@ APP_PATH="/Applications/The Sims 2.app"
 EXE_PATH="$APP_PATH/Contents/MacOS/Sims2XP_Exe"
 BACKUP_PATH="$APP_PATH/Contents/MacOS/Sims2XP_Exe.backup"
 ALT_BACKUP_PATH="$APP_PATH/Contents/MacOS/Sims2XP_Exe.backup_original"
+GRULES_PATH="$APP_PATH/Contents/Resources/Config/Graphics Rules.sgr"
+GRULES_BACKUP_PATH="$APP_PATH/Contents/Resources/Config/Graphics Rules.sgr.backup"
+TRACKPAD_DYLIB_DEST="$APP_PATH/Contents/MacOS/libsims2_trackpad.dylib"
 MANAGED_MAXFILES_PLIST="/Library/LaunchDaemons/limit.maxfiles.plist"
 
 # ANSI Colors
@@ -168,12 +171,18 @@ locate_app_bundle() {
         EXE_PATH="$APP_PATH/Contents/MacOS/Sims2XP_Exe"
         BACKUP_PATH="$APP_PATH/Contents/MacOS/Sims2XP_Exe.backup"
         ALT_BACKUP_PATH="$APP_PATH/Contents/MacOS/Sims2XP_Exe.backup_original"
+        GRULES_PATH="$APP_PATH/Contents/Resources/Config/Graphics Rules.sgr"
+        GRULES_BACKUP_PATH="$APP_PATH/Contents/Resources/Config/Graphics Rules.sgr.backup"
+        TRACKPAD_DYLIB_DEST="$APP_PATH/Contents/MacOS/libsims2_trackpad.dylib"
         return 1
     fi
 
     EXE_PATH="$APP_PATH/Contents/MacOS/Sims2XP_Exe"
     BACKUP_PATH="$APP_PATH/Contents/MacOS/Sims2XP_Exe.backup"
     ALT_BACKUP_PATH="$APP_PATH/Contents/MacOS/Sims2XP_Exe.backup_original"
+    GRULES_PATH="$APP_PATH/Contents/Resources/Config/Graphics Rules.sgr"
+    GRULES_BACKUP_PATH="$APP_PATH/Contents/Resources/Config/Graphics Rules.sgr.backup"
+    TRACKPAD_DYLIB_DEST="$APP_PATH/Contents/MacOS/libsims2_trackpad.dylib"
     return 0
 }
 
@@ -304,11 +313,54 @@ my $repl2 = pack("H*", "41bf3c00000090909090c70300000000");
 if (count_occurrences($buf, $orig1) == 1 &&
     count_occurrences($buf, $orig2) == 1 &&
     count_occurrences($buf, $repl1) == 0 &&
-    count_occurrences($buf, $repl2) == 0) {
+    count_occurrences($buf, $repl2) == 0 &&
+    index($buf, "libsims2_trackpad.dylib") == -1) {
     exit 0;
 }
 exit 1;
 PERLEOF
+}
+
+restore_auxiliary_files() {
+    local app_path="${1:-$APP_PATH}"
+    local dylib_path="$app_path/Contents/MacOS/libsims2_trackpad.dylib"
+    local grules_path="$app_path/Contents/Resources/Config/Graphics Rules.sgr"
+    local grules_backup="$app_path/Contents/Resources/Config/Graphics Rules.sgr.backup"
+    local rc=0
+
+    if [ -L "$dylib_path" ]; then
+        echo -e "${RED}[-] Erreur de sécurité : lien symbolique inattendu sur $dylib_path.${NC}"
+        rc=1
+    elif [ -e "$dylib_path" ]; then
+        if run_privileged "$app_path" rm -f "$dylib_path"; then
+            echo -e "${GREEN}[+] Module Trackpad supprimé :${NC} $dylib_path"
+        else
+            echo -e "${RED}[-] Impossible de supprimer $dylib_path.${NC}"
+            rc=1
+        fi
+    fi
+
+    if [ -L "$grules_backup" ] || [ -L "$grules_path" ]; then
+        echo -e "${RED}[-] Erreur de sécurité : lien symbolique inattendu sur Graphics Rules.sgr.${NC}"
+        return 1
+    fi
+
+    if [ -f "$grules_backup" ]; then
+        local tmp_grules="${grules_path}.tmp.$$"
+        run_privileged "$app_path" rm -f "$tmp_grules" 2>/dev/null || true
+        if run_privileged "$app_path" cp -f "$grules_backup" "$tmp_grules" && \
+           run_privileged "$app_path" chmod 644 "$tmp_grules" && \
+           run_privileged "$app_path" mv -f "$tmp_grules" "$grules_path" && \
+           run_privileged "$app_path" chmod 644 "$grules_path"; then
+            echo -e "${GREEN}[+] Graphics Rules.sgr restauré depuis Graphics Rules.sgr.backup.${NC}"
+        else
+            run_privileged "$app_path" rm -f "$tmp_grules" 2>/dev/null || true
+            echo -e "${RED}[-] Échec de la restauration atomique de Graphics Rules.sgr.${NC}"
+            rc=1
+        fi
+    fi
+
+    return "$rc"
 }
 
 main() {
@@ -411,6 +463,12 @@ main() {
         RESTORE_STATUS="FAILED (atomic restore error)"
         log_diag "RESTORE FAILED"
         echo -e "${RED}[-] Échec de la restauration atomique / Atomic restore failed.${NC}"
+        pause_exit 1
+    fi
+
+    if ! restore_auxiliary_files "$APP_PATH"; then
+        RESTORE_STATUS="FAILED (auxiliary restore error)"
+        log_diag "RESTORE AUXILIARY FAILED"
         pause_exit 1
     fi
 

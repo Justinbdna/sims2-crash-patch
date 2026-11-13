@@ -67,13 +67,16 @@ class TestMacScriptsIntegrity(unittest.TestCase):
                         "clean_sims2_cache.command",
                         "restore_sims2.command",
                         "README.txt",
+                        "trackpad_mod/libsims2_trackpad.dylib",
+                        "trackpad_mod/sims2_trackpad.m",
                     },
                 )
                 for info in zf.infolist():
                     raw = zf.read(info.filename)
-                    self.assertNotIn(b"\r", raw, f"CR found inside {info.filename} in release zip")
+                    if not info.filename.endswith(".dylib"):
+                        self.assertNotIn(b"\r", raw, f"CR found inside {info.filename} in release zip")
                     mode = (info.external_attr >> 16) & 0o777
-                    if info.filename.endswith(".command"):
+                    if info.filename.endswith((".command", ".sh", ".dylib")):
                         self.assertEqual(mode, 0o755, f"{info.filename} must be 0755 in zip")
                     else:
                         self.assertEqual(mode, 0o644)
@@ -650,6 +653,221 @@ class TestMacScriptsIntegrity(unittest.TestCase):
                 self.assertTrue(prev.is_file(), f"Missing rotated previous.log for {script}")
                 self.assertIn("STEP_TWO", latest.read_text(encoding="utf-8"))
                 self.assertIn("STEP_ONE", prev.read_text(encoding="utf-8"))
+
+    def test_v14_graphics_rules_sgr_patch_and_restore(self) -> None:
+        if not vp.find_perl():
+            self.skipTest("perl not available on PATH")
+
+        sample_grules = (
+            "# Synthetic Graphics Rules.sgr\n"
+            "seti textureMemory       32\n"
+            "option ScreenModeResolution\n"
+            "   setting $Low\n"
+            "      uintProp maxResWidth      2048\n"
+            "      uintProp maxResHeight     2048\n"
+            "   setting $High\n"
+            "      uintProp maxResWidth      2048\n"
+            "      uintProp maxResHeight     2048\n"
+            "end\n"
+            "# Override defaults (SIM-281,416)\n"
+            "setOption EffectsQuality        $Medium\n"
+            "setOption LightingQuality       $Medium\n"
+            "setOption Shadows               $Medium\n"
+            "setOption MaterialDetail        $Medium\n"
+        )
+
+        with tempfile.TemporaryDirectory() as tmp:
+            app_dir = Path(tmp) / "The Sims 2.app"
+            cfg_dir = app_dir / "Contents" / "Resources" / "Config"
+            macos_dir = app_dir / "Contents" / "MacOS"
+            cfg_dir.mkdir(parents=True)
+            macos_dir.mkdir(parents=True)
+
+            grules = cfg_dir / "Graphics Rules.sgr"
+            grules_bak = cfg_dir / "Graphics Rules.sgr.backup"
+            dylib_dest = macos_dir / "libsims2_trackpad.dylib"
+            grules.write_text(sample_grules, encoding="utf-8")
+            dylib_dest.write_bytes(b"dummy-dylib")
+
+            r1 = self._run_bash_lib(
+                "patch_sims2.command",
+                'patch_graphics_rules_sgr "$1" "$2"',
+                grules.as_posix(),
+                grules_bak.as_posix(),
+            )
+            self.assertEqual(r1.returncode, 0, r1.stderr or r1.stdout)
+            self.assertTrue(grules_bak.is_file())
+            self.assertEqual(grules_bak.read_text(encoding="utf-8"), sample_grules)
+
+            patched_text = grules.read_text(encoding="utf-8")
+            self.assertIn("1024", patched_text)
+            self.assertIn("5120", patched_text)
+            self.assertIn("3200", patched_text)
+            self.assertIn("$High", patched_text)
+            self.assertNotIn("seti textureMemory       32", patched_text)
+            self.assertNotIn("2048", patched_text)
+            self.assertNotIn("$Medium", patched_text)
+
+            # Second call must be strictly idempotent and keep original backup intact
+            r2 = self._run_bash_lib(
+                "patch_sims2.command",
+                'patch_graphics_rules_sgr "$1" "$2"',
+                grules.as_posix(),
+                grules_bak.as_posix(),
+            )
+            self.assertEqual(r2.returncode, 0, r2.stderr or r2.stdout)
+            self.assertEqual(grules.read_text(encoding="utf-8"), patched_text)
+            self.assertEqual(grules_bak.read_text(encoding="utf-8"), sample_grules)
+
+            # Restore via restore_auxiliary_files
+            r_rest = self._run_bash_lib(
+                "restore_sims2.command",
+                'restore_auxiliary_files "$1"',
+                app_dir.as_posix(),
+            )
+            self.assertEqual(r_rest.returncode, 0, r_rest.stderr or r_rest.stdout)
+            self.assertEqual(grules.read_text(encoding="utf-8"), sample_grules)
+            self.assertFalse(dylib_dest.exists())
+
+    def test_v14_macho_weak_dylib_injection_and_binary_zip_integrity(self) -> None:
+        if not vp.find_perl():
+            self.skipTest("perl not available on PATH")
+
+        orig_sizeofcmds = 72 + 80  # 1 LC_SEGMENT_64 (72) + 1 section_64 (80)
+        macho = bytearray(10240)
+        # mach_header_64 (32 bytes): MH_MAGIC_64=0xfeedfacf, CPU_TYPE_X86_64=0x01000007, MH_EXECUTE=2, ncmds=1
+        struct.pack_into("<IIIIIIII", macho, 0, 0xFEEDFACF, 0x01000007, 3, 2, 1, orig_sizeofcmds, 0, 0)
+        # LC_SEGMENT_64 at offset 32
+        struct.pack_into(
+            "<II16sQQQQIIII",
+            macho,
+            32,
+            0x19,
+            orig_sizeofcmds,
+            b"__TEXT",
+            0x100000000,
+            10240,
+            0,
+            10240,
+            7,
+            5,
+            1,
+            0,
+        )
+        # section_64 (__text) at offset 104, file offset 9984
+        struct.pack_into(
+            "<16s16sQQIIIIIIII",
+            macho,
+            104,
+            b"__text",
+            b"__TEXT",
+            0x100000000 + 9984,
+            256,
+            9984,
+            4,
+            0,
+            0,
+            0x80000400,
+            0,
+            0,
+            0,
+        )
+
+        dylib_name = "@executable_path/libsims2_trackpad.dylib"
+        expected_cmdsize = (24 + len(dylib_name.encode("ascii")) + 1 + 7) & ~7
+
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_dir = Path(tmp)
+            exe = tmp_dir / "Sims2XP_Exe"
+            exe.write_bytes(bytes(macho))
+
+            r1 = self._run_bash_lib(
+                "patch_sims2.command",
+                'inject_weak_dylib_macho "$1" "$2"',
+                exe.as_posix(),
+                dylib_name,
+            )
+            self.assertEqual(r1.returncode, 0, r1.stderr or r1.stdout)
+
+            patched = exe.read_bytes()
+            ncmds, sizeofcmds = struct.unpack_from("<II", patched, 16)
+            self.assertEqual(ncmds, 2)
+            self.assertEqual(sizeofcmds, orig_sizeofcmds + expected_cmdsize)
+
+            new_cmd_off = 32 + orig_sizeofcmds
+            cmd, cmdsize, str_off = struct.unpack_from("<III", patched, new_cmd_off)
+            self.assertEqual(cmd, 0x80000018)
+            self.assertEqual(cmdsize, expected_cmdsize)
+            self.assertEqual(str_off, 24)
+            cmd_payload = patched[new_cmd_off + str_off : new_cmd_off + cmdsize]
+            self.assertIn(dylib_name.encode("ascii"), cmd_payload)
+
+            # Second call must report ALREADY_INJECTED without modifying ncmds or bytes
+            r2 = self._run_bash_lib(
+                "patch_sims2.command",
+                'inject_weak_dylib_macho "$1" "$2"',
+                exe.as_posix(),
+                dylib_name,
+            )
+            self.assertEqual(r2.returncode, 0, r2.stderr or r2.stdout)
+            self.assertIn("ALREADY_INJECTED", r2.stdout)
+            self.assertEqual(exe.read_bytes(), patched)
+            ncmds_after, _ = struct.unpack_from("<II", exe.read_bytes(), 16)
+            self.assertEqual(ncmds_after, 2)
+
+            # Verify binary dylib is preserved byte-for-byte in Mac release ZIP with 0755 permissions
+            dylib_src = ROOT_DIR / "trackpad_mod" / "libsims2_trackpad.dylib"
+            self.assertTrue(dylib_src.is_file(), "Missing trackpad_mod/libsims2_trackpad.dylib")
+            expected_dylib = dylib_src.read_bytes()
+            mac_zip, _ = vp.package_releases("v1.3.1-test", tmp_dir)
+            with zipfile.ZipFile(mac_zip, "r") as zf:
+                info = zf.getinfo("trackpad_mod/libsims2_trackpad.dylib")
+                mode = (info.external_attr >> 16) & 0o777
+                self.assertEqual(mode, 0o755)
+                self.assertEqual(zf.read("trackpad_mod/libsims2_trackpad.dylib"), expected_dylib)
+
+    def test_v14_trackpad_dylib_sdl2_azerty_and_orbit_fixes(self) -> None:
+        build_sh = (ROOT_DIR / "trackpad_mod" / "build_trackpad.sh").read_text(encoding="utf-8")
+        src_m = (ROOT_DIR / "trackpad_mod" / "sims2_trackpad.m").read_text(encoding="utf-8")
+        dylib = ROOT_DIR / "trackpad_mod" / "libsims2_trackpad.dylib"
+
+        self.assertIn("-arch x86_64", build_sh)
+        self.assertIn("-framework Carbon", build_sh)
+        self.assertIn("-framework CoreGraphics", build_sh)
+
+        # Brique 2 SDL2 Space/Dock/focus hints & cursor warp protection
+        for hint in (
+            "SDL_VIDEO_MAC_FULLSCREEN_SPACES",
+            "SDL_HINT_ALLOW_FULLSCREEN_NOTIFICATIONS",
+            "SDL_ALLOW_TOPMOST",
+            "SDL_VIDEO_MINIMIZE_ON_FOCUS_LOSS",
+        ):
+            self.assertIn(hint, src_m)
+        self.assertIn("swizzled_mouseMoved", src_m)
+        self.assertIn("![NSApp isActive]", src_m)
+        self.assertIn("![win isKeyWindow]", src_m)
+
+        # Brique 3 layout-independent pinch zoom, Carbon AZERTY/QWERTY rotation, & Option-orbit
+        self.assertIn("CGEventCreateScrollWheelEvent", src_m)
+        self.assertIn("gForceScrollNonInverted", src_m)
+        self.assertIn("TISCopyCurrentKeyboardLayoutInputSource", src_m)
+        self.assertIn("UCKeyTranslate", src_m)
+        self.assertIn("kc >= 65 && kc <= 92", src_m)
+        self.assertIn("75 * NSEC_PER_MSEC", src_m)
+        self.assertIn("NSEventTypeFlagsChanged", src_m)
+        self.assertIn("rightMouseDown:", src_m)
+        self.assertIn("rightMouseDragged:", src_m)
+        self.assertIn("mouseDragged:", src_m)
+
+        # Compiled dylib header check (Mach-O 64-bit x86_64 MH_DYLIB)
+        raw = dylib.read_bytes()
+        magic, cputype, _, filetype = struct.unpack_from("<IIII", raw, 0)
+        self.assertEqual(magic, 0xFEEDFACF)
+        self.assertEqual(cputype, 0x01000007)
+        self.assertEqual(filetype, 6)
+        if sys.platform == "darwin":
+            cs = subprocess.run(["codesign", "--verify", "--strict", dylib.as_posix()], capture_output=True, text=True)
+            self.assertEqual(cs.returncode, 0, cs.stderr)
 
 
 

@@ -8,10 +8,15 @@
 
 set -u
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
 APP_PATH="/Applications/The Sims 2.app"
 EXE_PATH="$APP_PATH/Contents/MacOS/Sims2XP_Exe"
 BACKUP_PATH="$APP_PATH/Contents/MacOS/Sims2XP_Exe.backup"
 ALT_BACKUP_PATH="$APP_PATH/Contents/MacOS/Sims2XP_Exe.backup_original"
+GRULES_PATH="$APP_PATH/Contents/Resources/Config/Graphics Rules.sgr"
+GRULES_BACKUP_PATH="$APP_PATH/Contents/Resources/Config/Graphics Rules.sgr.backup"
+TRACKPAD_DYLIB_DEST="$APP_PATH/Contents/MacOS/libsims2_trackpad.dylib"
 MANAGED_MAXFILES_PLIST="/Library/LaunchDaemons/limit.maxfiles.plist"
 
 # ANSI Colors
@@ -30,6 +35,8 @@ MIGRATION_STATUS=""
 MIGRATION_FAILED=0
 MIGRATION_ERROR_KIND=""
 PATCH_STATUS=""
+GRULES_STATUS=""
+TRACKPAD_STATUS=""
 CACHE_STATUS=""
 USERPROPS_STATUS=""
 CC_MAXFILES_STATUS=""
@@ -75,6 +82,8 @@ finish_diagnostic_log() {
     LOG_FINALIZED=1
     log_diag "EXIT code=$code"
     [ -n "${PATCH_STATUS:-}" ] && log_diag "SUMMARY patch=$PATCH_STATUS"
+    [ -n "${GRULES_STATUS:-}" ] && log_diag "SUMMARY grules=$GRULES_STATUS"
+    [ -n "${TRACKPAD_STATUS:-}" ] && log_diag "SUMMARY trackpad=$TRACKPAD_STATUS"
     [ -n "${MIGRATION_STATUS:-}" ] && log_diag "SUMMARY migration=$MIGRATION_STATUS (failed=$MIGRATION_FAILED kind=${MIGRATION_ERROR_KIND:-none})"
     [ -n "${CACHE_STATUS:-}" ] && log_diag "SUMMARY caches=$CACHE_STATUS"
     [ -n "${USERPROPS_STATUS:-}" ] && log_diag "SUMMARY userProps=$USERPROPS_STATUS"
@@ -184,12 +193,18 @@ locate_app_bundle() {
         EXE_PATH="$APP_PATH/Contents/MacOS/Sims2XP_Exe"
         BACKUP_PATH="$APP_PATH/Contents/MacOS/Sims2XP_Exe.backup"
         ALT_BACKUP_PATH="$APP_PATH/Contents/MacOS/Sims2XP_Exe.backup_original"
+        GRULES_PATH="$APP_PATH/Contents/Resources/Config/Graphics Rules.sgr"
+        GRULES_BACKUP_PATH="$APP_PATH/Contents/Resources/Config/Graphics Rules.sgr.backup"
+        TRACKPAD_DYLIB_DEST="$APP_PATH/Contents/MacOS/libsims2_trackpad.dylib"
         return 1
     fi
 
     EXE_PATH="$APP_PATH/Contents/MacOS/Sims2XP_Exe"
     BACKUP_PATH="$APP_PATH/Contents/MacOS/Sims2XP_Exe.backup"
     ALT_BACKUP_PATH="$APP_PATH/Contents/MacOS/Sims2XP_Exe.backup_original"
+    GRULES_PATH="$APP_PATH/Contents/Resources/Config/Graphics Rules.sgr"
+    GRULES_BACKUP_PATH="$APP_PATH/Contents/Resources/Config/Graphics Rules.sgr.backup"
+    TRACKPAD_DYLIB_DEST="$APP_PATH/Contents/MacOS/libsims2_trackpad.dylib"
     return 0
 }
 
@@ -931,6 +946,316 @@ count_cc_and_check_maxfiles() {
     fi
 }
 
+# Step 3A — Optimize Graphics Rules.sgr (Retina 5120x3200, $High profile, 1024 MB VRAM fallback)
+patch_graphics_rules_sgr() {
+    local grules_path="${1:-$GRULES_PATH}"
+    local backup_path="${2:-$GRULES_BACKUP_PATH}"
+
+    if [ -L "$grules_path" ] || [ -L "$backup_path" ]; then
+        GRULES_STATUS="ERREUR (lien symbolique refusé)"
+        echo -e "${RED}[-] Erreur de sécurité : lien symbolique refusé sur Graphics Rules.sgr.${NC}"
+        return 1
+    fi
+
+    if [ ! -f "$grules_path" ]; then
+        GRULES_STATUS="Absent (Graphics Rules.sgr introuvable)"
+        echo -e "${CYAN}[i] Graphics Rules.sgr :${NC} Fichier introuvable ($grules_path) — étape ignorée."
+        return 0
+    fi
+
+    local perl_script runner_out runner_rc
+    { IFS= read -r -d '' perl_script || true; } <<'GRULES_PERL'
+use strict;
+use warnings;
+
+my ($grules_path, $backup_path) = @ARGV;
+
+my $active_tmp;
+END {
+    unlink($active_tmp) if defined $active_tmp && -e $active_tmp;
+}
+
+sub read_raw {
+    my ($p) = @_;
+    open(my $fh, "<:raw", $p) or die "Cannot read $p: $!\n";
+    local $/;
+    my $buf = <$fh>;
+    close($fh);
+    return $buf;
+}
+
+sub write_atomic {
+    my ($p, $buf, $mode) = @_;
+    die "Refusing to write through symlink: $p\n" if -l $p;
+    my $tmp = "$p.tmp.$$";
+    unlink($tmp) if -e $tmp || -l $tmp;
+    $active_tmp = $tmp;
+    open(my $out, ">:raw", $tmp) or do {
+        $active_tmp = undef;
+        die "Cannot create $tmp: $!\n";
+    };
+    if (!print {$out} $buf) {
+        my $err = $!;
+        close($out);
+        unlink($tmp);
+        $active_tmp = undef;
+        die "Write failed: $err\n";
+    }
+    if (!close($out)) {
+        my $err = $!;
+        unlink($tmp);
+        $active_tmp = undef;
+        die "Close failed: $err\n";
+    }
+    if (!chmod($mode, $tmp)) {
+        my $err = $!;
+        unlink($tmp);
+        $active_tmp = undef;
+        die "chmod failed: $err\n";
+    }
+    if (!rename($tmp, $p)) {
+        my $err = $!;
+        unlink($tmp);
+        $active_tmp = undef;
+        die "rename failed: $err\n";
+    }
+    $active_tmp = undef;
+}
+
+die "Refusing symlink: $grules_path\n" if -l $grules_path;
+die "Refusing symlink: $backup_path\n" if -l $backup_path;
+
+my $raw = read_raw($grules_path);
+my $marker = "# Patched by sims2-crash-patch";
+my $is_already_patched = (index($raw, $marker) != -1);
+
+if (!-e $backup_path) {
+    if (!$is_already_patched) {
+        write_atomic($backup_path, $raw, 0644);
+    }
+} elsif (!$is_already_patched) {
+    my $bak_raw = read_raw($backup_path);
+    if (index($bak_raw, $marker) != -1) {
+        write_atomic($backup_path, $raw, 0644);
+    }
+}
+
+if ($is_already_patched) {
+    print "OK:already_patched\n";
+    exit 0;
+}
+
+$raw =~ s/\b(seti[ \t]+textureMemory[ \t]+)32\b/${1}1024/g;
+$raw =~ s/\b(uintProp[ \t]+maxResWidth[ \t]+)2048\b/${1}5120/g;
+$raw =~ s/\b(uintProp[ \t]+maxResHeight[ \t]+)2048\b/${1}3200/g;
+
+my $override_hdr = "# Override defaults (SIM-281,416)";
+my $banner = "# Patched by sims2-crash-patch (Apple Silicon & Retina Rules)\n";
+my $found_override = ($raw =~ s{([ \t]*\Q$override_hdr\E\r?\n(?:(?!\r?\n[ \t]*(?:#|endif\b|end\b)).)*)}{
+    my $blk = $1;
+    $blk =~ s/\b(setOption[ \t]+(?:EffectsQuality|LightingQuality|Shadows|MaterialDetail)[ \t]+)\$Medium\b/${1}\$High/g;
+    my ($indent) = ($blk =~ /^([ \t]*)/);
+    $indent . $banner . $blk;
+}se);
+
+if (!$found_override) {
+    $raw = $banner . $raw;
+}
+
+write_atomic($grules_path, $raw, 0644);
+print "PATCHED\n";
+GRULES_PERL
+
+    runner_out="$(printf '%s\n' "$perl_script" | run_privileged "$grules_path" /usr/bin/perl - "$grules_path" "$backup_path" 2>&1)"
+    runner_rc=$?
+
+    if [ "$runner_rc" -ne 0 ]; then
+        GRULES_STATUS="AVERTISSEMENT ($runner_out)"
+        echo -e "${YELLOW}[!] Graphics Rules.sgr : Erreur ($runner_out)${NC}"
+        return 1
+    fi
+
+    case "$runner_out" in
+        OK:already_patched)
+            GRULES_STATUS="OK (déjà patché / already patched)"
+            echo -e "${GREEN}[i] Graphics Rules.sgr :${NC} Déjà patché (OK:already_patched)."
+            ;;
+        PATCHED)
+            GRULES_STATUS="OK (Retina 5120x3200, \$High, VRAM 1024 Mo)"
+            echo -e "${GREEN}[+] Graphics Rules.sgr :${NC} Optimisé (5120x3200, profil \$High, VRAM 1024 Mo) [PATCHED]."
+            ;;
+        *)
+            GRULES_STATUS="Statut ($runner_out)"
+            echo -e "${YELLOW}[!] Graphics Rules.sgr :${NC} $runner_out"
+            ;;
+    esac
+    return 0
+}
+
+# Step 3B — Idempotent LC_LOAD_WEAK_DYLIB Mach-O 64-bit injector
+inject_weak_dylib_macho() {
+    local exe_path="$1"
+    local dylib_install_name="${2:-@executable_path/libsims2_trackpad.dylib}"
+
+    if [ -L "$exe_path" ]; then
+        echo -e "${RED}[-] Erreur de sécurité : lien symbolique refusé sur $exe_path.${NC}"
+        return 1
+    fi
+    if [ ! -f "$exe_path" ]; then
+        echo -e "${RED}[-] Binaire introuvable pour injection Mach-O : $exe_path.${NC}"
+        return 1
+    fi
+
+    local perl_script runner_out runner_rc
+    { IFS= read -r -d '' perl_script || true; } <<'MACHO_PERL'
+use strict;
+use warnings;
+
+my ($exe_path, $dylib_install_name) = @ARGV;
+
+my $active_tmp;
+END {
+    unlink($active_tmp) if defined $active_tmp && -e $active_tmp;
+}
+
+sub read_raw {
+    my ($p) = @_;
+    open(my $fh, "<:raw", $p) or die "Cannot read $p: $!\n";
+    local $/;
+    my $buf = <$fh>;
+    close($fh);
+    return $buf;
+}
+
+sub write_atomic {
+    my ($p, $buf, $mode) = @_;
+    die "Refusing to write through symlink: $p\n" if -l $p;
+    my $tmp = "$p.tmp.$$";
+    unlink($tmp) if -e $tmp || -l $tmp;
+    $active_tmp = $tmp;
+    open(my $out, ">:raw", $tmp) or do {
+        $active_tmp = undef;
+        die "Cannot create $tmp: $!\n";
+    };
+    if (!print {$out} $buf) {
+        my $err = $!;
+        close($out);
+        unlink($tmp);
+        $active_tmp = undef;
+        die "Write failed: $err\n";
+    }
+    if (!close($out)) {
+        my $err = $!;
+        unlink($tmp);
+        $active_tmp = undef;
+        die "Close failed: $err\n";
+    }
+    if (!chmod($mode, $tmp)) {
+        my $err = $!;
+        unlink($tmp);
+        $active_tmp = undef;
+        die "chmod failed: $err\n";
+    }
+    if (!rename($tmp, $p)) {
+        my $err = $!;
+        unlink($tmp);
+        $active_tmp = undef;
+        die "rename failed: $err\n";
+    }
+    $active_tmp = undef;
+}
+
+die "Refusing symlink: $exe_path\n" if -l $exe_path;
+my $data = read_raw($exe_path);
+die "File too small for Mach-O 64-bit header\n" if length($data) < 32;
+
+my ($magic, $cputype, $cpusubtype, $filetype, $ncmds, $sizeofcmds, $flags, $reserved) =
+    unpack("V8", substr($data, 0, 32));
+die sprintf("Invalid Mach-O 64-bit magic: 0x%08x\n", $magic) if $magic != 0xfeedfacf;
+die "Invalid sizeofcmds in Mach-O header\n" if 32 + $sizeofcmds > length($data);
+
+my $off = 32;
+my $end_cmds = 32 + $sizeofcmds;
+my $min_sect_off;
+
+for (my $i = 0; $i < $ncmds; $i++) {
+    die "Truncated load command at offset $off\n" if $off + 8 > $end_cmds;
+    my ($cmd, $cmdsize) = unpack("VV", substr($data, $off, 8));
+    die "Invalid load command size ($cmdsize) at offset $off\n"
+        if $cmdsize < 8 || $off + $cmdsize > $end_cmds;
+
+    if ($cmd == 0x0c || $cmd == 0x80000018) {
+        if ($cmdsize >= 24) {
+            my $str_off = unpack("V", substr($data, $off + 8, 4));
+            my $read_off = ($str_off >= 24 && $str_off < $cmdsize) ? $str_off : 24;
+            my $name = substr($data, $off + $read_off, $cmdsize - $read_off);
+            $name =~ s/\0.*$//s;
+            if ($name eq $dylib_install_name || index($name, "libsims2_trackpad.dylib") != -1) {
+                print "ALREADY_INJECTED\n";
+                exit 0;
+            }
+        }
+    } elsif ($cmd == 0x19) {
+        die "Truncated LC_SEGMENT_64 at offset $off\n" if $cmdsize < 72;
+        my $nsects = unpack("V", substr($data, $off + 64, 4));
+        die "Truncated section_64 list in LC_SEGMENT_64 at offset $off\n"
+            if 72 + $nsects * 80 > $cmdsize;
+        for (my $s = 0; $s < $nsects; $s++) {
+            my $sect_off = $off + 72 + ($s * 80);
+            my $sec_file_off = unpack("V", substr($data, $sect_off + 48, 4));
+            if ($sec_file_off > 0 && (!defined($min_sect_off) || $sec_file_off < $min_sect_off)) {
+                $min_sect_off = $sec_file_off;
+            }
+        }
+    }
+
+    $off += $cmdsize;
+}
+
+my $str = $dylib_install_name . "\0";
+my $raw_len = 24 + length($str);
+my $new_cmdsize = ($raw_len + 7) & ~7;
+my $pad = "\0" x ($new_cmdsize - $raw_len);
+my $new_cmd = pack("VVVVVV", 0x80000018, $new_cmdsize, 24, 2, 0x00010000, 0x00010000) . $str . $pad;
+
+my $target_off = 32 + $sizeofcmds;
+die "Insufficient Mach-O header padding for LC_LOAD_WEAK_DYLIB\n"
+    unless defined($min_sect_off) && ($target_off + $new_cmdsize <= $min_sect_off);
+
+my $target_space = substr($data, $target_off, $new_cmdsize);
+die "Non-zero bytes in Mach-O header padding\n"
+    unless $target_space eq ("\0" x $new_cmdsize);
+
+substr($data, $target_off, $new_cmdsize, $new_cmd);
+substr($data, 16, 4, pack("V", $ncmds + 1));
+substr($data, 20, 4, pack("V", $sizeofcmds + $new_cmdsize));
+
+write_atomic($exe_path, $data, 0755);
+print "INJECTED\n";
+MACHO_PERL
+
+    runner_out="$(printf '%s\n' "$perl_script" | run_privileged "$exe_path" /usr/bin/perl - "$exe_path" "$dylib_install_name" 2>&1)"
+    runner_rc=$?
+
+    if [ "$runner_rc" -ne 0 ]; then
+        echo -e "${YELLOW}[!] Injection LC_LOAD_WEAK_DYLIB échouée :${NC} $runner_out"
+        return 1
+    fi
+
+    case "$runner_out" in
+        ALREADY_INJECTED)
+            echo -e "${GREEN}[i] Mach-O Weak Dylib :${NC} Déjà injecté (ALREADY_INJECTED)."
+            ;;
+        INJECTED)
+            echo -e "${GREEN}[+] Mach-O Weak Dylib :${NC} LC_LOAD_WEAK_DYLIB injecté (INJECTED)."
+            ;;
+        *)
+            echo -e "${YELLOW}[!] Mach-O Weak Dylib :${NC} $runner_out"
+            ;;
+    esac
+    return 0
+}
+
 main() {
     echo -e "${CYAN}${BOLD}"
     echo "========================================================================"
@@ -1076,7 +1401,8 @@ sub is_pristine {
         count_occurrences($buf, $orig1) == 1 &&
         count_occurrences($buf, $orig2) == 1 &&
         count_occurrences($buf, $repl1) == 0 &&
-        count_occurrences($buf, $repl2) == 0
+        count_occurrences($buf, $repl2) == 0 &&
+        index($buf, "libsims2_trackpad.dylib") == -1
     );
 }
 
@@ -1155,6 +1481,56 @@ PERLEOF
     fi
     PATCH_STATUS="OK (60 Hz verrouillé / locked)"
     log_diag "BINARY_PATCH OK"
+
+    # 4B. Graphics Rules.sgr optimization & native Trackpad weak dylib injection
+    echo ""
+    echo -e "${BOLD}[+] Optimisation Graphics Rules.sgr & Module Trackpad natif...${NC}"
+    if patch_graphics_rules_sgr "$GRULES_PATH" "$GRULES_BACKUP_PATH"; then
+        log_diag "GRULES_PATCH OK"
+    else
+        log_diag "GRULES_PATCH WARNING"
+    fi
+
+    local trackpad_src=""
+    if [ -f "$SCRIPT_DIR/trackpad_mod/libsims2_trackpad.dylib" ]; then
+        trackpad_src="$SCRIPT_DIR/trackpad_mod/libsims2_trackpad.dylib"
+    elif [ -f "$SCRIPT_DIR/libsims2_trackpad.dylib" ]; then
+        trackpad_src="$SCRIPT_DIR/libsims2_trackpad.dylib"
+    fi
+
+    if [ -n "$trackpad_src" ]; then
+        if [ -L "$trackpad_src" ] || [ -L "$TRACKPAD_DYLIB_DEST" ]; then
+            TRACKPAD_STATUS="AVERTISSEMENT (lien symbolique refusé)"
+            log_diag "TRACKPAD_DYLIB SYMLINK_REFUSED"
+            echo -e "${YELLOW}[!] Sécurité : lien symbolique refusé pour libsims2_trackpad.dylib.${NC}"
+        else
+            local tmp_dylib="${TRACKPAD_DYLIB_DEST}.tmp.$$"
+            run_privileged "$TRACKPAD_DYLIB_DEST" rm -f "$tmp_dylib" 2>/dev/null || true
+            if run_privileged "$TRACKPAD_DYLIB_DEST" cp -f "$trackpad_src" "$tmp_dylib" && \
+               run_privileged "$TRACKPAD_DYLIB_DEST" chmod 755 "$tmp_dylib" && \
+               run_privileged "$TRACKPAD_DYLIB_DEST" mv -f "$tmp_dylib" "$TRACKPAD_DYLIB_DEST" && \
+               run_privileged "$TRACKPAD_DYLIB_DEST" chmod 755 "$TRACKPAD_DYLIB_DEST"; then
+                run_privileged "$TRACKPAD_DYLIB_DEST" /usr/bin/xattr -d com.apple.quarantine "$TRACKPAD_DYLIB_DEST" >/dev/null 2>&1 || true
+                echo -e "${GREEN}[+] Module Trackpad installé :${NC} $TRACKPAD_DYLIB_DEST"
+                if inject_weak_dylib_macho "$EXE_PATH" "@executable_path/libsims2_trackpad.dylib"; then
+                    TRACKPAD_STATUS="OK (libsims2_trackpad.dylib installé & injecté)"
+                    log_diag "TRACKPAD_DYLIB OK"
+                else
+                    TRACKPAD_STATUS="AVERTISSEMENT (injection LC_LOAD_WEAK_DYLIB échouée)"
+                    log_diag "TRACKPAD_DYLIB INJECT_FAILED"
+                fi
+            else
+                run_privileged "$TRACKPAD_DYLIB_DEST" rm -f "$tmp_dylib" 2>/dev/null || true
+                TRACKPAD_STATUS="AVERTISSEMENT (copie dylib échouée)"
+                log_diag "TRACKPAD_DYLIB COPY_FAILED"
+                echo -e "${YELLOW}[!] Impossible d'installer libsims2_trackpad.dylib dans $TRACKPAD_DYLIB_DEST.${NC}"
+            fi
+        fi
+    else
+        TRACKPAD_STATUS="Ignoré (libsims2_trackpad.dylib absent)"
+        log_diag "TRACKPAD_DYLIB SKIPPED missing_source"
+        echo -e "${CYAN}[i] Module Trackpad :${NC} libsims2_trackpad.dylib absent du dossier — étape ignorée."
+    fi
 
     # 5. Ad-hoc Local Code Signing + Strict Verification
     echo ""
@@ -1312,6 +1688,8 @@ FINDBAK
         echo "========================================================================"
         echo -e "${NC}"
         echo -e "  • ${BOLD}Patch Binaire 120 Hz :${NC} $PATCH_STATUS"
+        echo -e "  • ${BOLD}Graphics Rules.sgr   :${NC} $GRULES_STATUS"
+        echo -e "  • ${BOLD}Module Trackpad      :${NC} $TRACKPAD_STATUS"
         echo -e "  • ${BOLD}Sauvegardes / Saves  :${NC} $MIGRATION_STATUS"
         echo -e "  • ${BOLD}Dossier Données/Mods :${NC} ~/Library/Application Support/Aspyr/The Sims 2/"
         echo -e "  • ${BOLD}Purge des Caches     :${NC} $CACHE_STATUS"
@@ -1352,6 +1730,8 @@ FINDBAK
     echo "========================================================================"
     echo -e "${NC}"
     echo -e "  • ${BOLD}Patch Binaire 120 Hz :${NC} $PATCH_STATUS"
+    echo -e "  • ${BOLD}Graphics Rules.sgr   :${NC} $GRULES_STATUS"
+    echo -e "  • ${BOLD}Module Trackpad      :${NC} $TRACKPAD_STATUS"
     echo -e "  • ${BOLD}Sauvegardes / Saves  :${NC} $MIGRATION_STATUS"
     echo -e "  • ${BOLD}Dossier Données/Mods :${NC} ~/Library/Application Support/Aspyr/The Sims 2/"
     echo -e "  • ${BOLD}Purge des Caches     :${NC} $CACHE_STATUS"
