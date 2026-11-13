@@ -9,6 +9,7 @@ Tests both:
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 import struct
 import subprocess
@@ -135,6 +136,233 @@ class TestMacScriptsIntegrity(unittest.TestCase):
             bad_bak.write_bytes(patched)
             fail_res = subprocess.run([perl_bin, str(restore_pl), str(bad_bak)], capture_output=True, text=True)
             self.assertNotEqual(fail_res.returncode, 0)
+
+    def _run_bash_lib(self, script_name: str, body: str, *args: str) -> subprocess.CompletedProcess[str]:
+        bash_bin = vp.find_bash()
+        if not bash_bin:
+            self.skipTest("bash not available on PATH")
+        env = dict(os.environ)
+        env["SIMS2_LIB_ONLY"] = "1"
+        cmd = [bash_bin, "-c", f'set -u; source "./{script_name}"; {body}', "_", *args]
+        return subprocess.run(cmd, cwd=str(ROOT_DIR), env=env, capture_output=True, text=True)
+
+    def test_a1_dir_has_real_entries_ignores_finder_metadata(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp)
+            missing = base / "DoesNotExist"
+            empty_dir = base / "Empty"
+            meta_only = base / "MetaOnly"
+            real_dir = base / "RealData"
+            empty_dir.mkdir()
+            meta_only.mkdir()
+            (meta_only / ".DS_Store").write_bytes(b"finder")
+            (meta_only / ".localized").write_bytes(b"")
+            (meta_only / "._AppleDouble").write_bytes(b"ad")
+            real_dir.mkdir()
+            (real_dir / ".DS_Store").write_bytes(b"finder")
+            (real_dir / "Neighborhoods").mkdir()
+
+            r_missing = self._run_bash_lib("patch_sims2.command", 'dir_has_real_entries "$1"', missing.as_posix())
+            self.assertNotEqual(r_missing.returncode, 0)
+
+            r_empty = self._run_bash_lib("patch_sims2.command", 'dir_has_real_entries "$1"', empty_dir.as_posix())
+            self.assertNotEqual(r_empty.returncode, 0)
+
+            r_meta = self._run_bash_lib("patch_sims2.command", 'dir_has_real_entries "$1"', meta_only.as_posix())
+            self.assertNotEqual(r_meta.returncode, 0, "Finder metadata files must not trigger BACKUP mode")
+
+            r_real = self._run_bash_lib("patch_sims2.command", 'dir_has_real_entries "$1"', real_dir.as_posix())
+            self.assertEqual(r_real.returncode, 0)
+
+    def test_a2_osascript_capture_and_default_branches(self) -> None:
+        patch_text = (ROOT_DIR / "patch_sims2.command").read_text(encoding="utf-8")
+        clean_text = (ROOT_DIR / "clean_sims2_cache.command").read_text(encoding="utf-8")
+        self.assertIn("/usr/bin/osascript - \"$DEST_FOLDER_NAME\" 2>&1", patch_text)
+        self.assertIn("/usr/bin/osascript 2>&1", patch_text)
+        self.assertIn("/usr/bin/osascript 2>&1", clean_text)
+
+        # Empty stdout with non-zero rc AND unexpected rc=0 output must both populate MIGRATION_STATUS
+        # and flag MIGRATION_FAILED=1 so main() does not invite the user to launch an empty profile.
+        for raw_out, rc in (("", 1), ("UNEXPECTED_TOKEN", 0)):
+            r1 = self._run_bash_lib(
+                "patch_sims2.command",
+                'handle_migration_result "$1" "$2" "DIRECT" 0 "The Sims 2"; printf "STATUS=%s\\nFAILED=%s\\n" "$MIGRATION_STATUS" "$MIGRATION_FAILED"',
+                raw_out,
+                str(rc),
+            )
+            self.assertEqual(r1.returncode, 0)
+            status_lines = [ln for ln in r1.stdout.splitlines() if ln.startswith("STATUS=")]
+            self.assertEqual(len(status_lines), 1)
+            self.assertGreater(len(status_lines[0]), len("STATUS="))
+            self.assertIn("FAILED=1", r1.stdout)
+
+        # TCC -1743 Finder Automation denial must surface explicit System Settings guidance and flag MIGRATION_FAILED=1
+        r2 = self._run_bash_lib(
+            "patch_sims2.command",
+            'handle_migration_result "execution error: Not authorized to send Apple events to Finder. (-1743)" 1 "DIRECT" 0 "The Sims 2"; printf "STATUS=%s\\nFAILED=%s\\n" "$MIGRATION_STATUS" "$MIGRATION_FAILED"',
+        )
+        self.assertEqual(r2.returncode, 0)
+        self.assertIn("Automatisation", r2.stdout)
+        self.assertIn("-1743", r2.stdout)
+        self.assertIn("FAILED=1", r2.stdout)
+
+        # Successful or no-op migration states must keep MIGRATION_FAILED=0 (and reset any prior failure state)
+        for ok_token in ("OK", "NO_SOURCE"):
+            r_ok = self._run_bash_lib(
+                "patch_sims2.command",
+                'MIGRATION_FAILED=1; handle_migration_result "$1" 0 "DIRECT" 0 "The Sims 2"; printf "FAILED=%s\\n" "$MIGRATION_FAILED"',
+                ok_token,
+            )
+            self.assertEqual(r_ok.returncode, 0)
+            self.assertIn("FAILED=0", r_ok.stdout)
+
+        r3 = self._run_bash_lib(
+            "patch_sims2.command",
+            'handle_sandbox_cache_result "" 1; printf "CACHE=%s\\n" "$CACHE_STATUS"',
+        )
+        self.assertEqual(r3.returncode, 0)
+        cache_line = [ln for ln in r3.stdout.splitlines() if ln.startswith("CACHE=")][0]
+        self.assertGreater(len(cache_line), len("CACHE="))
+
+        r4 = self._run_bash_lib(
+            "clean_sims2_cache.command",
+            'handle_clean_sandbox_result "Not authorized to send Apple events (-1743)" 1; printf "FAILED=%s\\n" "$SANDBOX_FAILED"',
+        )
+        self.assertEqual(r4.returncode, 0)
+        self.assertIn("FAILED=1", r4.stdout)
+        self.assertIn("Automatisation", r4.stdout)
+
+        r5 = self._run_bash_lib(
+            "clean_sims2_cache.command",
+            'handle_clean_sandbox_result "UNEXPECTED" 0; printf "FAILED=%s\\n" "$SANDBOX_FAILED"',
+        )
+        self.assertEqual(r5.returncode, 0)
+        self.assertIn("FAILED=1", r5.stdout)
+
+    def test_a3_a7_user_context_and_no_unused_file_copy(self) -> None:
+        patch_text = (ROOT_DIR / "patch_sims2.command").read_text(encoding="utf-8")
+        clean_text = (ROOT_DIR / "clean_sims2_cache.command").read_text(encoding="utf-8")
+
+        self.assertNotIn("File::Copy", patch_text)
+        self.assertIn("launchctl asuser", patch_text)
+        self.assertIn("launchctl asuser", clean_text)
+        self.assertIn('REAL_HOME/Library/Application Support/Aspyr/The Sims 2', clean_text)
+        self.assertNotIn('"$HOME/Library/Application Support/Aspyr/The Sims 2"', clean_text)
+
+        if sys.platform == "darwin":
+            for script in ("patch_sims2.command", "clean_sims2_cache.command"):
+                res = self._run_bash_lib(
+                    script,
+                    'resolve_real_user && printf "USER=%s\\nUID=%s\\nHOME=%s\\n" "$REAL_USER" "$REAL_UID" "$REAL_HOME"',
+                )
+                self.assertEqual(res.returncode, 0, res.stderr or res.stdout)
+                self.assertNotIn("USER=root", res.stdout)
+                self.assertNotIn("HOME=/var/root", res.stdout)
+
+    def test_a4_perl_write_atomic_cleans_temp_on_failure(self) -> None:
+        perl_bin = vp.find_perl()
+        if not perl_bin:
+            self.skipTest("perl not available on PATH")
+
+        patch_blocks = vp.extract_perl_blocks((ROOT_DIR / "patch_sims2.command").read_text(encoding="utf-8"))
+        patch_pl = patch_blocks[0]
+
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_dir = Path(tmp)
+            exe = tmp_dir / "Sims2XP_Exe"
+            bak = tmp_dir / "Sims2XP_Exe.backup"
+            alt_bak = tmp_dir / "Sims2XP_Exe.backup_original"
+            pristine_bytes = b"\x00" * 64 + ORIG1 + b"\x90" * 32 + ORIG2 + b"\xff" * 64
+            exe.write_bytes(pristine_bytes)
+
+            # Force both chmod() and rename() failures via CORE::GLOBAL overrides
+            for hook_name, hook_code in (
+                ("chmod", "BEGIN { *CORE::GLOBAL::chmod = sub { $! = 1; return 0; }; }\n"),
+                ("rename", "BEGIN { *CORE::GLOBAL::rename = sub { $! = 28; return 0; }; }\n"),
+            ):
+                failing_pl = tmp_dir / f"fail_{hook_name}.pl"
+                failing_pl.write_text(hook_code + patch_pl, encoding="utf-8")
+                res = subprocess.run([perl_bin, str(failing_pl), str(exe), str(bak), str(alt_bak)], capture_output=True, text=True)
+                self.assertNotEqual(res.returncode, 0, f"Expected failure for {hook_name}")
+                leftovers = [p.name for p in tmp_dir.iterdir() if ".tmp." in p.name]
+                self.assertEqual(leftovers, [], f"Temp files left behind on {hook_name} failure: {leftovers}")
+
+    def test_a5_perl_repairs_corrupted_backup_from_pristine_exe(self) -> None:
+        perl_bin = vp.find_perl()
+        if not perl_bin:
+            self.skipTest("perl not available on PATH")
+
+        patch_blocks = vp.extract_perl_blocks((ROOT_DIR / "patch_sims2.command").read_text(encoding="utf-8"))
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_dir = Path(tmp)
+            pl_path = tmp_dir / "patch.pl"
+            pl_path.write_text(patch_blocks[0], encoding="utf-8")
+
+            exe = tmp_dir / "Sims2XP_Exe"
+            bak = tmp_dir / "Sims2XP_Exe.backup"
+            alt_bak = tmp_dir / "Sims2XP_Exe.backup_original"
+
+            pristine_bytes = b"\x00" * 64 + ORIG1 + b"\x90" * 32 + ORIG2 + b"\xff" * 64
+            already_patched = b"\x00" * 64 + REPL1 + b"\x90" * 32 + REPL2 + b"\xff" * 64
+
+            exe.write_bytes(pristine_bytes)
+            bak.write_bytes(already_patched)
+
+            res = subprocess.run([perl_bin, str(pl_path), str(exe), str(bak), str(alt_bak)], capture_output=True, text=True)
+            self.assertEqual(res.returncode, 0, res.stderr)
+            self.assertEqual(bak.read_bytes(), pristine_bytes, "Corrupted .backup was not repaired from pristine exe")
+            self.assertEqual(exe.read_bytes(), already_patched)
+
+    def test_a6_codesign_verify_and_detritus_cleanup(self) -> None:
+        for script_name in ("patch_sims2.command", "restore_sims2.command"):
+            text = (ROOT_DIR / script_name).read_text(encoding="utf-8")
+            self.assertIn("codesign --verify --deep --strict", text)
+            self.assertIn("com.apple.FinderInfo", text)
+            self.assertIn("com.apple.ResourceFork", text)
+
+        if sys.platform != "darwin":
+            self.skipTest("macOS codesign/xattr integration check only")
+
+        with tempfile.TemporaryDirectory() as tmp:
+            app_dir = Path(tmp) / "Dummy.app"
+            macos_dir = app_dir / "Contents" / "MacOS"
+            macos_dir.mkdir(parents=True)
+            exe = macos_dir / "DummyExe"
+            exe.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+            exe.chmod(0o755)
+            (app_dir / "Contents" / "Info.plist").write_text(
+                '<?xml version="1.0" encoding="UTF-8"?>\n'
+                '<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" '
+                '"http://www.apple.com/DTDs/PropertyList-1.0.dtd">\n'
+                '<plist version="1.0"><dict>'
+                '<key>CFBundleExecutable</key><string>DummyExe</string>'
+                '<key>CFBundleIdentifier</key><string>com.example.dummy</string>'
+                '</dict></plist>\n',
+                encoding="utf-8",
+            )
+            subprocess.run(["/usr/bin/xattr", "-w", "com.apple.appstore.metadata", "keepme", str(app_dir)], check=True)
+
+            for script in ("patch_sims2.command", "restore_sims2.command"):
+                subprocess.run(["/usr/bin/xattr", "-w", "com.apple.ResourceFork", "fake_res_fork", str(exe)], check=True)
+                res = self._run_bash_lib(script, 'sign_and_verify_app "$1"', app_dir.as_posix())
+                self.assertEqual(res.returncode, 0, res.stderr or res.stdout)
+                self.assertIn("detritus", res.stdout)
+
+            verify_res = subprocess.run(
+                ["/usr/bin/codesign", "--verify", "--deep", "--strict", str(app_dir)],
+                capture_output=True,
+                text=True,
+            )
+            self.assertEqual(verify_res.returncode, 0, verify_res.stderr)
+
+            xattr_out = subprocess.run(["/usr/bin/xattr", "-l", str(app_dir)], capture_output=True, text=True, check=True)
+            self.assertIn("com.apple.appstore.metadata", xattr_out.stdout)
+
+            # Broken bundle (missing Info.plist) must fail sign_and_verify_app cleanly
+            broken_app = Path(tmp) / "Broken.app"
+            (broken_app / "Contents" / "MacOS").mkdir(parents=True)
+            res_fail = self._run_bash_lib("patch_sims2.command", 'sign_and_verify_app "$1"', broken_app.as_posix())
+            self.assertNotEqual(res_fail.returncode, 0)
 
 
 class TestWindowsToolkit(unittest.TestCase):
