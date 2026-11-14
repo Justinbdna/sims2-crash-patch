@@ -69,6 +69,7 @@ class TestMacScriptsIntegrity(unittest.TestCase):
                         "README.txt",
                         "trackpad_mod/libsims2_trackpad.dylib",
                         "trackpad_mod/sims2_trackpad.m",
+                        "trackpad_mod/build_trackpad.sh",
                     },
                 )
                 for info in zf.infolist():
@@ -566,7 +567,7 @@ class TestMacScriptsIntegrity(unittest.TestCase):
         clt_tools_rx = re.compile(r"(?<![#\w/.-])(python3|swift|git|clang|xcodebuild|objdump|cc)\b")
         for script_name in ("patch_sims2.command", "clean_sims2_cache.command", "restore_sims2.command"):
             text = (ROOT_DIR / script_name).read_text(encoding="utf-8")
-            self.assertIn("Version: 1.3.1", text)
+            self.assertIn("Version: 1.4.0", text)
             non_comment = "\n".join(ln for ln in text.splitlines() if not ln.lstrip().startswith("#"))
             # Remove heredoc text/URLs isn't needed if no CLT tool word appears in code lines
             for line in non_comment.splitlines():
@@ -581,10 +582,11 @@ class TestMacScriptsIntegrity(unittest.TestCase):
         readme_md = (ROOT_DIR / "README.md").read_text(encoding="utf-8")
         changelog = (ROOT_DIR / "CHANGELOG.md").read_text(encoding="utf-8")
         for doc_text in (readme_txt, readme_md):
-            self.assertIn("v1.3.1", doc_text)
+            self.assertIn("v1.4.0", doc_text)
             self.assertIn("Gatekeeper", doc_text)
             self.assertIn("userProps.xml.backup", doc_text)
             self.assertIn("Autoriser", doc_text)
+        self.assertIn("[1.4.0]", changelog)
         self.assertIn("[1.3.1]", changelog)
         self.assertIn("[1.3.0]", changelog)
 
@@ -821,7 +823,7 @@ class TestMacScriptsIntegrity(unittest.TestCase):
             dylib_src = ROOT_DIR / "trackpad_mod" / "libsims2_trackpad.dylib"
             self.assertTrue(dylib_src.is_file(), "Missing trackpad_mod/libsims2_trackpad.dylib")
             expected_dylib = dylib_src.read_bytes()
-            mac_zip, _ = vp.package_releases("v1.3.1-test", tmp_dir)
+            mac_zip, _ = vp.package_releases("v1.4.0-test", tmp_dir)
             with zipfile.ZipFile(mac_zip, "r") as zf:
                 info = zf.getinfo("trackpad_mod/libsims2_trackpad.dylib")
                 mode = (info.external_attr >> 16) & 0o777

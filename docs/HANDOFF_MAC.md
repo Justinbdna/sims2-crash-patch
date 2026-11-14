@@ -38,8 +38,9 @@
 2. **`Graphics Rules.sgr` (`patch_sims2.command` L17 & L1054) — Vérifié & renforcé :**
    - Vérifié dans `/Applications/The Sims 2.app/Contents/` : 19 copies existent dans les packs `Assets`, mais `config-log.txt` confirme que le binaire macOS Aspyr lit `Contents/Resources/Config/Graphics Rules.sgr`.
    - La regex `# Override defaults (SIM-281,416)` tolère désormais les commentaires `#` intermédiaires et ne s'arrête qu'aux séparateurs `#####`, `endif` ou `end`.
-3. **Collision de numéro de version avant release (`v1.3.1` vs `v1.4.0`) — Restant à faire après tests en jeu :**
-   - `v1.3.1` est déjà publié sur GitHub (`acec191`). `staging` conserve encore `1.3.1` dans les entêtes/docs en attendant la validation finale : passer tout en **`v1.4.0`** uniquement lorsque les tests en jeu sur Mac seront validés, puis merger `staging` -> `main` et taguer `v1.4.0`.
+3. **Préparation `v1.4.0` (sur `chore/prepare-v1.4-pre-test` ➔ `staging`, sans release publiée tant que non testé) :**
+   - `v1.3.1` reste la dernière release publiée sur `main` (`acec191`). Sur `staging`, les scripts `.command`, `README.*`, `CHANGELOG.md` (`[1.4.0] - Unreleased`), `verify_and_package.py` (`build_trackpad.sh` inclus), le template `.github/ISSUE_TEMPLATE/test-report.md` et les tests unitaires ont été alignés sur `1.4.0`, et le parsing `runner_out` de `patch_sims2.command` a été durci contre d'éventuels warnings `stderr`.
+   - **Ne pas merger dans `main` ni pousser de tag `v1.4.0` avant d'avoir validé la checklist en jeu sur Mac ci-dessous.**
 4. **Durcissement CI & Packaging — Intégré sur `staging` :**
    - `.github/workflows/ci-and-release.yml` exécute `verify` sur `ubuntu-latest`, `windows-latest` **et `macos-latest`** (compilation `clang -arch x86_64 -Wall -Wextra` de `sims2_trackpad.m` + `codesign --verify --strict` + tests macOS).
    - Sanitisation du nom de branche (`/`) dans `package_releases()` (`scripts/verify_and_package.py`) et validation `LF`/`bash -n` ajoutée sur `trackpad_mod/build_trackpad.sh`.
@@ -59,4 +60,5 @@
   - [ ] Plein écran Space SDL2 + masquage du Dock + `Cmd+Tab` sans téléportation curseur
   - [ ] Effets graphiques `$High` / résolutions Retina dans les options du jeu (`MacBook-Pro-*-config-log.txt`)
 - [ ] Lancer `./restore_sims2.command` et vérifier restauration complète (`Sims2XP_Exe`, `Graphics Rules.sgr`, suppression `libsims2_trackpad.dylib`, `codesign --verify --strict`)
-- [ ] Uniquement après tous les `[x]` ci-dessus : passer les versions à `v1.4.0`, merger `staging` -> `main`, taguer `v1.4.0`, puis passer le dépôt en Public.
+- [x] Aligner les scripts, docs, `CHANGELOG.md`, `test-report.md` et le packager sur `v1.4.0` en pré-release sur `staging` (sans taguer ni publier tant que non testé en jeu)
+- [ ] Uniquement après tous les `[x]` ci-dessus : mettre la date finale dans `CHANGELOG.md` si besoin, merger `staging` -> `main`, taguer `v1.4.0`, puis passer le dépôt en Public.

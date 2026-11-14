@@ -1,7 +1,7 @@
 #!/bin/bash
 # ==============================================================================
 # The Sims 2: Super Collection — ProMotion 120Hz Patch, Save Migration & Fixes
-# Version: 1.3.1 (Option A — Non-Sandbox Architecture)
+# Version: 1.4.0 (Option A — Non-Sandbox Architecture)
 # Target:  /Applications/The Sims 2.app/Contents/MacOS/Sims2XP_Exe
 # Zero Xcode / Python dependency: native /usr/bin/perl, codesign & osascript.
 # ==============================================================================
@@ -48,7 +48,7 @@ LOG_FILE=""
 LOG_FINALIZED=0
 
 init_diagnostic_log() {
-    local label="${1:-patch_sims2.command v1.3.1}"
+    local label="${1:-patch_sims2.command v1.4.0}"
     [ -z "${REAL_HOME:-}" ] && return 0
     local log_dir="${SIMS2_LOG_DIR:-$REAL_HOME/Library/Logs/Sims2-Crash-Patch}"
     run_as_real_user mkdir -p "$log_dir" >/dev/null 2>&1 || return 0
@@ -1075,7 +1075,9 @@ GRULES_PERL
         return 1
     fi
 
-    case "$runner_out" in
+    local nl=$'\n'
+    local runner_line="${runner_out##*"$nl"}"
+    case "$runner_line" in
         OK:already_patched)
             GRULES_STATUS="OK (déjà patché / already patched)"
             echo -e "${GREEN}[i] Graphics Rules.sgr :${NC} Déjà patché (OK:already_patched)."
@@ -1242,7 +1244,9 @@ MACHO_PERL
         return 1
     fi
 
-    case "$runner_out" in
+    local nl=$'\n'
+    local runner_line="${runner_out##*"$nl"}"
+    case "$runner_line" in
         ALREADY_INJECTED)
             echo -e "${GREEN}[i] Mach-O Weak Dylib :${NC} Déjà injecté (ALREADY_INJECTED)."
             ;;
@@ -1259,7 +1263,7 @@ MACHO_PERL
 main() {
     echo -e "${CYAN}${BOLD}"
     echo "========================================================================"
-    echo "  The Sims 2: Super Collection — ProMotion 120Hz & Stability Patch v1.3.1"
+    echo "  The Sims 2: Super Collection — ProMotion 120Hz & Stability Patch v1.4.0"
     echo "========================================================================"
     echo -e "${NC}"
 
@@ -1269,7 +1273,7 @@ main() {
 
     # 1. Verify application presence (supports /Applications or ~/Applications)
     if ! locate_app_bundle; then
-        init_diagnostic_log "patch_sims2.command v1.3.1"
+        init_diagnostic_log "patch_sims2.command v1.4.0"
         log_diag "ERROR game not found (/Applications or ~/Applications)"
         echo -e "${RED}[-] Erreur / Error:${NC} Jeu introuvable / Game not found at:"
         echo "    /Applications/The Sims 2.app/Contents/MacOS/Sims2XP_Exe"
@@ -1278,7 +1282,7 @@ main() {
         pause_exit 1
     fi
 
-    init_diagnostic_log "patch_sims2.command v1.3.1"
+    init_diagnostic_log "patch_sims2.command v1.4.0"
     local ASPYR_BASE_DIR="$REAL_HOME/Library/Application Support/Aspyr"
     local TARGET_DATA_DIR="$ASPYR_BASE_DIR/The Sims 2"
     log_diag "START active_dir=$TARGET_DATA_DIR sudo_required=$APP_REQUIRES_SUDO"
@@ -1726,7 +1730,7 @@ FINDBAK
 
     echo -e "${GREEN}${BOLD}"
     echo "========================================================================"
-    echo "  INSTALLATION TERMINÉE AVEC SUCCÈS / PATCH COMPLETE (v1.3.1) !         "
+    echo "  INSTALLATION TERMINÉE AVEC SUCCÈS / PATCH COMPLETE (v1.4.0) !         "
     echo "========================================================================"
     echo -e "${NC}"
     echo -e "  • ${BOLD}Patch Binaire 120 Hz :${NC} $PATCH_STATUS"
