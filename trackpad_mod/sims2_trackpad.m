@@ -2,8 +2,16 @@
 #import <Carbon/Carbon.h>
 #import <CoreGraphics/CoreGraphics.h>
 #import <objc/runtime.h>
+#import <errno.h>
 #import <math.h>
+#import <pthread.h>
+#import <stdarg.h>
+#import <stdio.h>
 #import <stdlib.h>
+#import <sys/stat.h>
+#import <sys/time.h>
+#import <time.h>
+#import <unistd.h>
 
 /*
  * libsims2_trackpad.dylib
@@ -11,12 +19,12 @@
  *
  * Adds:
  *   1. SDL2 macOS Fullscreen Space & Dock fix (SDL_VIDEO_MAC_FULLSCREEN_SPACES, etc.)
- *   2. Out-of-focus cursor grab/warp protection in Cocoa_WindowListener::mouseMoved:
+ *   2. Out-of-focus cursor grab/warp protection & Command+Tab fullscreen bounce-back suppression
  *   3. Two-finger pinch gesture (NSEventTypeMagnify) -> native scrollWheel zoom (layout-independent, non-inverted)
  *   4. Two-finger horizontal slide (scrollWheel X) & twist (NSEventTypeRotate) -> dynamic Carbon AZERTY/QWERTY camera rotation (, / .)
  *   5. Control (^) + left or right click-drag -> SDL_BUTTON_MIDDLE emulation (360° orbit & pitch)
- *   6. Option (⌥) + slide or click-drag -> native hand camera pan (4-way arrow cursor) without click cancellation
- *   7. Axis lock & momentum suppression on horizontal swipes so zoom and rotation don't fight.
+ *   6. Native Option (⌥) camera hand-drag left untouched for the base game
+ *   7. Axis lock & momentum suppression on horizontal swipes + developer event log (trackpad_events.log)
  *
  * Env config (optional overrides):
  *   SIMS2_ROTATE_INVERT=0|1      (default 0)
@@ -26,6 +34,7 @@
  *   SIMS2_CTRL_ORBIT=0|1         (default 1, Control+drag emulates middle mouse button)
  *   SIMS2_OPTION_ORBIT=0|1       (legacy fallback alias if SIMS2_CTRL_ORBIT is unset)
  *   SIMS2_TRACKPAD_DEBUG=0|1     (default 0, logs via NSLog)
+ *   SIMS2_TRACKPAD_DEVLOG=0|1    (default 1, writes ~/Library/Logs/Sims2-Crash-Patch/trackpad_events.log)
  */
 
 typedef NS_ENUM(NSInteger, Sims2ScrollAxis) {
@@ -47,8 +56,17 @@ static IMP gOrigRightMouseDownIMP = NULL;
 static IMP gOrigRightMouseUpIMP = NULL;
 static IMP gOrigRightMouseDraggedIMP = NULL;
 static IMP gOrigMouseMovedIMP = NULL;
+static IMP gOrigWindowDidBecomeKeyIMP = NULL;
 static IMP gOrigWindowDidResignKeyIMP = NULL;
+static IMP gOrigWindowWillEnterFullScreenIMP = NULL;
+static IMP gOrigWindowDidEnterFullScreenIMP = NULL;
 static IMP gOrigWindowWillExitFullScreenIMP = NULL;
+static IMP gOrigWindowDidExitFullScreenIMP = NULL;
+static IMP gOrigSetFullscreenSpaceIMP = NULL;
+static IMP gOrigMiniaturizeIMP = NULL;
+static IMP gOrigMakeKeyAndOrderFrontIMP = NULL;
+static IMP gOrigOrderFrontRegardlessIMP = NULL;
+static IMP gOrigActivateIgnoringOtherAppsIMP = NULL;
 
 static Sims2ScrollAxis gScrollAxis = Sims2ScrollAxisNone;
 static double gScrollAccumX = 0.0;
@@ -63,9 +81,22 @@ static BOOL gSpoofMiddleButton = NO;
 static BOOL gMaskControlModifier = NO;
 static BOOL gCtrlMiddleDragActive = NO;
 static BOOL gCtrlDragWasRight = NO;
-static BOOL gOptionHandPanActive = NO;
 static __weak NSWindow *gLastMouseDownWindow = nil;
 static __weak id gWindowListener = nil;
+
+static BOOL gAppHasActivatedOnce = NO;
+static BOOL gAppIsActive = YES;
+static BOOL gInFullscreenTransition = NO;
+static CFAbsoluteTime gLastResignTimestamp = 0.0;
+
+static FILE *gDevLogFile = NULL;
+static BOOL gDevLogEnabled = YES;
+static pthread_mutex_t gDevLogMutex = PTHREAD_MUTEX_INITIALIZER;
+static CFAbsoluteTime gLastOptionHoverLogTime = 0.0;
+static CFAbsoluteTime gLastScrollLogTime = 0.0;
+static CFAbsoluteTime gLastPinchLogTime = 0.0;
+static CFAbsoluteTime gLastTwistLogTime = 0.0;
+static NSUInteger gLastLoggedModifierMask = 0;
 
 static uint32_t gKeyTapSeq[128] = {0};
 static BOOL gKeyTapActive[128] = {NO};
@@ -79,6 +110,97 @@ static BOOL gDebug = NO;
 
 static uint16_t gCachedLeftRotateKey = 43;
 static uint16_t gCachedRightRotateKey = 47;
+
+static void ensure_dir_exists(const char *path) {
+    if (!path || path[0] == '\0') {
+        return;
+    }
+    if (mkdir(path, 0755) != 0 && errno != EEXIST) {
+        // Best-effort directory creation
+    }
+}
+
+static void devlog_write(const char *category, const char *fmt, ...) __attribute__((format(printf, 2, 3)));
+
+static void devlog_write(const char *category, const char *fmt, ...) {
+    if (!gDevLogEnabled || !gDevLogFile || !fmt) {
+        return;
+    }
+    struct timeval tv;
+    gettimeofday(&tv, NULL);
+    time_t sec = tv.tv_sec;
+    struct tm tm_info;
+    localtime_r(&sec, &tm_info);
+
+    char tsBuf[32];
+    snprintf(tsBuf, sizeof(tsBuf), "%02d:%02d:%02d.%03d",
+             tm_info.tm_hour, tm_info.tm_min, tm_info.tm_sec, (int)(tv.tv_usec / 1000));
+
+    char msgBuf[1024];
+    va_list ap;
+    va_start(ap, fmt);
+    vsnprintf(msgBuf, sizeof(msgBuf), fmt, ap);
+    va_end(ap);
+
+    pthread_mutex_lock(&gDevLogMutex);
+    if (gDevLogFile) {
+        fprintf(gDevLogFile, "[%s] [%s] %s\n", tsBuf, category ? category : "LOG", msgBuf);
+        fflush(gDevLogFile);
+    }
+    pthread_mutex_unlock(&gDevLogMutex);
+}
+
+static void devlog_init(char *outLogPath, size_t outLogPathSize) {
+    if (outLogPath && outLogPathSize > 0) {
+        outLogPath[0] = '\0';
+    }
+    const char *env = getenv("SIMS2_TRACKPAD_DEVLOG");
+    if (env && env[0] == '0') {
+        gDevLogEnabled = NO;
+        return;
+    }
+    const char *home = getenv("HOME");
+    if (!home || home[0] == '\0') {
+        NSString *nsHome = NSHomeDirectory();
+        home = nsHome ? [nsHome UTF8String] : NULL;
+    }
+    if (!home || home[0] == '\0') {
+        return;
+    }
+
+    char libDir[512];
+    char logsRoot[512];
+    char appLogDir[512];
+    char logPath[600];
+    char prevPath[600];
+
+    snprintf(libDir, sizeof(libDir), "%s/Library", home);
+    snprintf(logsRoot, sizeof(logsRoot), "%s/Library/Logs", home);
+    snprintf(appLogDir, sizeof(appLogDir), "%s/Library/Logs/Sims2-Crash-Patch", home);
+    ensure_dir_exists(libDir);
+    ensure_dir_exists(logsRoot);
+    ensure_dir_exists(appLogDir);
+
+    snprintf(logPath, sizeof(logPath), "%s/trackpad_events.log", appLogDir);
+    snprintf(prevPath, sizeof(prevPath), "%s/trackpad_events.previous.log", appLogDir);
+
+    struct stat st;
+    if (stat(logPath, &st) == 0) {
+        rename(logPath, prevPath);
+    }
+
+    FILE *fp = fopen(logPath, "w");
+    if (!fp) {
+        return;
+    }
+    pthread_mutex_lock(&gDevLogMutex);
+    gDevLogFile = fp;
+    pthread_mutex_unlock(&gDevLogMutex);
+
+    if (outLogPath && outLogPathSize > 0) {
+        snprintf(outLogPath, outLogPathSize, "%s", logPath);
+    }
+}
 
 static void log_msg(NSString *msg) {
     if (gDebug) {
@@ -356,8 +478,10 @@ static void handle_scroll_event(NSEvent *event) {
         if (adx > 1.5 || ady > 1.5) {
             if (adx > ady * 1.35) {
                 gScrollAxis = Sims2ScrollAxisRotateX;
+                devlog_write("GESTURE", "SCROLL_LOCK axis=RotateX dx=%.2f dy=%.2f", fingerRightDx, dy);
             } else {
                 gScrollAxis = Sims2ScrollAxisZoomY;
+                devlog_write("GESTURE", "SCROLL_LOCK axis=ZoomY dx=%.2f dy=%.2f", fingerRightDx, dy);
             }
         }
     }
@@ -370,15 +494,26 @@ static void handle_scroll_event(NSEvent *event) {
         }
         gScrollAccumX += fingerRightDx;
         int steps = 0;
+        BOOL rotatedRight = NO;
         while (gScrollAccumX >= gRotateStep && steps < 3) {
             gScrollAccumX -= gRotateStep;
             post_rotation_key(YES);
+            rotatedRight = YES;
             steps++;
         }
         while (gScrollAccumX <= -gRotateStep && steps < 3) {
             gScrollAccumX += gRotateStep;
             post_rotation_key(NO);
+            rotatedRight = NO;
             steps++;
+        }
+        if (steps > 0) {
+            CFAbsoluteTime now = CFAbsoluteTimeGetCurrent();
+            if ((now - gLastScrollLogTime) >= 0.25) {
+                gLastScrollLogTime = now;
+                devlog_write("GESTURE", "SCROLL_ROTATE dir=%s steps=%d dx=%.2f",
+                             rotatedRight ? "right" : "left", steps, fingerRightDx);
+            }
         }
     }
 }
@@ -388,11 +523,13 @@ static void handle_rotate_event(NSEvent *event) {
     if (phase == NSEventPhaseBegan || phase == NSEventPhaseMayBegin) {
         gIsTwisting = YES;
         gTwistAccum = 0.0;
+        devlog_write("GESTURE", "TWIST_BEGIN");
         return;
     }
     if (phase == NSEventPhaseEnded || phase == NSEventPhaseCancelled) {
         gIsTwisting = NO;
         gTwistAccum = 0.0;
+        devlog_write("GESTURE", "TWIST_END");
         return;
     }
 
@@ -405,15 +542,27 @@ static void handle_rotate_event(NSEvent *event) {
     }
     gTwistAccum += clockwiseDeg;
     int steps = 0;
+    BOOL rotatedRight = NO;
     while (gTwistAccum >= gTwistStep && steps < 3) {
         gTwistAccum -= gTwistStep;
         post_rotation_key(YES);
+        rotatedRight = YES;
         steps++;
     }
     while (gTwistAccum <= -gTwistStep && steps < 3) {
         gTwistAccum += gTwistStep;
         post_rotation_key(NO);
+        rotatedRight = NO;
         steps++;
+    }
+    if (steps > 0) {
+        CFAbsoluteTime now = CFAbsoluteTimeGetCurrent();
+        if ((now - gLastTwistLogTime) >= 0.25) {
+            gLastTwistLogTime = now;
+            devlog_write("GESTURE", "TWIST_ROTATE dir=%s steps=%d deg=%.2f keys=(%u,%u)",
+                         rotatedRight ? "right" : "left", steps, clockwiseDeg,
+                         gCachedLeftRotateKey, gCachedRightRotateKey);
+        }
     }
 }
 
@@ -428,15 +577,25 @@ static void handle_magnify_event(NSEvent *event) {
     double mag = [event magnification];
     gPinchAccum += mag;
     int steps = 0;
+    int lastDir = 0;
     while (gPinchAccum >= gPinchStep && steps < 4) {
         gPinchAccum -= gPinchStep;
         post_pinch_zoom_scroll(1);
+        lastDir = 1;
         steps++;
     }
     while (gPinchAccum <= -gPinchStep && steps < 4) {
         gPinchAccum += gPinchStep;
         post_pinch_zoom_scroll(-1);
+        lastDir = -1;
         steps++;
+    }
+    if (steps > 0) {
+        CFAbsoluteTime now = CFAbsoluteTimeGetCurrent();
+        if ((now - gLastPinchLogTime) >= 0.25) {
+            gLastPinchLogTime = now;
+            devlog_write("GESTURE", "PINCH_ZOOM dir=%d steps=%d mag=%.3f", lastDir, steps, mag);
+        }
     }
 }
 
@@ -456,6 +615,8 @@ static void release_ctrl_middle_drag(id listener) {
     IMP upIMP = gCtrlDragWasRight ? gOrigRightMouseUpIMP : gOrigMouseUpIMP;
     SEL upSEL = gCtrlDragWasRight ? @selector(rightMouseUp:) : @selector(mouseUp:);
     NSEventType upType = gCtrlDragWasRight ? NSEventTypeRightMouseUp : NSEventTypeLeftMouseUp;
+
+    devlog_write("CAM", "CTRL_ORBIT_END_SYNTH btn=%s", gCtrlDragWasRight ? "right" : "left");
 
     if (win && upIMP) {
         NSTimeInterval ts = [[NSProcessInfo processInfo] systemUptime];
@@ -499,8 +660,18 @@ static NSEvent *swizzled_nextEventMatchingMask(id self, SEL _cmd, NSEventMask ma
             if (gCtrlMiddleDragActive && ((rawFlags & NSEventModifierFlagControl) == 0)) {
                 release_ctrl_middle_drag(resolve_window_listener());
             }
-            if (gOptionHandPanActive && ((rawFlags & NSEventModifierFlagOption) == 0)) {
-                gOptionHandPanActive = NO;
+            NSUInteger trackedMods = rawFlags & (NSEventModifierFlagControl |
+                                                 NSEventModifierFlagOption |
+                                                 NSEventModifierFlagShift |
+                                                 NSEventModifierFlagCommand);
+            if (trackedMods != gLastLoggedModifierMask) {
+                gLastLoggedModifierMask = trackedMods;
+                devlog_write("MOD", "flags ctrl=%d opt=%d shift=%d cmd=%d (raw=0x%lx)",
+                             (trackedMods & NSEventModifierFlagControl) ? 1 : 0,
+                             (trackedMods & NSEventModifierFlagOption) ? 1 : 0,
+                             (trackedMods & NSEventModifierFlagShift) ? 1 : 0,
+                             (trackedMods & NSEventModifierFlagCommand) ? 1 : 0,
+                             (unsigned long)rawFlags);
             }
         }
     }
@@ -573,13 +744,14 @@ static void handle_camera_mouse_down(id self, SEL _cmd, NSEvent *event, IMP orig
     }
     NSEventModifierFlags rawFlags = raw_event_modifier_flags(event);
     BOOL ctrlHeld = (rawFlags & NSEventModifierFlagControl) != 0;
-    BOOL optionHeld = (rawFlags & NSEventModifierFlagOption) != 0;
+    BOOL cmdHeld = (rawFlags & NSEventModifierFlagCommand) != 0;
 
-    if (gEnableOptionOrbit && !gCtrlMiddleDragActive && ctrlHeld) {
-        gOptionHandPanActive = NO;
+    if (gEnableOptionOrbit && !gCtrlMiddleDragActive && ctrlHeld && !cmdHeld) {
         gCtrlMiddleDragActive = YES;
         gCtrlDragWasRight = isRight;
         gLastMouseDownWindow = [event window];
+        devlog_write("CAM", "CTRL_ORBIT_START btn=%s win=%p",
+                     isRight ? "right" : "left", (__bridge void *)gLastMouseDownWindow);
         gSpoofMiddleButton = YES;
         gMaskControlModifier = YES;
         ((Fn)origIMP)(self, _cmd, event);
@@ -590,11 +762,15 @@ static void handle_camera_mouse_down(id self, SEL _cmd, NSEvent *event, IMP orig
     if (gCtrlMiddleDragActive) {
         return;
     }
-    if (optionHeld && !ctrlHeld) {
-        gOptionHandPanActive = YES;
-        return;
+    if (isRight && [event type] == NSEventTypeRightMouseDown) {
+        BOOL optHeld = (rawFlags & NSEventModifierFlagOption) != 0;
+        devlog_write("CAM", "NATIVE_RIGHT_CLICK_DOWN opt=%d win=%p",
+                     optHeld ? 1 : 0, (__bridge void *)[event window]);
+    } else if (!isRight && [event type] == NSEventTypeLeftMouseDown &&
+               (rawFlags & NSEventModifierFlagOption) != 0) {
+        devlog_write("CAM", "NATIVE_OPTION_LEFT_CLICK_DOWN win=%p",
+                     (__bridge void *)[event window]);
     }
-    gOptionHandPanActive = NO;
     ((Fn)origIMP)(self, _cmd, event);
 }
 
@@ -604,8 +780,8 @@ static void handle_camera_mouse_drag(id self, SEL _cmd, NSEvent *event, IMP orig
     if (!origIMP) {
         return;
     }
-    NSEventModifierFlags rawFlags = raw_event_modifier_flags(event);
     if (gCtrlMiddleDragActive) {
+        NSEventModifierFlags rawFlags = raw_event_modifier_flags(event);
         if ((rawFlags & NSEventModifierFlagControl) == 0) {
             release_ctrl_middle_drag(self);
             return;
@@ -617,14 +793,6 @@ static void handle_camera_mouse_drag(id self, SEL _cmd, NSEvent *event, IMP orig
             gSpoofMiddleButton = NO;
             gMaskControlModifier = NO;
         }
-        return;
-    }
-    if (gOptionHandPanActive) {
-        if ((rawFlags & NSEventModifierFlagOption) == 0) {
-            gOptionHandPanActive = NO;
-            return;
-        }
-        ((Fn)origIMP)(self, _cmd, event);
         return;
     }
     ((Fn)origIMP)(self, _cmd, event);
@@ -642,6 +810,7 @@ static void handle_camera_mouse_up(id self, SEL _cmd, NSEvent *event, IMP origIM
     }
     if (gCtrlMiddleDragActive) {
         if (isRight == gCtrlDragWasRight) {
+            devlog_write("CAM", "CTRL_ORBIT_END btn=%s", isRight ? "right" : "left");
             gCtrlMiddleDragActive = NO;
             gCtrlDragWasRight = NO;
             gLastMouseDownWindow = nil;
@@ -653,9 +822,8 @@ static void handle_camera_mouse_up(id self, SEL _cmd, NSEvent *event, IMP origIM
         }
         return;
     }
-    if (gOptionHandPanActive) {
-        gOptionHandPanActive = NO;
-        return;
+    if (isRight && [event type] == NSEventTypeRightMouseUp) {
+        devlog_write("CAM", "NATIVE_RIGHT_CLICK_UP win=%p", (__bridge void *)[event window]);
     }
     ((Fn)origIMP)(self, _cmd, event);
 }
@@ -691,8 +859,20 @@ static void swizzled_rightMouseDragged(id self, SEL _cmd, NSEvent *event) {
 static void swizzled_mouseMoved(id self, SEL _cmd, NSEvent *event) {
     gWindowListener = self;
     NSWindow *win = [event window] ?: [NSApp keyWindow];
-    if (![NSApp isActive] || !win || ![win isKeyWindow]) {
+    if (!gAppIsActive || ![NSApp isActive] || !win || ![win isKeyWindow]) {
         return;
+    }
+    if (event && [event type] == NSEventTypeMouseMoved) {
+        NSEventModifierFlags rawFlags = raw_event_modifier_flags(event);
+        if ((rawFlags & NSEventModifierFlagOption) != 0) {
+            CFAbsoluteTime now = CFAbsoluteTimeGetCurrent();
+            if ((now - gLastOptionHoverLogTime) >= 0.5) {
+                gLastOptionHoverLogTime = now;
+                NSPoint pt = [event locationInWindow];
+                devlog_write("CAM", "NATIVE_OPTION_HOVER_MOVE loc=(%.1f,%.1f) delta=(%.1f,%.1f)",
+                             pt.x, pt.y, [event deltaX], [event deltaY]);
+            }
+        }
     }
     if (gOrigMouseMovedIMP) {
         typedef void (*Fn)(id, SEL, NSEvent *);
@@ -703,7 +883,6 @@ static void swizzled_mouseMoved(id self, SEL _cmd, NSEvent *event) {
 static void reset_gesture_and_key_state(id listener) {
     release_ctrl_middle_drag(listener);
     release_active_rotate_keys();
-    gOptionHandPanActive = NO;
     gScrollAxis = Sims2ScrollAxisNone;
     gIsTwisting = NO;
     gScrollAccumX = 0.0;
@@ -714,9 +893,51 @@ static void reset_gesture_and_key_state(id listener) {
     gForceScrollNonInverted = NO;
 }
 
+static BOOL should_suppress_focus_steal_or_fullscreen_exit(void) {
+    if (!gAppHasActivatedOnce) {
+        return NO;
+    }
+    if (!gAppIsActive) {
+        return YES;
+    }
+    if (NSApp && ![NSApp isActive]) {
+        return YES;
+    }
+    if (gLastResignTimestamp > 0.0 && (CFAbsoluteTimeGetCurrent() - gLastResignTimestamp) < 2.0) {
+        return YES;
+    }
+    return NO;
+}
+
+static void swizzled_windowDidBecomeKey(id self, SEL _cmd, NSNotification *notification) {
+    gWindowListener = self;
+    if (!NSApp || [NSApp isActive]) {
+        gAppHasActivatedOnce = YES;
+        gAppIsActive = YES;
+        gLastResignTimestamp = 0.0;
+    }
+    id obj = [notification object];
+    BOOL isWin = [obj isKindOfClass:[NSWindow class]];
+    NSRect frame = isWin ? [(NSWindow *)obj frame] : NSZeroRect;
+    BOOL isFS = isWin ? (([(NSWindow *)obj styleMask] & NSWindowStyleMaskFullScreen) != 0) : NO;
+    devlog_write("WIN", "windowDidBecomeKey win=%p active=%d fs=%d frame=%.0fx%.0f",
+                 (__bridge void *)obj, (NSApp && [NSApp isActive]) ? 1 : 0, isFS ? 1 : 0,
+                 frame.size.width, frame.size.height);
+
+    if (gOrigWindowDidBecomeKeyIMP) {
+        typedef void (*BecomeFn)(id, SEL, NSNotification *);
+        ((BecomeFn)gOrigWindowDidBecomeKeyIMP)(self, _cmd, notification);
+    }
+}
+
 static void swizzled_windowDidResignKey(id self, SEL _cmd, NSNotification *notification) {
     gWindowListener = self;
+    gLastResignTimestamp = CFAbsoluteTimeGetCurrent();
     reset_gesture_and_key_state(self);
+    CGAssociateMouseAndMouseCursorPosition(true);
+    CGDisplayShowCursor(kCGDirectMainDisplay);
+    devlog_write("WIN", "windowDidResignKey win=%p active=%d",
+                 (__bridge void *)[notification object], (NSApp && [NSApp isActive]) ? 1 : 0);
 
     if (gOrigWindowDidResignKeyIMP) {
         typedef void (*ResignFn)(id, SEL, NSNotification *);
@@ -724,13 +945,120 @@ static void swizzled_windowDidResignKey(id self, SEL _cmd, NSNotification *notif
     }
 }
 
+static void swizzled_windowWillEnterFullScreen(id self, SEL _cmd, NSNotification *notification) {
+    gWindowListener = self;
+    gInFullscreenTransition = YES;
+    devlog_write("WIN", "windowWillEnterFullScreen win=%p", (__bridge void *)[notification object]);
+
+    if (gOrigWindowWillEnterFullScreenIMP) {
+        typedef void (*EnterFSFn)(id, SEL, NSNotification *);
+        ((EnterFSFn)gOrigWindowWillEnterFullScreenIMP)(self, _cmd, notification);
+    }
+}
+
+static void swizzled_windowDidEnterFullScreen(id self, SEL _cmd, NSNotification *notification) {
+    gWindowListener = self;
+    gInFullscreenTransition = NO;
+    devlog_write("WIN", "windowDidEnterFullScreen win=%p", (__bridge void *)[notification object]);
+
+    if (gOrigWindowDidEnterFullScreenIMP) {
+        typedef void (*DidEnterFSFn)(id, SEL, NSNotification *);
+        ((DidEnterFSFn)gOrigWindowDidEnterFullScreenIMP)(self, _cmd, notification);
+    }
+}
+
 static void swizzled_windowWillExitFullScreen(id self, SEL _cmd, NSNotification *notification) {
     gWindowListener = self;
+    gInFullscreenTransition = YES;
     reset_gesture_and_key_state(self);
+    devlog_write("WIN", "windowWillExitFullScreen win=%p active=%d",
+                 (__bridge void *)[notification object], (NSApp && [NSApp isActive]) ? 1 : 0);
 
     if (gOrigWindowWillExitFullScreenIMP) {
         typedef void (*ExitFSFn)(id, SEL, NSNotification *);
         ((ExitFSFn)gOrigWindowWillExitFullScreenIMP)(self, _cmd, notification);
+    }
+}
+
+static void swizzled_windowDidExitFullScreen(id self, SEL _cmd, NSNotification *notification) {
+    gWindowListener = self;
+    gInFullscreenTransition = NO;
+    devlog_write("WIN", "windowDidExitFullScreen win=%p active=%d",
+                 (__bridge void *)[notification object], (NSApp && [NSApp isActive]) ? 1 : 0);
+
+    if (gOrigWindowDidExitFullScreenIMP) {
+        typedef void (*DidExitFSFn)(id, SEL, NSNotification *);
+        ((DidExitFSFn)gOrigWindowDidExitFullScreenIMP)(self, _cmd, notification);
+    }
+}
+
+static BOOL swizzled_setFullscreenSpace(id self, SEL _cmd, BOOL state) {
+    gWindowListener = self;
+    if (!state && should_suppress_focus_steal_or_fullscreen_exit()) {
+        CFAbsoluteTime dt = (gLastResignTimestamp > 0.0) ? (CFAbsoluteTimeGetCurrent() - gLastResignTimestamp) : -1.0;
+        devlog_write("WIN", "SUPPRESSED setFullscreenSpace:NO (active=%d nsActive=%d dt=%.3fs)",
+                     gAppIsActive ? 1 : 0, (NSApp && [NSApp isActive]) ? 1 : 0, dt);
+        return YES;
+    }
+    devlog_write("WIN", "setFullscreenSpace:%d (active=%d)", state ? 1 : 0, gAppIsActive ? 1 : 0);
+    if (gOrigSetFullscreenSpaceIMP) {
+        typedef BOOL (*Fn)(id, SEL, BOOL);
+        return ((Fn)gOrigSetFullscreenSpaceIMP)(self, _cmd, state);
+    }
+    return NO;
+}
+
+static void swizzled_miniaturize(id self, SEL _cmd, id sender) {
+    NSWindow *win = (NSWindow *)self;
+    BOOL isFullscreen = (([win styleMask] & NSWindowStyleMaskFullScreen) != 0);
+    if (isFullscreen || gInFullscreenTransition || should_suppress_focus_steal_or_fullscreen_exit()) {
+        devlog_write("WIN", "SUPPRESSED miniaturize: (fs=%d trans=%d active=%d) win=%p",
+                     isFullscreen ? 1 : 0, gInFullscreenTransition ? 1 : 0,
+                     gAppIsActive ? 1 : 0, (__bridge void *)win);
+        return;
+    }
+    devlog_write("WIN", "miniaturize: win=%p", (__bridge void *)win);
+    if (gOrigMiniaturizeIMP) {
+        typedef void (*Fn)(id, SEL, id);
+        ((Fn)gOrigMiniaturizeIMP)(self, _cmd, sender);
+    }
+}
+
+static void swizzled_makeKeyAndOrderFront(id self, SEL _cmd, id sender) {
+    if (should_suppress_focus_steal_or_fullscreen_exit()) {
+        devlog_write("WIN", "SUPPRESSED makeKeyAndOrderFront: (active=%d nsActive=%d) win=%p",
+                     gAppIsActive ? 1 : 0, (NSApp && [NSApp isActive]) ? 1 : 0, (__bridge void *)self);
+        return;
+    }
+    if (gOrigMakeKeyAndOrderFrontIMP) {
+        typedef void (*Fn)(id, SEL, id);
+        ((Fn)gOrigMakeKeyAndOrderFrontIMP)(self, _cmd, sender);
+    }
+}
+
+static void swizzled_orderFrontRegardless(id self, SEL _cmd) {
+    if (should_suppress_focus_steal_or_fullscreen_exit()) {
+        devlog_write("WIN", "SUPPRESSED orderFrontRegardless (active=%d nsActive=%d) win=%p",
+                     gAppIsActive ? 1 : 0, (NSApp && [NSApp isActive]) ? 1 : 0, (__bridge void *)self);
+        return;
+    }
+    if (gOrigOrderFrontRegardlessIMP) {
+        typedef void (*Fn)(id, SEL);
+        ((Fn)gOrigOrderFrontRegardlessIMP)(self, _cmd);
+    }
+}
+
+static void swizzled_activateIgnoringOtherApps(id self, SEL _cmd, BOOL flag) {
+    if (flag && gAppHasActivatedOnce &&
+        (!gAppIsActive || (gLastResignTimestamp > 0.0 && (CFAbsoluteTimeGetCurrent() - gLastResignTimestamp) < 2.0))) {
+        CFAbsoluteTime dt = (gLastResignTimestamp > 0.0) ? (CFAbsoluteTimeGetCurrent() - gLastResignTimestamp) : -1.0;
+        devlog_write("WIN", "SUPPRESSED activateIgnoringOtherApps:YES (active=%d dt=%.3fs)",
+                     gAppIsActive ? 1 : 0, dt);
+        return;
+    }
+    if (gOrigActivateIgnoringOtherAppsIMP) {
+        typedef void (*Fn)(id, SEL, BOOL);
+        ((Fn)gOrigActivateIgnoringOtherAppsIMP)(self, _cmd, flag);
     }
 }
 
@@ -747,6 +1075,9 @@ static IMP swizzle_instance_method(Class cls, SEL sel, IMP newIMP) {
 
 __attribute__((constructor))
 static void sims2_trackpad_init(void) {
+    char devLogPath[600];
+    devlog_init(devLogPath, sizeof(devLogPath));
+
     /*
      * Override Aspyr's hardcoded SDL_SetHint(..., "0") priority-1 hints via environment
      * variables so SDL2 uses a native macOS fullscreen Space and properly hides the Dock.
@@ -793,6 +1124,9 @@ static void sims2_trackpad_init(void) {
     gOrigNextEventIMP = swizzle_instance_method(appCls,
                                                 @selector(nextEventMatchingMask:untilDate:inMode:dequeue:),
                                                 (IMP)swizzled_nextEventMatchingMask);
+    gOrigActivateIgnoringOtherAppsIMP = swizzle_instance_method(appCls,
+                                                                @selector(activateIgnoringOtherApps:),
+                                                                (IMP)swizzled_activateIgnoringOtherApps);
 
     Class evCls = [NSEvent class];
     gOrigButtonNumberIMP = swizzle_instance_method(evCls, @selector(buttonNumber), (IMP)swizzled_buttonNumber);
@@ -805,6 +1139,11 @@ static void sims2_trackpad_init(void) {
                                                           @selector(isDirectionInvertedFromDevice),
                                                           (IMP)swizzled_isDirectionInvertedFromDevice);
 
+    Class winCls = [NSWindow class];
+    gOrigMiniaturizeIMP = swizzle_instance_method(winCls, @selector(miniaturize:), (IMP)swizzled_miniaturize);
+    gOrigMakeKeyAndOrderFrontIMP = swizzle_instance_method(winCls, @selector(makeKeyAndOrderFront:), (IMP)swizzled_makeKeyAndOrderFront);
+    gOrigOrderFrontRegardlessIMP = swizzle_instance_method(winCls, @selector(orderFrontRegardless), (IMP)swizzled_orderFrontRegardless);
+
     Class listenerCls = objc_getClass("Cocoa_WindowListener");
     if (listenerCls) {
         gOrigScrollWheelIMP = swizzle_instance_method(listenerCls, @selector(scrollWheel:), (IMP)swizzled_scrollWheel);
@@ -815,20 +1154,94 @@ static void sims2_trackpad_init(void) {
         gOrigRightMouseUpIMP = swizzle_instance_method(listenerCls, @selector(rightMouseUp:), (IMP)swizzled_rightMouseUp);
         gOrigRightMouseDraggedIMP = swizzle_instance_method(listenerCls, @selector(rightMouseDragged:), (IMP)swizzled_rightMouseDragged);
         gOrigMouseMovedIMP = swizzle_instance_method(listenerCls, @selector(mouseMoved:), (IMP)swizzled_mouseMoved);
+        gOrigWindowDidBecomeKeyIMP = swizzle_instance_method(listenerCls, @selector(windowDidBecomeKey:), (IMP)swizzled_windowDidBecomeKey);
         gOrigWindowDidResignKeyIMP = swizzle_instance_method(listenerCls, @selector(windowDidResignKey:), (IMP)swizzled_windowDidResignKey);
+        gOrigWindowWillEnterFullScreenIMP = swizzle_instance_method(listenerCls, @selector(windowWillEnterFullScreen:), (IMP)swizzled_windowWillEnterFullScreen);
+        gOrigWindowDidEnterFullScreenIMP = swizzle_instance_method(listenerCls, @selector(windowDidEnterFullScreen:), (IMP)swizzled_windowDidEnterFullScreen);
         gOrigWindowWillExitFullScreenIMP = swizzle_instance_method(listenerCls, @selector(windowWillExitFullScreen:), (IMP)swizzled_windowWillExitFullScreen);
+        gOrigWindowDidExitFullScreenIMP = swizzle_instance_method(listenerCls, @selector(windowDidExitFullScreen:), (IMP)swizzled_windowDidExitFullScreen);
+        gOrigSetFullscreenSpaceIMP = swizzle_instance_method(listenerCls, @selector(setFullscreenSpace:), (IMP)swizzled_setFullscreenSpace);
     }
+
+    NSNotificationCenter *nc = [NSNotificationCenter defaultCenter];
+    [nc addObserverForName:NSApplicationWillResignActiveNotification
+                    object:nil
+                     queue:nil
+                usingBlock:^(NSNotification *note) {
+        (void)note;
+        gAppIsActive = NO;
+        gLastResignTimestamp = CFAbsoluteTimeGetCurrent();
+        reset_gesture_and_key_state(resolve_window_listener());
+        CGAssociateMouseAndMouseCursorPosition(true);
+        CGDisplayShowCursor(kCGDirectMainDisplay);
+        devlog_write("APP", "WillResignActive");
+    }];
+    [nc addObserverForName:NSApplicationDidResignActiveNotification
+                    object:nil
+                     queue:nil
+                usingBlock:^(NSNotification *note) {
+        (void)note;
+        gAppIsActive = NO;
+        if (gLastResignTimestamp == 0.0) {
+            gLastResignTimestamp = CFAbsoluteTimeGetCurrent();
+        }
+        devlog_write("APP", "DidResignActive");
+    }];
+    [nc addObserverForName:NSApplicationWillBecomeActiveNotification
+                    object:nil
+                     queue:nil
+                usingBlock:^(NSNotification *note) {
+        (void)note;
+        gAppHasActivatedOnce = YES;
+        gAppIsActive = YES;
+        gLastResignTimestamp = 0.0;
+        devlog_write("APP", "WillBecomeActive");
+    }];
+    [nc addObserverForName:NSApplicationDidBecomeActiveNotification
+                    object:nil
+                     queue:nil
+                usingBlock:^(NSNotification *note) {
+        (void)note;
+        gAppHasActivatedOnce = YES;
+        gAppIsActive = YES;
+        gLastResignTimestamp = 0.0;
+        devlog_write("APP", "DidBecomeActive");
+    }];
 
     uint16_t initLeft = 43, initRight = 47;
     resolve_camera_rotate_keycodes(&initLeft, &initRight);
 
+    NSString *bundleStr = [[NSBundle mainBundle] bundleIdentifier];
+    const char *bundleId = bundleStr ? [bundleStr UTF8String] : "unknown";
+    devlog_write("INIT",
+                 "pid=%d bundle=%s appHook=%d scrollHook=%d btnHook=%d modHook=%d mouseMoved=%d "
+                 "fsSpaceHook=%d miniHook=%d activateHook=%d rotKeys=(%u,%u) invert=%d ctrlOrbit=%d log=%s",
+                 getpid(),
+                 bundleId ? bundleId : "unknown",
+                 gOrigNextEventIMP != NULL,
+                 gOrigScrollWheelIMP != NULL,
+                 gOrigButtonNumberIMP != NULL,
+                 gOrigEventModifierFlagsIMP != NULL,
+                 gOrigMouseMovedIMP != NULL,
+                 gOrigSetFullscreenSpaceIMP != NULL,
+                 gOrigMiniaturizeIMP != NULL,
+                 gOrigActivateIgnoringOtherAppsIMP != NULL,
+                 initLeft,
+                 initRight,
+                 gInvertRotation,
+                 gEnableOptionOrbit,
+                 devLogPath[0] ? devLogPath : "disabled");
+
     log_msg([NSString stringWithFormat:
-             @"Loaded: appHook=%d scrollHook=%d btnHook=%d modHook=%d mouseMoved=%d rotKeys=(%u,%u) invert=%d ctrlOrbit=%d",
+             @"Loaded: appHook=%d scrollHook=%d btnHook=%d modHook=%d mouseMoved=%d fsSpaceHook=%d miniHook=%d activateHook=%d rotKeys=(%u,%u) invert=%d ctrlOrbit=%d",
              gOrigNextEventIMP != NULL,
              gOrigScrollWheelIMP != NULL,
              gOrigButtonNumberIMP != NULL,
              gOrigEventModifierFlagsIMP != NULL,
              gOrigMouseMovedIMP != NULL,
+             gOrigSetFullscreenSpaceIMP != NULL,
+             gOrigMiniaturizeIMP != NULL,
+             gOrigActivateIgnoringOtherAppsIMP != NULL,
              initLeft,
              initRight,
              gInvertRotation,
