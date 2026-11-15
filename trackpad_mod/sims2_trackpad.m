@@ -1582,16 +1582,23 @@ static void hook_cxa_throw(void *thrownException, void *tinfo, void (*dest)(void
 }
 
 typedef void (*Sims2GlViewportFn)(int, int, int, int);
+typedef int (*Sims2CGLSetParameterFn)(void *, int, const int *);
+typedef int (*Sims2CGLEnableFn)(void *, int);
 static Sims2GlViewportFn gRealGlViewport = NULL;
+static Sims2CGLSetParameterFn gRealCGLSetParameter = NULL;
+static Sims2CGLEnableFn gRealCGLEnable = NULL;
 static int gLastViewport[4] = { -1, -1, -1, -1 };
 static int gViewportLogged = 0;
+static int gCGLBackingLogged = 0;
 
 static void hook_glViewport(int x, int y, int w, int h) {
     if (!gRealGlViewport) {
         gRealGlViewport = (Sims2GlViewportFn)dlsym(RTLD_DEFAULT, "glViewport");
     }
-    if ((x != gLastViewport[0] || y != gLastViewport[1] || w != gLastViewport[2] || h != gLastViewport[3]) &&
-        gViewportLogged < 60) {
+    /* Ignore small UI thumbnail / FBO passes so actual resolution switches remain visible in logs. */
+    if (w >= 300 && h >= 200 &&
+        (x != gLastViewport[0] || y != gLastViewport[1] || w != gLastViewport[2] || h != gLastViewport[3]) &&
+        gViewportLogged < 200) {
         gViewportLogged++;
         gLastViewport[0] = x;
         gLastViewport[1] = y;
@@ -1602,6 +1609,31 @@ static void hook_glViewport(int x, int y, int w, int h) {
     if (gRealGlViewport) {
         gRealGlViewport(x, y, w, h);
     }
+}
+
+static int hook_CGLSetParameter(void *ctx, int pname, const int *params) {
+    if (!gRealCGLSetParameter) {
+        gRealCGLSetParameter = (Sims2CGLSetParameterFn)dlsym(RTLD_DEFAULT, "CGLSetParameter");
+    }
+    int err = gRealCGLSetParameter ? gRealCGLSetParameter(ctx, pname, params) : 0;
+    if (pname == 304 && gCGLBackingLogged < 64) {
+        gCGLBackingLogged++;
+        bootlog_write("CGL", "CGLSetParameter(kCGLCPSurfaceBackingSize, %dx%d) ctx=%p err=%d",
+                      params ? params[0] : -1, params ? params[1] : -1, ctx, err);
+    }
+    return err;
+}
+
+static int hook_CGLEnable(void *ctx, int pname) {
+    if (!gRealCGLEnable) {
+        gRealCGLEnable = (Sims2CGLEnableFn)dlsym(RTLD_DEFAULT, "CGLEnable");
+    }
+    int err = gRealCGLEnable ? gRealCGLEnable(ctx, pname) : 0;
+    if (pname == 305 && gCGLBackingLogged < 64) {
+        gCGLBackingLogged++;
+        bootlog_write("CGL", "CGLEnable(kCGLCESurfaceBackingSize) ctx=%p err=%d", ctx, err);
+    }
+    return err;
 }
 
 static void bootlog_window_geometry(const char *reason, NSWindow *win) {
@@ -1717,6 +1749,8 @@ static const Sims2SymbolHookEntry kSims2CoreGraphicsHooks[] = {
     { "_CGDisplayCopyAllDisplayModes", (void *)hook_CGDisplayCopyAllDisplayModes },
     { "___cxa_throw",                  (void *)hook_cxa_throw },
     { "_glViewport",                   (void *)hook_glViewport },
+    { "_CGLSetParameter",              (void *)hook_CGLSetParameter },
+    { "_CGLEnable",                    (void *)hook_CGLEnable },
 };
 
 static size_t hook_coregraphics_la_symbol_ptrs(void) {
