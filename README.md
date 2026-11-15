@@ -10,6 +10,7 @@
 
 * 🇫🇷 **[Documentation Française & Guide Utilisateur](#-documentation-française--guide-utilisateur)**
 * 🌍 **[English Documentation & User Guide](#-english-documentation--user-guide)**
+* 🪟 **[Édition Windows (`windows/`)](windows/README.md)** — *Utilitaires séparés pour Windows 10/11 (patch 4 Go, caches, `userProps.xml` & caméra trackpad)*
 
 ---
 
@@ -29,8 +30,8 @@
 * ✅ **Zéro dépendance externe :** Utilise exclusivement `/usr/bin/perl`, `/usr/bin/codesign`, `/usr/sbin/dseditgroup` et `/usr/bin/osascript` (AppleScript + JXA) natifs — ne déclenche jamais l'installation Xcode de 1 Go (`libxcselect`).
 * ✅ **Migration des sauvegardes garantie sans écrasement :** Copie vos sauvegardes Sandbox via la **permission Automatisation Finder** vers `~/Library/Application Support/Aspyr/The Sims 2/` (ou vers `The Sims 2 (Sandbox Backup YYYY-MM-DD)` si des données actives existent déjà).
 * ✅ **Protection automatique `userProps.xml` (`v1.3.0`) :** Inspecte `activeDeviceDisplayMode`, crée une sauvegarde de retour (`Config/userProps.xml.backup`) avant toute retouche, et ne corrige que les modes invalides, absents de CoreGraphics/NSScreen ou ≠ 60 Hz / 32 bpp.
-* ✅ **Règles graphiques Retina / Apple Silicon (`Graphics Rules.sgr`) :** Sauvegarde l'original (`Graphics Rules.sgr.backup`), débloque les résolutions jusqu'à `5120x3200`, passe le profil par défaut en `$High` (effets, éclairage, ombres, matériaux) et relève le fallback VRAM (`textureMemory`) à `1024 Mo`.
-* ✅ **Module Trackpad natif MacBook (`libsims2_trackpad.dylib`) :** Auto-chargé dans `Sims2XP_Exe` via `LC_LOAD_WEAK_DYLIB` sans Xcode : **`Control (^)` + clic-glissé** = incliner / tourner l'angle de la caméra (orbite 3D & pitch), **`Option (⌥)` + glisser (ou clic-glissé)** = se déplacer sur la carte (curseur 4 flèches), **pincement à 2 doigts** = zoom `+/-`, **swipe horizontal ou rotation à 2 doigts** = rotation caméra `,`/`.`, et `Command+Tab` sans rebond vers le Bureau.
+* ✅ **Règles graphiques Retina / Apple Silicon (`Graphics Rules.sgr`) :** Sauvegarde l'original (`Graphics Rules.sgr.backup`), débloque les résolutions jusqu'à `2560x1600` (sans 3K/4K qui cassent l'interface, calé sur `1800x1169` natif par défaut), passe le profil par défaut en `$High` (effets, éclairage, ombres, matériaux) et relève le fallback VRAM (`textureMemory`) à `1024 Mo`.
+* ✅ **Module Trackpad & Affichage MacBook (`libsims2_trackpad.dylib`) :** Auto-chargé dans `Sims2XP_Exe` via `LC_LOAD_WEAK_DYLIB` sans Xcode : **`Control (^)` + clic-glissé** = incliner / tourner l'angle de la caméra (orbite 3D & pitch), **`Option (⌥)` natif** laissé intact pour le déplacement caméra du jeu, **pincement à 2 doigts** = zoom `+/-`, **swipe horizontal ou rotation à 2 doigts** = rotation caméra `,`/`.`, plein écran Space sous encoche sans écran bleu (`CGDisplayFade`/`CGL`) et `Command+Tab` sans rebond vers le Bureau.
 * ✅ **Diagnostic Mods/CC & `maxfiles` (`v1.3.0`) :** Compte vos `.package` dans `Downloads/`, alerte si des `.zip`/`.rar`/`.7z` s'y trouvent ou si vous approchez du plafond de `10 240`, et propose `[o/N]` l'installation d'un `LaunchDaemon` géré uniquement si `launchctl limit maxfiles` hard < `10 240`.
 * ✅ **Utilitaire de maintenance à menu interactif (`clean_sims2_cache.command` `v1.3.0`) :** `[1]` Purger les caches *(Entrée par défaut)*, `[2]` Réinitialiser l'affichage `userProps.xml`, `[3]` Diagnostiquer les Mods & `maxfiles`, `[4]` Quitter.
 
@@ -40,7 +41,7 @@
 
 | Script | Rôle | Mot de passe Admin (`sudo`) ? |
 | :--- | :--- | :--- |
-| **`patch_sims2.command`** | Installateur principal : vérifie les droits Admin, localise le jeu (`/Applications` ou `~/Applications`), vérifie et sauvegarde le binaire intègre, applique le double patch 60 Hz, patch `Graphics Rules.sgr` (`5120x3200`, `$High`, `1024 Mo`, `.backup`), installe et injecte `libsims2_trackpad.dylib` (`LC_LOAD_WEAK_DYLIB`), re-signe `--strict`, migre les sauvegardes sans écrasement, purge les caches, protège `userProps.xml` et diagnostique CC/`maxfiles`. | **Oui** (si l'app est dans `/Applications`, ou pour installer le `LaunchDaemon` optionnel) |
+| **`patch_sims2.command`** | Installateur principal : vérifie les droits Admin, localise le jeu (`/Applications` ou `~/Applications`), vérifie et sauvegarde le binaire intègre, applique le patch 60 Hz + affichage plein écran (`<= 2560x1600`), patch `Graphics Rules.sgr` (`2560x1600`, `$High`, `1024 Mo`, `.backup`), installe et injecte `libsims2_trackpad.dylib` (`LC_LOAD_WEAK_DYLIB`), re-signe `--strict`, migre les sauvegardes sans écrasement, purge les caches, protège `userProps.xml` et diagnostique CC/`maxfiles`. | **Oui** (si l'app est dans `/Applications`, ou pour installer le `LaunchDaemon` optionnel) |
 | **`clean_sims2_cache.command`** | Outil de maintenance interactif `[1/2/3/4]` : `[1]` Purge des caches (Actif + Sandbox), `[2]` Reset résolution `userProps.xml` + `.backup`, `[3]` Diagnostic Mods/CC & `maxfiles`, `[4]` Quitter. | **Non** (sauf option `[3]` si vous acceptez d'installer `limit.maxfiles.plist`) |
 | **`restore_sims2.command`** | Désinstallateur officiel : vérifie l'intégrité de `Sims2XP_Exe.backup`, restaure atomiquement le binaire d'origine et `Graphics Rules.sgr.backup`, retire `libsims2_trackpad.dylib`, re-signe `--strict` et supprime `/Library/LaunchDaemons/limit.maxfiles.plist` **uniquement** s'il porte le marqueur géré par ce patch. | **Oui** (si app dans `/Applications` ou `LaunchDaemon` géré présent) |
 
@@ -93,7 +94,7 @@
 | **Cas 2 : Rien ne s'écrit quand je tape le mot de passe dans Terminal / `Sorry, try again`** | La frappe invisible (sans `*`) est voulue par macOS. Vérifiez que **Verrouillage Majuscule** est désactivé et que votre clavier est sur la bonne disposition (FR/EN). Saisissez le mot de passe d'ouverture de session du Mac + `Entrée` (Touch ID ne remplace pas `sudo` ici). |
 | **Cas 3 : « Compte non-Administrateur détecté » / `not in the sudoers file`** | Votre session est un compte **Standard**. Connectez-vous à une session Administrateur du Mac (ou cochez *Autoriser à administrer cet ordinateur* dans *Réglages Système ➔ Utilisateurs et groupes*), puis relancez `patch_sims2.command`. |
 | **Cas 4 : Erreur `-1743` (Automatisation) ou `-5000` (`autorisations requises` sur conteneur Sandbox)** | Pour `-1743` : activez **Réglages Système ➔ Confidentialité et sécurité ➔ Automatisation ➔ Terminal ➔ Finder** et relancez. Pour `-5000` après avoir cliqué *Autoriser* : macOS protège le conteneur App Store contre la copie scriptée ; ouvrez Finder (`Cmd+Maj+G`) dans `~/Library/Containers/com.aspyr.sims2.appstore/Data/Library/Application Support/Aspyr/The Sims 2/` et copiez `Neighborhoods`/`Downloads` vers `~/Library/Application Support/Aspyr/The Sims 2/` (ou accordez *Accès complet au disque* à Terminal). |
-| **Cas 4B : Partager un journal de diagnostic (`latest.log`)** | Chaque exécution enregistre un journal léger (0 % CPU en arrière-plan, aucun mot de passe) dans `~/Library/Logs/Sims2-Crash-Patch/latest.log` (`previous.log` pour le précédent). |
+| **Cas 4B : Partager les journaux de diagnostic (`latest.log`, `launch_boot.log`)** | Les scripts enregistrent un journal léger (aucun mot de passe) dans `~/Library/Logs/Sims2-Crash-Patch/latest.log` (`previous.log` pour le précédent). En jeu, le module natif écrit aussi `launch_boot.log` (démarrage, affichage, CGL/OpenGL, exceptions C++) et `trackpad_events.log` dans ce même dossier. |
 | **Cas 5 : Mes anciens quartiers n'apparaissent pas en jeu** | Ouvrez `~/Library/Application Support/Aspyr/` dans le Finder (`Cmd+Maj+G`). Si un dossier `The Sims 2 (Sandbox Backup ...)` s'y trouve, c'est que vous aviez déjà lancé le jeu hors Sandbox. Jeu fermé, fusionnez `Neighborhoods/` et `Downloads/` depuis ce backup vers `The Sims 2/`. |
 | **Cas 6 : Crash au lancement après débranchement d'écran externe ou changement vidéo** | Double-cliquez sur `clean_sims2_cache.command` et choisissez **`[2]`** : réinitialise la résolution vers le mode actuel à 60 Hz tout en conservant `Config/userProps.xml.backup`. |
 | **Cas 7 : Crash chargement quartier ou Mods absents** | Lancez `clean_sims2_cache.command` : choisissez **`[1]`** (purge les caches sans toucher aux parties) puis **`[3]`** (détecte les archives `.zip`/`.rar`/`.7z` ignorées par le jeu dans `Downloads/` et contrôle la proximité de la limite `10 240` fichiers ouverts). |
@@ -108,14 +109,17 @@
 * **Double patch binaire (`FUN_1000fe510`) :**
   - **Patch 1 (`0xfe6dc`) :** Neutralise `_CGDisplayModeGetRefreshRate` en forçant `60` (`0x3c`) dans `R15D` (`f20f1045d0f2440f2cf84889df` ➔ `41bf3c000000909090904889df`).
   - **Patch 2 (`0xfe741`) :** Verrouille la branche secondaire `_CVDisplayLink` en remplaçant `cmovnel %eax, %r15d` par 4 `NOP` (`41bf3c000000440f45f8c70300000000` ➔ `41bf3c00000090909090c70300000000`).
+* **Patchs binaires d'affichage :**
+  - **`0x5e610` & `0x1303243` :** Déverrouillent le sélecteur de résolutions en jeu jusqu'à `2560x1600`.
+  - **`0xa7619` :** Supprime le clearing/letterbox plein écran dans l'espace macOS sous encoche (`Option A Fullscreen Fill`).
 * **Diagnostic système `maxfiles` (`Sims2XP_Exe`):** `0x1000b2920`–`0x1000b2970` appelle `getrlimit(RLIMIT_NOFILE)` puis `setrlimit(RLIMIT_NOFILE, min(rlim_max, 0x2800 = 10240))`.
-* **Optimisation `Graphics Rules.sgr` :** Sauvegarde `Graphics Rules.sgr.backup`, relève `textureMemory` de `32` à `1024` Mo, débloque `maxResWidth`/`maxResHeight` jusqu'à `5120x3200`, et bascule `EffectsQuality`, `LightingQuality`, `Shadows` et `MaterialDetail` sur `$High`.
-* **Module Trackpad Cocoa natif (`trackpad_mod/libsims2_trackpad.dylib`) :** Injecté via `LC_LOAD_WEAK_DYLIB` (`@executable_path/libsims2_trackpad.dylib`) sans Xcode ni CLT :
+* **Optimisation `Graphics Rules.sgr` :** Sauvegarde `Graphics Rules.sgr.backup`, relève `textureMemory` de `32` à `1024` Mo, règle `maxResWidth`/`maxResHeight` à `2560x1600` (défaut `$High` calé sur le mode natif, ex. `1800x1169`), et bascule `EffectsQuality`, `LightingQuality`, `Shadows` et `MaterialDetail` sur `$High`.
+* **Module Trackpad & Affichage Cocoa natif (`trackpad_mod/libsims2_trackpad.dylib`) :** Injecté via `LC_LOAD_WEAK_DYLIB` (`@executable_path/libsims2_trackpad.dylib`) sans Xcode ni CLT :
   - `Control (^)` + clic-glissé : émulation `SDL_BUTTON_MIDDLE` pour incliner et tourner l'angle de la caméra (orbite 3D libre & pitch).
-  - `Option (⌥)` + glisser (ou `Option` + clic-glissé) : déplacement panoramique caméra (curseur 4 flèches `cTSUserToolCameraHandDrag`) sans blocage du clic gauche.
+  - `Option (⌥)` : laissé natif pour le déplacement caméra du jeu.
   - Pincement à 2 doigts (`NSEventTypeMagnify`) : zoom `+/-`.
   - Swipe horizontal ou rotation à 2 doigts : rotation caméra `,`/`.`.
-  - Plein écran Space (`SDL_VIDEO_MAC_FULLSCREEN_SPACES=1`) + `SDL_VIDEO_MINIMIZE_ON_FOCUS_LOSS=0` (sans rebond au retour de `Command+Tab`).
+  - Plein écran Space (`SDL_VIDEO_MAC_FULLSCREEN_SPACES=1`), neutralisation d'une éventuelle fenêtre SDL secondaire orpheline, `SDL_VIDEO_MINIMIZE_ON_FOCUS_LOSS=0` (`Command+Tab` sans rebond), calage `NSScreen.visibleFrame`, filtrage des vrais modes CoreGraphics 32-bit, virtualisation `CGDisplayFade`/`CGDisplaySetDisplayMode` + ciblage `CGL`/`glViewport` et journal `launch_boot.log` (`__cxa_throw`).
 
 > *Ce projet est une initiative communautaire de préservation logicielle (article 5(1) de la directive européenne 2009/24/CE). Aucun binaire propriétaire n'est distribué ni aucun DRM contourné.*
 
@@ -137,16 +141,18 @@
 
 | Script | Role | Requires Admin (`sudo`)? |
 | :--- | :--- | :--- |
-| **`patch_sims2.command`** | Main installer: Admin check, `/Applications` + `~/Applications` support, verified backup + atomic 60 Hz patch, `Graphics Rules.sgr` upgrade (`5120x3200`, `$High`, `1024 MB` VRAM fallback, `.backup`), `libsims2_trackpad.dylib` injection (`LC_LOAD_WEAK_DYLIB` without Xcode), strict ad-hoc signing, zero-overwrite save migration, dual cache purge, `userProps.xml` protection (`.backup`), and CC/`maxfiles` check. | **Yes** (for `/Applications` or optional LaunchDaemon) |
-| **`clean_sims2_cache.command`** | Interactive menu `[1/2/3/4]`: `[1]` Clean caches *(Default on Enter)*, `[2]` Reset `userProps.xml` resolution (60 Hz + `.backup`), `[3]` Check Mods/CC (`.package`/`.zip`) & `maxfiles`, `[4]` Quit. | **No** (unless opting `[y]` to install `limit.maxfiles.plist` in `[3]`) |
+| **`patch_sims2.command`** | Main installer: Admin check, `/Applications` + `~/Applications` support, verified backup + atomic 60 Hz & fullscreen display patches (`<= 2560x1600`), `Graphics Rules.sgr` upgrade (`2560x1600`, `$High`, `1024 MB` VRAM fallback, `.backup`), `libsims2_trackpad.dylib` injection (`LC_LOAD_WEAK_DYLIB` without Xcode), strict ad-hoc signing, zero-overwrite save migration, dual cache purge, `userProps.xml` protection (`.backup`), and CC/`maxfiles` check. | **Yes** (for `/Applications` or optional LaunchDaemon) |
+| **`clean_sims2_cache.command`** | Interactive menu `[1/2/3/4]`: `[1]` Clean caches *(Default on Enter)*, `[2]` Reset `userProps.xml` screen resolution (60 Hz + `.backup`), `[3]` Check Mods/CC (`.package`/`.zip`) & `maxfiles`, `[4]` Quit. | **No** (unless opting `[y]` to install `limit.maxfiles.plist` in `[3]`) |
 | **`restore_sims2.command`** | Official uninstaller: verifies `Sims2XP_Exe.backup`, atomically restores original binary and `Graphics Rules.sgr.backup`, removes `libsims2_trackpad.dylib`, re-signs strictly, and cleans `/Library/LaunchDaemons/limit.maxfiles.plist` **only** if tagged as managed by this patch. | **Yes** (when `/Applications` or managed plist exists) |
 
-### Native MacBook Trackpad Controls (`libsims2_trackpad.dylib`)
+### Native MacBook Trackpad & Display Module (`libsims2_trackpad.dylib`)
 * **Control (`^`) + Click & Drag:** Tilt & orbit the 3D camera freely (vertical pitch & orbit via middle mouse drag).
-* **Option (`⌥`) + Slide (or Click & Drag):** Pan / move across the neighborhood or lot (4-way arrow hand cursor).
+* **Option (`⌥`):** Left untouched natively for the game's built-in camera pan.
 * **Two-Finger Pinch:** Zoom in/out (`+`/`-`).
 * **Two-Finger Horizontal Swipe or Rotate:** Smooth camera rotation (`,`/`.`).
-* **Retina & High Graphics (`Graphics Rules.sgr`):** Unlocks resolutions up to `5120x3200`, sets `$High` shadows/lighting/effects/material defaults, raises `textureMemory` fallback to `1024` MB, and preserves `Graphics Rules.sgr.backup`.
+* **Retina, Notch & High Graphics (`Graphics Rules.sgr` + CGL/SDL2):** Caps catalog resolutions at `2560x1600` (defaulting to native e.g. `1800x1169`), sets `$High` shadows/lighting/effects/material defaults, raises `textureMemory` fallback to `1024` MB, filters real CoreGraphics 32-bit modes, suppresses `CGDisplayFade` blue screen, clamps SDL fullscreen Space to `NSScreen.visibleFrame`, and preserves `Graphics Rules.sgr.backup`.
+
+> Looking for Windows 10/11 tools (4GB/LAA patcher, cache cleaner, `userProps.xml` fix, trackpad camera helper)? See [`windows/README.md`](windows/README.md).
 
 ## 3. Step-by-Step Installation & Beginner Tips (`v1.4.0`)
 
@@ -174,7 +180,7 @@
 | **2. Nothing prints while typing password / `Sorry, try again`** | Hidden input (no `*`) is normal macOS security. Check Caps Lock and keyboard layout; enter your Mac session password (not Apple ID unless identical) + **Enter**. |
 | **3. Non-Administrator account detected** | Log into an Administrator account on the Mac (or enable *Allow user to administer this computer* in *System Settings ➔ Users & Groups*) and re-run. |
 | **4. Finder Automation (`-1743`) or Container permissions (`-5000`)** | For `-1743`: enable **System Settings ➔ Privacy & Security ➔ Automation ➔ Terminal ➔ Finder** and re-run. For `-5000` after clicking *Allow*: macOS blocks scripted container copies; open Finder (`Cmd+Shift+G`) at `~/Library/Containers/com.aspyr.sims2.appstore/Data/Library/Application Support/Aspyr/The Sims 2/` and copy `Neighborhoods`/`Downloads` to `~/Library/Application Support/Aspyr/The Sims 2/` (or grant *Full Disk Access* to Terminal). |
-| **4B. Diagnostic Log (`latest.log`)** | Every script run writes a zero-overhead plain-text diagnostic log (never storing passwords) to `~/Library/Logs/Sims2-Crash-Patch/latest.log`. |
+| **4B. Diagnostic Logs (`latest.log`, `launch_boot.log`)** | Every script run writes a zero-overhead plain-text diagnostic log (never storing passwords) to `~/Library/Logs/Sims2-Crash-Patch/latest.log`. In-game, the dylib also writes `launch_boot.log` and `trackpad_events.log` in the same folder. |
 | **5. Old saves appear missing (`Sandbox Backup`)** | Check `~/Library/Application Support/Aspyr/` for `The Sims 2 (Sandbox Backup ...)`. With the game closed, merge `Neighborhoods/` and `Downloads/` into `~/Library/Application Support/Aspyr/The Sims 2/`. |
 | **6. Crash after unplugging external monitor / bad video mode** | Run `clean_sims2_cache.command` ➔ option **`[2]`** to reset `userProps.xml` to your current logical display at `60 Hz` (keeps `userProps.xml.backup`). |
 | **7. CC missing or heavy-CC neighborhood crashes** | Run `clean_sims2_cache.command`: **`[1]`** cleans corrupted caches without touching saves/mods; **`[3]`** flags unextracted `.zip`/`.rar`/`.7z` files inside `Downloads/` and checks the `10,240` open-file limit. |
