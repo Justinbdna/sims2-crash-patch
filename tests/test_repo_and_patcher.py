@@ -914,11 +914,24 @@ class TestMacScriptsIntegrity(unittest.TestCase):
         self.assertIn("--------RRRRRRRRGGGGGGGGBBBBBBBB", src_m)
         self.assertIn("launch_boot.log", src_m)
         self.assertIn("bootlog_userprops", src_m)
+        self.assertIn("refresh_userprops_target_resolution", src_m)
+        self.assertIn("set_target_render_resolution", src_m)
         self.assertIn("clamp_fullscreen_window_to_visible_frame", src_m)
+        self.assertIn("hook_CGDisplayFade", src_m)
+        self.assertIn("hook_CGDisplaySetDisplayMode", src_m)
         for hooked_sym in (
             "_CGDisplayCopyAllDisplayModes",
+            "_CGAcquireDisplayFadeReservation",
+            "_CGDisplayFade",
+            "_CGReleaseDisplayFadeReservation",
+            "_CGConfigureDisplayFadeEffect",
+            "_CGDisplaySetDisplayMode",
             "___cxa_throw",
             "_glViewport",
+            "_glScissor",
+            "_CGLSetParameter",
+            "_CGLEnable",
+            "_CGLDisable",
         ):
             self.assertIn(hooked_sym, src_m)
         for cat_pair in (
@@ -951,6 +964,12 @@ class TestMacScriptsIntegrity(unittest.TestCase):
             b"CGDisplayModeGetPixelHeight",
             b"CGDisplayModeGetRefreshRate",
             b"launch_boot.log",
+            b"CGDisplayFade",
+            b"CGAcquireDisplayFadeReservation",
+            b"CGDisplaySetDisplayMode",
+            b"CGLSetParameter",
+            b"CGLDisable",
+            b"glScissor",
             b"__cxa_throw",
             b"glViewport",
         ):
