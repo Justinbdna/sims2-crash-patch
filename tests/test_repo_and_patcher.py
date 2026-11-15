@@ -855,11 +855,12 @@ class TestMacScriptsIntegrity(unittest.TestCase):
             "SDL_VIDEO_MINIMIZE_ON_FOCUS_LOSS",
         ):
             self.assertIn(hint, src_m)
+        self.assertIn('setenv("SDL_VIDEO_MINIMIZE_ON_FOCUS_LOSS", "0", 1);', src_m)
         self.assertIn("swizzled_mouseMoved", src_m)
         self.assertIn("![NSApp isActive]", src_m)
         self.assertIn("![win isKeyWindow]", src_m)
 
-        # Brique 3 layout-independent pinch zoom, Carbon AZERTY/QWERTY rotation, & Option-orbit
+        # Brique 3 layout-independent pinch zoom, Carbon AZERTY/QWERTY rotation, Control-orbit & Option-pan
         self.assertIn("CGEventCreateScrollWheelEvent", src_m)
         self.assertIn("gForceScrollNonInverted", src_m)
         self.assertIn("TISCopyCurrentKeyboardLayoutInputSource", src_m)
@@ -867,11 +868,15 @@ class TestMacScriptsIntegrity(unittest.TestCase):
         self.assertIn("kc >= 65 && kc <= 92", src_m)
         self.assertIn("75 * NSEC_PER_MSEC", src_m)
         self.assertIn("NSEventTypeFlagsChanged", src_m)
+        self.assertIn("NSEventModifierFlagControl", src_m)
+        self.assertIn("NSEventModifierFlagOption", src_m)
         self.assertIn("rightMouseDown:", src_m)
         self.assertIn("rightMouseDragged:", src_m)
         self.assertIn("mouseDragged:", src_m)
-        self.assertIn("!gOptionMiddleDragActive", src_m)
-        self.assertIn("isRight == gOptionDragWasRight", src_m)
+        self.assertIn("!gCtrlMiddleDragActive", src_m)
+        self.assertIn("isRight == gCtrlDragWasRight", src_m)
+        self.assertIn("gOptionHandPanActive", src_m)
+        self.assertIn("raw_event_modifier_flags", src_m)
         self.assertIn("gSuppressedScrollEvent", src_m)
         self.assertIn("gForcedNonInvertedEvent", src_m)
         self.assertIn("resolve_window_listener", src_m)
