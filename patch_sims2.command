@@ -607,17 +607,49 @@ var did = $.CGMainDisplayID();
 var cur = $.CGDisplayCopyDisplayMode(did);
 var curW = Math.round($.CGDisplayModeGetWidth(cur));
 var curH = Math.round($.CGDisplayModeGetHeight(cur));
+var catalog = [
+    "1280x720", "1280x800", "1440x900", "1512x945", "1600x900",
+    "1680x1050", "1728x1080", "1800x1125", "1920x1080", "1920x1200",
+    "2048x1280", "2056x1285", "2304x1440", "2560x1440", "2560x1600"
+];
+var notchedMap = {
+    "1024x665": "1280x800",
+    "1147x745": "1280x800",
+    "1280x832": "1280x800",
+    "1312x848": "1440x900",
+    "1352x878": "1440x900",
+    "1496x967": "1512x945",
+    "1512x982": "1512x945",
+    "1728x1117": "1728x1080",
+    "1800x1169": "1800x1125",
+    "2048x1330": "2048x1280",
+    "2056x1329": "2056x1285",
+    "2294x1490": "2304x1440"
+};
+function isAllowedNonNotched(w, h) {
+    if (w < 800 || h < 600 || w <= h || w > 2560 || h > 1600) return false;
+    var k = w + "x" + h;
+    if (notchedMap[k]) return false;
+    var asp = w / h;
+    if (asp > 1.52 && asp < 1.57) return false;
+    return true;
+}
 var seen = {};
-if (curW > 0 && curH > 0) seen[curW + "x" + curH] = 1;
-var arr = ObjC.castRefToObject($.CGDisplayCopyAllDisplayModes(did, $()));
+for (var c = 0; c < catalog.length; c++) {
+    seen[catalog[c]] = 1;
+}
+if (isAllowedNonNotched(curW, curH)) seen[curW + "x" + curH] = 1;
+var optsDict = $.CFDictionaryCreateMutable($(), 1, $.kCFTypeDictionaryKeyCallBacks, $.kCFTypeDictionaryValueCallBacks);
+$.CFDictionarySetValue(optsDict, $.kCGDisplayShowDuplicateLowResolutionModes, $.kCFBooleanTrue);
+var arr = ObjC.castRefToObject($.CGDisplayCopyAllDisplayModes(did, optsDict) || $.CGDisplayCopyAllDisplayModes(did, $()));
 if (arr && arr.count) {
     for (var i = 0; i < arr.count; i++) {
         var m = arr.objectAtIndex(i);
         var w = Math.round($.CGDisplayModeGetWidth(m));
         var h = Math.round($.CGDisplayModeGetHeight(m));
-        if (w > 0 && h > 0) {
+        if (isAllowedNonNotched(w, h)) {
             seen[w + "x" + h] = 1;
-            if (w >= 1920 && (w % 2 === 0) && (h % 2 === 0)) {
+            if (w >= 1920 && (w % 2 === 0) && (h % 2 === 0) && isAllowedNonNotched(w / 2, h / 2)) {
                 seen[(w / 2) + "x" + (h / 2)] = 1;
             }
         }
@@ -629,14 +661,24 @@ if (screens && screens.count) {
         var f = screens.objectAtIndex(j).frame;
         var sw = Math.round(f.size.width);
         var sh = Math.round(f.size.height);
-        if (sw > 0 && sh > 0) {
+        if (isAllowedNonNotched(sw, sh)) {
             seen[sw + "x" + sh] = 1;
-            if (curW === 0 || curH === 0) {
-                curW = sw;
-                curH = sh;
-            }
+        }
+        if ((curW === 0 || curH === 0) && sw > 0 && sh > 0) {
+            curW = sw;
+            curH = sh;
         }
     }
+}
+var curKey = curW + "x" + curH;
+if (notchedMap[curKey]) {
+    var mapped = notchedMap[curKey].split("x");
+    curW = parseInt(mapped[0], 10);
+    curH = parseInt(mapped[1], 10);
+}
+if (curW > 2560 || curH > 1600) {
+    curW = 1800;
+    curH = 1125;
 }
 if (curW > 0 && curH > 0) {
     "CUR=" + curW + "x" + curH + "\nMODES=" + Object.keys(seen).join(",");
@@ -740,7 +782,28 @@ if (defined $modes_csv && $modes_csv ne "") {
     }
 }
 
+my %notched_map = (
+    "1024x665"  => "1280x800",
+    "1147x745"  => "1280x800",
+    "1280x832"  => "1280x800",
+    "1312x848"  => "1440x900",
+    "1352x878"  => "1440x900",
+    "1496x967"  => "1512x945",
+    "1512x982"  => "1512x945",
+    "1728x1117" => "1728x1080",
+    "1800x1169" => "1800x1125",
+    "2048x1330" => "2048x1280",
+    "2056x1329" => "2056x1285",
+    "2294x1490" => "2304x1440",
+);
+
 my $fallback_res = ($cur_res && $cur_res =~ /^\d+x\d+$/) ? $cur_res : "1280x800";
+if (exists $notched_map{$fallback_res} && $supported{$notched_map{$fallback_res}}) {
+    $fallback_res = $notched_map{$fallback_res};
+}
+if ($fallback_res =~ /^(\d+)x(\d+)$/ && ($1 > 2560 || $2 > 1600)) {
+    $fallback_res = $supported{"1800x1125"} ? "1800x1125" : "1280x800";
+}
 my $target_mode = "";
 my $need_fix = 0;
 
@@ -749,7 +812,9 @@ if ($old_mode =~ /^(\d+)x(\d+)x(\d+)x(\d+)$/) {
     my $res_key = "${w}x${h}";
     my $res_known_ok = 1;
 
-    if ($w < 800 || $h < 600) {
+    if ($w < 800 || $h < 600 || $w > 2560 || $h > 1600) {
+        $res_known_ok = 0;
+    } elsif (exists $notched_map{$res_key} && $supported{$notched_map{$res_key}}) {
         $res_known_ok = 0;
     } elsif (%supported && !$supported{$res_key} && $res_key ne "800x600") {
         $res_known_ok = 0;
@@ -946,10 +1011,19 @@ count_cc_and_check_maxfiles() {
     fi
 }
 
-# Step 3A — Optimize Graphics Rules.sgr (Retina 5120x3200, $High profile, 1024 MB VRAM fallback)
+# Step 3A — Optimize Graphics Rules.sgr (Catalog cap 2560x1600, Option A default 1800x1125, $High profile, 1024 MB VRAM)
 patch_graphics_rules_sgr() {
     local grules_path="${1:-$GRULES_PATH}"
     local backup_path="${2:-$GRULES_BACKUP_PATH}"
+    local target_w="${3:-1800}"
+    local target_h="${4:-1125}"
+
+    case "$target_w" in ''|*[!0-9]*) target_w="1800" ;; esac
+    case "$target_h" in ''|*[!0-9]*) target_h="1125" ;; esac
+    if [ "$target_w" -gt 2560 ] || [ "$target_h" -gt 1600 ] || [ "$target_w" -lt 800 ] || [ "$target_h" -lt 600 ]; then
+        target_w="1800"
+        target_h="1125"
+    fi
 
     if [ -L "$grules_path" ] || [ -L "$backup_path" ]; then
         GRULES_STATUS="ERREUR (lien symbolique refusé)"
@@ -968,7 +1042,9 @@ patch_graphics_rules_sgr() {
 use strict;
 use warnings;
 
-my ($grules_path, $backup_path) = @ARGV;
+my ($grules_path, $backup_path, $target_w, $target_h) = @ARGV;
+$target_w = 1800 if !defined $target_w || $target_w !~ /^\d+$/ || $target_w < 800;
+$target_h = 1125 if !defined $target_h || $target_h !~ /^\d+$/ || $target_h < 600;
 
 my $active_tmp;
 END {
@@ -1040,33 +1116,57 @@ if (!-e $backup_path) {
     }
 }
 
-if ($is_already_patched) {
-    print "OK:already_patched\n";
-    exit 0;
+my $changed = 0;
+
+if (!$is_already_patched) {
+    $raw =~ s/\b(seti[ \t]+textureMemory[ \t]+)32\b/${1}1024/g;
+
+    my $override_hdr = "# Override defaults (SIM-281,416)";
+    my $banner = "# Patched by sims2-crash-patch (Apple Silicon & Retina Rules)\n";
+    my $found_override = ($raw =~ s{([ \t]*\Q$override_hdr\E\r?\n(?:(?!\r?\n[ \t]*(?:#{5,}|endif\b|end\b)).)*)}{
+        my $blk = $1;
+        $blk =~ s/\b(setOption[ \t]+(?:EffectsQuality|LightingQuality|Shadows|MaterialDetail)[ \t]+)\$Medium\b/${1}\$High/g;
+        my ($indent) = ($blk =~ /^([ \t]*)/);
+        $indent . $banner . $blk;
+    }se);
+
+    if (!$found_override) {
+        $raw = $banner . $raw;
+    }
+    $changed = 1;
 }
 
-$raw =~ s/\b(seti[ \t]+textureMemory[ \t]+)32\b/${1}1024/g;
-$raw =~ s/\b(uintProp[ \t]+maxResWidth[ \t]+)2048\b/${1}5120/g;
-$raw =~ s/\b(uintProp[ \t]+maxResHeight[ \t]+)2048\b/${1}3200/g;
+# Phase 3 resolution ceiling inside option ScreenModeResolution: cap at 2560x1600
+# (excludes 3K/4K where unscaled UI is unreadable, upgrading Phase 1/2 5120x3200 too).
+my $orig_res_caps = $raw;
+$raw =~ s/\b(uintProp[ \t]+maxResWidth[ \t]+)(?:2048|5120)\b/${1}2560/g;
+$raw =~ s/\b(uintProp[ \t]+maxResHeight[ \t]+)(?:2048|3200)\b/${1}1600/g;
+$changed = 1 if $raw ne $orig_res_caps;
 
-my $override_hdr = "# Override defaults (SIM-281,416)";
-my $banner = "# Patched by sims2-crash-patch (Apple Silicon & Retina Rules)\n";
-my $found_override = ($raw =~ s{([ \t]*\Q$override_hdr\E\r?\n(?:(?!\r?\n[ \t]*(?:#{5,}|endif\b|end\b)).)*)}{
-    my $blk = $1;
-    $blk =~ s/\b(setOption[ \t]+(?:EffectsQuality|LightingQuality|Shadows|MaterialDetail)[ \t]+)\$Medium\b/${1}\$High/g;
-    my ($indent) = ($blk =~ /^([ \t]*)/);
-    $indent . $banner . $blk;
-}se);
+# Option A defaults inside option ScreenModeResolution -> setting $High (idempotent)
+$raw =~ s{(option[ \t]+ScreenModeResolution\b(?:(?!\r?\n[ \t]*end\b).)*)}{
+    my $res_blk = $1;
+    $res_blk =~ s{(setting[ \t]+\$High\b(?:(?!\r?\n[ \t]*(?:setting\b|end\b)).)*)}{
+        my $high_blk = $1;
+        my $orig_high = $high_blk;
+        $high_blk =~ s/\b(uintProp[ \t]+defaultResWidth[ \t]+)\d+\b/${1}$target_w/g;
+        $high_blk =~ s/\b(uintProp[ \t]+defaultResHeight[ \t]+)\d+\b/${1}$target_h/g;
+        $changed = 1 if $high_blk ne $orig_high;
+        $high_blk;
+    }se;
+    $res_blk;
+}se;
 
-if (!$found_override) {
-    $raw = $banner . $raw;
+if (!$changed) {
+    print "OK:already_patched\n";
+    exit 0;
 }
 
 write_atomic($grules_path, $raw, 0644);
 print "PATCHED\n";
 GRULES_PERL
 
-    runner_out="$(printf '%s\n' "$perl_script" | run_privileged "$grules_path" /usr/bin/perl - "$grules_path" "$backup_path" 2>&1)"
+    runner_out="$(printf '%s\n' "$perl_script" | run_privileged "$grules_path" /usr/bin/perl - "$grules_path" "$backup_path" "$target_w" "$target_h" 2>&1)"
     runner_rc=$?
 
     if [ "$runner_rc" -ne 0 ]; then
@@ -1083,14 +1183,168 @@ GRULES_PERL
             echo -e "${GREEN}[i] Graphics Rules.sgr :${NC} Déjà patché (OK:already_patched)."
             ;;
         PATCHED)
-            GRULES_STATUS="OK (Retina 5120x3200, \$High, VRAM 1024 Mo)"
-            echo -e "${GREEN}[+] Graphics Rules.sgr :${NC} Optimisé (5120x3200, profil \$High, VRAM 1024 Mo) [PATCHED]."
+            GRULES_STATUS="OK (Catalogue <=2560x1600, défaut ${target_w}x${target_h}, \$High, VRAM 1024 Mo)"
+            echo -e "${GREEN}[+] Graphics Rules.sgr :${NC} Optimisé (max 2560x1600, défaut ${target_w}x${target_h}, profil \$High, VRAM 1024 Mo) [PATCHED]."
             ;;
         *)
             GRULES_STATUS="Statut ($runner_out)"
             echo -e "${YELLOW}[!] Graphics Rules.sgr :${NC} $runner_out"
             ;;
     esac
+    return 0
+}
+
+# Step 2B — Idempotent Option A Fullscreen Aspect Unlock & Zero-Black-Bars Stretch Patch
+patch_option_a_display_binary() {
+    local exe_path="$1"
+
+    if [ -L "$exe_path" ]; then
+        echo -e "${RED}[-] Erreur de sécurité : lien symbolique refusé sur $exe_path.${NC}"
+        return 1
+    fi
+    if [ ! -f "$exe_path" ]; then
+        echo -e "${RED}[-] Binaire introuvable pour patch affichage Option A : $exe_path.${NC}"
+        return 1
+    fi
+
+    local perl_script runner_out runner_rc
+    { IFS= read -r -d '' perl_script || true; } <<'OPT_PERL'
+use strict;
+use warnings;
+
+my ($exe_path) = @ARGV;
+
+my $active_tmp;
+END {
+    unlink($active_tmp) if defined $active_tmp && -e $active_tmp;
+}
+
+sub count_occurrences {
+    my ($haystack, $needle) = @_;
+    my $count = 0;
+    my $pos = -1;
+    while (($pos = index($haystack, $needle, $pos + 1)) != -1) {
+        $count++;
+    }
+    return $count;
+}
+
+sub read_raw {
+    my ($p) = @_;
+    open(my $fh, "<:raw", $p) or die "Cannot read $p: $!\n";
+    local $/;
+    my $buf = <$fh>;
+    close($fh);
+    return $buf;
+}
+
+sub write_atomic {
+    my ($p, $buf, $mode) = @_;
+    die "Refusing to write through symlink: $p\n" if -l $p;
+    my $tmp = "$p.tmp.$$";
+    unlink($tmp) if -e $tmp || -l $tmp;
+    $active_tmp = $tmp;
+    open(my $out, ">:raw", $tmp) or do {
+        $active_tmp = undef;
+        die "Cannot create $tmp: $!\n";
+    };
+    if (!print {$out} $buf) {
+        my $err = $!;
+        close($out);
+        unlink($tmp);
+        $active_tmp = undef;
+        die "Write failed: $err\n";
+    }
+    if (!close($out)) {
+        my $err = $!;
+        unlink($tmp);
+        $active_tmp = undef;
+        die "Close failed: $err\n";
+    }
+    if (!chmod($mode, $tmp)) {
+        my $err = $!;
+        unlink($tmp);
+        $active_tmp = undef;
+        die "chmod failed: $err\n";
+    }
+    if (!rename($tmp, $p)) {
+        my $err = $!;
+        unlink($tmp);
+        $active_tmp = undef;
+        die "rename failed: $err\n";
+    }
+    $active_tmp = undef;
+}
+
+# Lift ASL resolution filter (0x10005e610..0x10005e618) so all calibrated modes <= 2560x1600
+# remain selectable regardless of current logical desktop size.
+my $orig_asl = pack("H*", "39f17fd04139f87fcb");
+my $repl_asl = pack("H*", "39f190904139f89090");
+
+# Phase 3 fullscreen resolution validator (0x101303243..0x10130325e, 28 bytes):
+# upgrade both original (exact aspect equality) and Phase 2 (<= desktop.w/h) binaries
+# to allow mode.w <= 2560 && mode.h <= 1600 cleanly.
+my $orig_val_p0 = pack("H*", "0f57c9f3480f2ac9f3480f2ad0f30f5eca0f2ec10f8538ffffff7b40");
+my $orig_val_p2 = pack("H*", "0f57c9f3480f2ac9f3480f2ad0f30f5eca3b45c077063b4dc4764190");
+my $repl_val_p3 = pack("H*", "3d000a0000771581f940060000770deb4b9090909090909090909090");
+
+# Edge-to-edge fullscreen stretch under macOS notch Space (0x1000a7619 -> 0x1000a7632):
+# eliminate left/right/bottom black letterbox/pillarbox clearing & FBO offset (1800x1125 -> 1800x1130).
+my $orig_stretch = pack("H*", "e86277fbff84c074108b43183b45f0");
+my $repl_stretch = pack("H*", "e86277fbff84c0eb108b43183b45f0");
+
+my $data = read_raw($exe_path);
+my $changed = 0;
+
+my @opt_patches = (
+    [ "Phase 3 ASL Mode Filter Unlock (0x5e610)",       [ $orig_asl ],                  $repl_asl ],
+    [ "Phase 3 Fullscreen Catalog Cap (0x1303243)",    [ $orig_val_p0, $orig_val_p2 ], $repl_val_p3 ],
+    [ "Option A Fullscreen Fill (0xa7619)",            [ $orig_stretch ],              $repl_stretch ],
+);
+
+for my $entry (@opt_patches) {
+    my ($label, $orig_list, $repl) = @$entry;
+    my $repl_cnt = count_occurrences($data, $repl);
+    my $orig_total = 0;
+    my $matched_variants = 0;
+    my $matched_orig;
+
+    for my $cand (@$orig_list) {
+        my $cnt = count_occurrences($data, $cand);
+        if ($cnt > 0) {
+            $orig_total += $cnt;
+            $matched_orig = $cand;
+            $matched_variants++;
+        }
+    }
+
+    if ($repl_cnt == 1 && $orig_total == 0) {
+        print "[i] $label : Déjà appliqué / Already applied.\n";
+    } elsif ($orig_total == 1 && $matched_variants == 1 && $repl_cnt == 0) {
+        my $offset = index($data, $matched_orig);
+        substr($data, $offset, length($matched_orig), $repl);
+        printf("[+] %s : Appliqué à l'offset 0x%x !\n", $label, $offset);
+        $changed = 1;
+    } else {
+        die "Fingerprint mismatch for $label (orig=$orig_total, repl=$repl_cnt)\n";
+    }
+}
+
+if ($changed) {
+    write_atomic($exe_path, $data, 0755);
+    print "PATCHED\n";
+} else {
+    print "OK:already_patched\n";
+}
+OPT_PERL
+
+    runner_out="$(printf '%s\n' "$perl_script" | run_privileged "$exe_path" /usr/bin/perl - "$exe_path" 2>&1)"
+    runner_rc=$?
+    if [ "$runner_rc" -ne 0 ]; then
+        echo -e "${RED}[-] Patch affichage Option A échoué :${NC} $runner_out"
+        return 1
+    fi
+    printf '%s\n' "$runner_out" | grep -v -E '^(PATCHED|OK:already_patched)$' || true
     return 0
 }
 
@@ -1477,19 +1731,41 @@ PERLEOF
         echo -e "${RED}[-] Le patch binaire a échoué / Binary patch failed.${NC}"
         pause_exit 1
     fi
+    if ! patch_option_a_display_binary "$EXE_PATH"; then
+        PATCH_STATUS="FAILED (Option A display patch error)"
+        log_diag "OPTION_A_DISPLAY_PATCH FAILED"
+        echo -e "${RED}[-] Le patch affichage Option A a échoué / Option A display patch failed.${NC}"
+        pause_exit 1
+    fi
     if ! run_privileged "$EXE_PATH" chmod 755 "$EXE_PATH"; then
         PATCH_STATUS="FAILED (chmod 755 error)"
         log_diag "BINARY_PATCH CHMOD FAILED"
         echo -e "${RED}[-] Impossible d'appliquer les permissions 0755 sur $EXE_PATH.${NC}"
         pause_exit 1
     fi
-    PATCH_STATUS="OK (60 Hz verrouillé / locked)"
+    PATCH_STATUS="OK (60 Hz verrouillé + affichage 1800x1125 / Option A)"
     log_diag "BINARY_PATCH OK"
 
     # 4B. Graphics Rules.sgr optimization & native Trackpad weak dylib injection
     echo ""
     echo -e "${BOLD}[+] Optimisation Graphics Rules.sgr & Module Trackpad natif...${NC}"
-    if patch_graphics_rules_sgr "$GRULES_PATH" "$GRULES_BACKUP_PATH"; then
+    query_display_modes
+    local grules_w="1800"
+    local grules_h="1125"
+    if [ -n "$DISPLAY_CUR" ]; then
+        local dw="${DISPLAY_CUR%%x*}"
+        local dh="${DISPLAY_CUR#*x}"
+        case "$dw:$dh" in
+            *[!0-9:]*|:*) ;;
+            *)
+                if [ "$dw" -ge 800 ] && [ "$dh" -ge 600 ] && [ "$dw" -le 2560 ] && [ "$dh" -le 1600 ]; then
+                    grules_w="$dw"
+                    grules_h="$dh"
+                fi
+                ;;
+        esac
+    fi
+    if patch_graphics_rules_sgr "$GRULES_PATH" "$GRULES_BACKUP_PATH" "$grules_w" "$grules_h"; then
         log_diag "GRULES_PATCH OK"
     else
         log_diag "GRULES_PATCH WARNING"

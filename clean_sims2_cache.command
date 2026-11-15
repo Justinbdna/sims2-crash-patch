@@ -231,17 +231,49 @@ var did = $.CGMainDisplayID();
 var cur = $.CGDisplayCopyDisplayMode(did);
 var curW = Math.round($.CGDisplayModeGetWidth(cur));
 var curH = Math.round($.CGDisplayModeGetHeight(cur));
+var catalog = [
+    "1280x720", "1280x800", "1440x900", "1512x945", "1600x900",
+    "1680x1050", "1728x1080", "1800x1125", "1920x1080", "1920x1200",
+    "2048x1280", "2056x1285", "2304x1440", "2560x1440", "2560x1600"
+];
+var notchedMap = {
+    "1024x665": "1280x800",
+    "1147x745": "1280x800",
+    "1280x832": "1280x800",
+    "1312x848": "1440x900",
+    "1352x878": "1440x900",
+    "1496x967": "1512x945",
+    "1512x982": "1512x945",
+    "1728x1117": "1728x1080",
+    "1800x1169": "1800x1125",
+    "2048x1330": "2048x1280",
+    "2056x1329": "2056x1285",
+    "2294x1490": "2304x1440"
+};
+function isAllowedNonNotched(w, h) {
+    if (w < 800 || h < 600 || w <= h || w > 2560 || h > 1600) return false;
+    var k = w + "x" + h;
+    if (notchedMap[k]) return false;
+    var asp = w / h;
+    if (asp > 1.52 && asp < 1.57) return false;
+    return true;
+}
 var seen = {};
-if (curW > 0 && curH > 0) seen[curW + "x" + curH] = 1;
-var arr = ObjC.castRefToObject($.CGDisplayCopyAllDisplayModes(did, $()));
+for (var c = 0; c < catalog.length; c++) {
+    seen[catalog[c]] = 1;
+}
+if (isAllowedNonNotched(curW, curH)) seen[curW + "x" + curH] = 1;
+var optsDict = $.CFDictionaryCreateMutable($(), 1, $.kCFTypeDictionaryKeyCallBacks, $.kCFTypeDictionaryValueCallBacks);
+$.CFDictionarySetValue(optsDict, $.kCGDisplayShowDuplicateLowResolutionModes, $.kCFBooleanTrue);
+var arr = ObjC.castRefToObject($.CGDisplayCopyAllDisplayModes(did, optsDict) || $.CGDisplayCopyAllDisplayModes(did, $()));
 if (arr && arr.count) {
     for (var i = 0; i < arr.count; i++) {
         var m = arr.objectAtIndex(i);
         var w = Math.round($.CGDisplayModeGetWidth(m));
         var h = Math.round($.CGDisplayModeGetHeight(m));
-        if (w > 0 && h > 0) {
+        if (isAllowedNonNotched(w, h)) {
             seen[w + "x" + h] = 1;
-            if (w >= 1920 && (w % 2 === 0) && (h % 2 === 0)) {
+            if (w >= 1920 && (w % 2 === 0) && (h % 2 === 0) && isAllowedNonNotched(w / 2, h / 2)) {
                 seen[(w / 2) + "x" + (h / 2)] = 1;
             }
         }
@@ -253,14 +285,24 @@ if (screens && screens.count) {
         var f = screens.objectAtIndex(j).frame;
         var sw = Math.round(f.size.width);
         var sh = Math.round(f.size.height);
-        if (sw > 0 && sh > 0) {
+        if (isAllowedNonNotched(sw, sh)) {
             seen[sw + "x" + sh] = 1;
-            if (curW === 0 || curH === 0) {
-                curW = sw;
-                curH = sh;
-            }
+        }
+        if ((curW === 0 || curH === 0) && sw > 0 && sh > 0) {
+            curW = sw;
+            curH = sh;
         }
     }
+}
+var curKey = curW + "x" + curH;
+if (notchedMap[curKey]) {
+    var mapped = notchedMap[curKey].split("x");
+    curW = parseInt(mapped[0], 10);
+    curH = parseInt(mapped[1], 10);
+}
+if (curW > 2560 || curH > 1600) {
+    curW = 1800;
+    curH = 1125;
 }
 if (curW > 0 && curH > 0) {
     "CUR=" + curW + "x" + curH + "\nMODES=" + Object.keys(seen).join(",");
@@ -362,7 +404,28 @@ if (defined $modes_csv && $modes_csv ne "") {
     }
 }
 
+my %notched_map = (
+    "1024x665"  => "1280x800",
+    "1147x745"  => "1280x800",
+    "1280x832"  => "1280x800",
+    "1312x848"  => "1440x900",
+    "1352x878"  => "1440x900",
+    "1496x967"  => "1512x945",
+    "1512x982"  => "1512x945",
+    "1728x1117" => "1728x1080",
+    "1800x1169" => "1800x1125",
+    "2048x1330" => "2048x1280",
+    "2056x1329" => "2056x1285",
+    "2294x1490" => "2304x1440",
+);
+
 my $fallback_res = ($cur_res && $cur_res =~ /^\d+x\d+$/) ? $cur_res : "1280x800";
+if (exists $notched_map{$fallback_res} && $supported{$notched_map{$fallback_res}}) {
+    $fallback_res = $notched_map{$fallback_res};
+}
+if ($fallback_res =~ /^(\d+)x(\d+)$/ && ($1 > 2560 || $2 > 1600)) {
+    $fallback_res = $supported{"1800x1125"} ? "1800x1125" : "1280x800";
+}
 my $target_mode = "";
 my $need_fix = 0;
 
@@ -371,7 +434,9 @@ if ($old_mode =~ /^(\d+)x(\d+)x(\d+)x(\d+)$/) {
     my $res_key = "${w}x${h}";
     my $res_known_ok = 1;
 
-    if ($w < 800 || $h < 600) {
+    if ($w < 800 || $h < 600 || $w > 2560 || $h > 1600) {
+        $res_known_ok = 0;
+    } elsif (exists $notched_map{$res_key} && $supported{$notched_map{$res_key}}) {
         $res_known_ok = 0;
     } elsif (%supported && !$supported{$res_key} && $res_key ne "800x600") {
         $res_known_ok = 0;
