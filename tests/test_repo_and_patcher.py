@@ -949,6 +949,24 @@ class TestMacScriptsIntegrity(unittest.TestCase):
         ):
             self.assertIn(cat_pair, src_m)
 
+        # Metal SIGABRT guard: target init/validation, drawable check, no CGLEnable inside hook_CGLSetParameter
+        self.assertIn("w >= 800 && h >= 600 && w <= 4096 && h <= 4096", src_m)
+        self.assertIn("ensure_target_render_resolution_initialized", src_m)
+        self.assertIn("fallback-1800x1169", src_m)
+        self.assertIn("cgl_context_has_attached_drawable", src_m)
+        self.assertIn("CGLGetSurface", src_m)
+        self.assertIn("NSOpenGLContext", src_m)
+        self.assertIn("tInCGLHook", src_m)
+        cgl_set_match = re.search(
+            r"static int hook_CGLSetParameter\(.*?\n\}\n",
+            src_m,
+            flags=re.DOTALL,
+        )
+        self.assertIsNotNone(cgl_set_match)
+        cgl_set_body = cgl_set_match.group(0)
+        self.assertNotIn("gRealCGLEnable", cgl_set_body)
+        self.assertNotIn("CGLEnable(", cgl_set_body)
+
         # Compiled dylib header check (Mach-O 64-bit x86_64 MH_DYLIB)
         raw = dylib.read_bytes()
         magic, cputype, _, filetype = struct.unpack_from("<IIII", raw, 0)
@@ -968,6 +986,8 @@ class TestMacScriptsIntegrity(unittest.TestCase):
             b"CGAcquireDisplayFadeReservation",
             b"CGDisplaySetDisplayMode",
             b"CGLSetParameter",
+            b"CGLGetParameter",
+            b"CGLGetSurface",
             b"CGLDisable",
             b"glScissor",
             b"__cxa_throw",
