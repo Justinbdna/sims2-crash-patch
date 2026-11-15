@@ -132,6 +132,8 @@ static int gCGLDisableLogged = 0;
 static int gViewportOverrideLogged = 0;
 static int gScissorOverrideLogged = 0;
 static int gMouseAlignLogged = 0;
+static BOOL gUserPropsInitialized = NO;
+static __thread BOOL tInCGLHook = NO;
 static pthread_mutex_t gRenderTargetMutex = PTHREAD_MUTEX_INITIALIZER;
 static CFAbsoluteTime gLastOptionHoverLogTime = 0.0;
 static CFAbsoluteTime gLastScrollLogTime = 0.0;
@@ -164,6 +166,7 @@ static void ensure_dir_exists(const char *path) {
 static void devlog_write(const char *category, const char *fmt, ...) __attribute__((format(printf, 2, 3)));
 static void bootlog_write(const char *category, const char *fmt, ...) __attribute__((format(printf, 2, 3)));
 static BOOL is_sdl_game_window(id winObj);
+static void ensure_target_render_resolution_initialized(void);
 static void get_target_render_resolution(int *outW, int *outH);
 
 static void devlog_write(const char *category, const char *fmt, ...) {
@@ -1421,7 +1424,7 @@ static void bootlog_init(void) {
 }
 
 static BOOL is_valid_render_resolution(int w, int h) {
-    return (w >= 640 && h >= 400 && w <= 2560 && h <= 1600 && w > h);
+    return (w >= 800 && h >= 600 && w <= 4096 && h <= 4096 && w > h);
 }
 
 static BOOL is_whitelisted_target_resolution(int w, int h) {
@@ -1464,6 +1467,7 @@ static void set_target_render_resolution(int w, int h, const char *source) {
 }
 
 static void get_target_render_resolution(int *outW, int *outH) {
+    ensure_target_render_resolution_initialized();
     pthread_mutex_lock(&gRenderTargetMutex);
     if (outW) *outW = gTargetRenderWidth;
     if (outH) *outH = gTargetRenderHeight;
@@ -1471,6 +1475,10 @@ static void get_target_render_resolution(int *outW, int *outH) {
 }
 
 static void refresh_userprops_target_resolution(BOOL forceLog) {
+    pthread_mutex_lock(&gRenderTargetMutex);
+    gUserPropsInitialized = YES;
+    pthread_mutex_unlock(&gRenderTargetMutex);
+
     NSString *path = [NSHomeDirectory() stringByAppendingPathComponent:
                       @"Library/Application Support/Aspyr/The Sims 2/Config/userProps.xml"];
     const char *cpath = [path UTF8String];
@@ -1535,6 +1543,27 @@ static void refresh_userprops_target_resolution(BOOL forceLog) {
     }
 }
 
+static void ensure_target_render_resolution_initialized(void) {
+    int w = 0, h = 0;
+    BOOL initialized = NO;
+    pthread_mutex_lock(&gRenderTargetMutex);
+    w = gTargetRenderWidth;
+    h = gTargetRenderHeight;
+    initialized = gUserPropsInitialized;
+    pthread_mutex_unlock(&gRenderTargetMutex);
+
+    if (!initialized) {
+        refresh_userprops_target_resolution(YES);
+        pthread_mutex_lock(&gRenderTargetMutex);
+        w = gTargetRenderWidth;
+        h = gTargetRenderHeight;
+        pthread_mutex_unlock(&gRenderTargetMutex);
+    }
+    if (!is_valid_render_resolution(w, h)) {
+        set_target_render_resolution(1800, 1169, "fallback-1800x1169");
+    }
+}
+
 static void maybe_poll_userprops(void) {
     CFAbsoluteTime now = CFAbsoluteTimeGetCurrent();
     if ((now - gLastUserPropsPollTime) < 0.2) {
@@ -1547,6 +1576,7 @@ static void maybe_poll_userprops(void) {
 static void bootlog_userprops(void) {
     gLastUserPropsPollTime = CFAbsoluteTimeGetCurrent();
     refresh_userprops_target_resolution(YES);
+    ensure_target_render_resolution_initialized();
 }
 
 typedef struct {
@@ -1721,45 +1751,82 @@ static void hook_cxa_throw(void *thrownException, void *tinfo, void (*dest)(void
 typedef void (*Sims2GlViewportFn)(int, int, int, int);
 typedef void (*Sims2GlScissorFn)(int, int, int, int);
 typedef void *(*Sims2CGLGetCurrentContextFn)(void);
+typedef int (*Sims2CGLGetParameterFn)(void *, int, int *);
 typedef int (*Sims2CGLSetParameterFn)(void *, int, const int *);
 typedef int (*Sims2CGLEnableFn)(void *, int);
 typedef int (*Sims2CGLDisableFn)(void *, int);
+typedef int (*Sims2CGLGetSurfaceFn)(void *, unsigned int *, unsigned int *, unsigned int *);
 static Sims2GlViewportFn gRealGlViewport = NULL;
 static Sims2GlScissorFn gRealGlScissor = NULL;
 static Sims2CGLGetCurrentContextFn gRealCGLGetCurrentContext = NULL;
+static Sims2CGLGetParameterFn gRealCGLGetParameter = NULL;
 static Sims2CGLSetParameterFn gRealCGLSetParameter = NULL;
 static Sims2CGLEnableFn gRealCGLEnable = NULL;
 static Sims2CGLDisableFn gRealCGLDisable = NULL;
+static Sims2CGLGetSurfaceFn gRealCGLGetSurface = NULL;
 static int gLastViewport[4] = { -1, -1, -1, -1 };
 static int gViewportLogged = 0;
 static int gCGLBackingLogged = 0;
 
+static BOOL cgl_context_has_attached_drawable(void *ctx) {
+    if (!ctx) {
+        return NO;
+    }
+    if (!gRealCGLGetSurface) {
+        gRealCGLGetSurface = (Sims2CGLGetSurfaceFn)dlsym(RTLD_DEFAULT, "CGLGetSurface");
+    }
+    if (gRealCGLGetSurface) {
+        unsigned int cid = 0, wid = 0, sid = 0;
+        if (gRealCGLGetSurface(ctx, &cid, &wid, &sid) == 0 && wid != 0 && sid != 0) {
+            return YES;
+        }
+    }
+    if ([NSThread isMainThread]) {
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wdeprecated-declarations"
+        NSOpenGLContext *curCtx = [NSOpenGLContext currentContext];
+        if (curCtx && (void *)[curCtx CGLContextObj] == ctx && [curCtx view] != nil) {
+            return YES;
+        }
+#pragma clang diagnostic pop
+    }
+    return NO;
+}
+
 static void ensure_cgl_target_backing_size(void *ctx, int targetW, int targetH, const char *reason) {
-    if (!ctx || targetW < 640 || targetH < 400) {
+    if (tInCGLHook || !ctx || !is_valid_render_resolution(targetW, targetH)) {
         return;
     }
-    if (!gRealCGLEnable) {
-        gRealCGLEnable = (Sims2CGLEnableFn)dlsym(RTLD_DEFAULT, "CGLEnable");
+    if (!cgl_context_has_attached_drawable(ctx)) {
+        return;
     }
     if (!gRealCGLSetParameter) {
         gRealCGLSetParameter = (Sims2CGLSetParameterFn)dlsym(RTLD_DEFAULT, "CGLSetParameter");
     }
-    if (gRealCGLEnable) {
-        gRealCGLEnable(ctx, 305); /* kCGLCESurfaceBackingSize */
+    if (!gRealCGLEnable) {
+        gRealCGLEnable = (Sims2CGLEnableFn)dlsym(RTLD_DEFAULT, "CGLEnable");
     }
-    int err = 0;
+    tInCGLHook = YES;
+    int errSet = 0;
     if (gRealCGLSetParameter) {
         int params[2] = { targetW, targetH };
-        err = gRealCGLSetParameter(ctx, 304, params); /* kCGLCPSurfaceBackingSize */
+        errSet = gRealCGLSetParameter(ctx, 304, params); /* kCGLCPSurfaceBackingSize */
     }
-    pthread_mutex_lock(&gRenderTargetMutex);
-    gLastAppliedCGLWidth = targetW;
-    gLastAppliedCGLHeight = targetH;
-    pthread_mutex_unlock(&gRenderTargetMutex);
+    int errEnable = 0;
+    if (errSet == 0 && gRealCGLEnable) {
+        errEnable = gRealCGLEnable(ctx, 305); /* kCGLCESurfaceBackingSize */
+    }
+    tInCGLHook = NO;
+    if (errSet == 0 && errEnable == 0) {
+        pthread_mutex_lock(&gRenderTargetMutex);
+        gLastAppliedCGLWidth = targetW;
+        gLastAppliedCGLHeight = targetH;
+        pthread_mutex_unlock(&gRenderTargetMutex);
+    }
     if (gCGLOverrideLogged < 64) {
         gCGLOverrideLogged++;
-        bootlog_write("CGL", "sync(%s) kCGLCPSurfaceBackingSize=%dx%d ctx=%p err=%d",
-                      reason ? reason : "auto", targetW, targetH, ctx, err);
+        bootlog_write("CGL", "sync(%s) kCGLCPSurfaceBackingSize=%dx%d ctx=%p setErr=%d enableErr=%d",
+                      reason ? reason : "auto", targetW, targetH, ctx, errSet, errEnable);
     }
 }
 
@@ -1838,9 +1905,8 @@ static void hook_glViewport(int x, int y, int w, int h) {
     maybe_poll_userprops();
 
     int targetW = 0, targetH = 0, appliedW = 0, appliedH = 0;
+    get_target_render_resolution(&targetW, &targetH);
     pthread_mutex_lock(&gRenderTargetMutex);
-    targetW = gTargetRenderWidth;
-    targetH = gTargetRenderHeight;
     appliedW = gLastAppliedCGLWidth;
     appliedH = gLastAppliedCGLHeight;
     pthread_mutex_unlock(&gRenderTargetMutex);
@@ -1851,7 +1917,7 @@ static void hook_glViewport(int x, int y, int w, int h) {
         gMainViewportActive = YES;
         gLastSourceViewportW = w;
         gLastSourceViewportH = h;
-        if (targetW >= 640 && targetH >= 400) {
+        if (is_valid_render_resolution(targetW, targetH)) {
             if (appliedW != targetW || appliedH != targetH) {
                 if (!gRealCGLGetCurrentContext) {
                     gRealCGLGetCurrentContext = (Sims2CGLGetCurrentContextFn)dlsym(RTLD_DEFAULT, "CGLGetCurrentContext");
@@ -1908,7 +1974,7 @@ static void hook_glScissor(int x, int y, int w, int h) {
     int targetW = 0, targetH = 0;
     get_target_render_resolution(&targetW, &targetH);
     if (gMainViewportActive && gLastSourceViewportW >= 640 && gLastSourceViewportH >= 400 &&
-        targetW >= 640 && targetH >= 400 &&
+        is_valid_render_resolution(targetW, targetH) &&
         (gLastSourceViewportW != targetW || gLastSourceViewportH != targetH)) {
         if (x == 0 && y == 0 && w == gLastSourceViewportW && h == gLastSourceViewportH) {
             outW = targetW;
@@ -1938,36 +2004,43 @@ static int hook_CGLSetParameter(void *ctx, int pname, const int *params) {
     if (!gRealCGLSetParameter) {
         gRealCGLSetParameter = (Sims2CGLSetParameterFn)dlsym(RTLD_DEFAULT, "CGLSetParameter");
     }
+    if (tInCGLHook) {
+        return gRealCGLSetParameter ? gRealCGLSetParameter(ctx, pname, params) : 0;
+    }
     if (pname == 304 && params) {
         maybe_poll_userprops();
         int reqW = params[0];
         int reqH = params[1];
         int targetW = 0, targetH = 0;
         get_target_render_resolution(&targetW, &targetH);
-        if (reqW >= 640 && reqH >= 400 && targetW >= 640 && targetH >= 400) {
-            if (!gRealCGLEnable) {
-                gRealCGLEnable = (Sims2CGLEnableFn)dlsym(RTLD_DEFAULT, "CGLEnable");
-            }
-            if (gRealCGLEnable && ctx) {
-                gRealCGLEnable(ctx, 305);
-            }
+        BOOL hasDrawable = cgl_context_has_attached_drawable(ctx);
+        /* Never invoke CGLEnable from CGLSetParameter before drawable attach; only substitute validated backing sizes. */
+        if (ctx && reqW >= 640 && reqH >= 400 && reqW <= 4096 && reqH <= 4096 &&
+            is_valid_render_resolution(targetW, targetH)) {
             int overrideParams[2] = { targetW, targetH };
+            tInCGLHook = YES;
             int err = gRealCGLSetParameter ? gRealCGLSetParameter(ctx, pname, overrideParams) : 0;
-            if (err == 0) {
-                pthread_mutex_lock(&gRenderTargetMutex);
-                gLastAppliedCGLWidth = targetW;
-                gLastAppliedCGLHeight = targetH;
-                pthread_mutex_unlock(&gRenderTargetMutex);
-            }
+            tInCGLHook = NO;
             if (gCGLBackingLogged < 64) {
                 gCGLBackingLogged++;
-                bootlog_write("CGL", "CGLSetParameter(kCGLCPSurfaceBackingSize, req=%dx%d -> applied=%dx%d) ctx=%p err=%d",
-                              reqW, reqH, targetW, targetH, ctx, err);
+                bootlog_write("CGL", "CGLSetParameter(kCGLCPSurfaceBackingSize, req=%dx%d -> applied=%dx%d) ctx=%p drawable=%d err=%d",
+                              reqW, reqH, targetW, targetH, ctx, hasDrawable, err);
             }
             return err;
         }
+        tInCGLHook = YES;
+        int err = gRealCGLSetParameter ? gRealCGLSetParameter(ctx, pname, params) : 0;
+        tInCGLHook = NO;
+        if (gCGLBackingLogged < 64) {
+            gCGLBackingLogged++;
+            bootlog_write("CGL", "CGLSetParameter(kCGLCPSurfaceBackingSize, req=%dx%d -> passthrough=%dx%d target=%dx%d) ctx=%p drawable=%d err=%d",
+                          reqW, reqH, reqW, reqH, targetW, targetH, ctx, hasDrawable, err);
+        }
+        return err;
     }
+    tInCGLHook = YES;
     int err = gRealCGLSetParameter ? gRealCGLSetParameter(ctx, pname, params) : 0;
+    tInCGLHook = NO;
     if (pname == 304 && gCGLBackingLogged < 64) {
         gCGLBackingLogged++;
         bootlog_write("CGL", "CGLSetParameter(kCGLCPSurfaceBackingSize, %dx%d) ctx=%p err=%d",
@@ -1980,10 +2053,42 @@ static int hook_CGLEnable(void *ctx, int pname) {
     if (!gRealCGLEnable) {
         gRealCGLEnable = (Sims2CGLEnableFn)dlsym(RTLD_DEFAULT, "CGLEnable");
     }
+    if (tInCGLHook) {
+        return gRealCGLEnable ? gRealCGLEnable(ctx, pname) : 0;
+    }
+    BOOL hasDrawable = (pname == 305 && ctx) ? cgl_context_has_attached_drawable(ctx) : NO;
+    if (pname == 305 && ctx && hasDrawable) {
+        if (!gRealCGLGetParameter) {
+            gRealCGLGetParameter = (Sims2CGLGetParameterFn)dlsym(RTLD_DEFAULT, "CGLGetParameter");
+        }
+        if (!gRealCGLSetParameter) {
+            gRealCGLSetParameter = (Sims2CGLSetParameterFn)dlsym(RTLD_DEFAULT, "CGLSetParameter");
+        }
+        int curParams[2] = { 0, 0 };
+        if (gRealCGLGetParameter && gRealCGLGetParameter(ctx, 304, curParams) == 0 &&
+            !is_valid_render_resolution(curParams[0], curParams[1])) {
+            int targetW = 0, targetH = 0;
+            get_target_render_resolution(&targetW, &targetH);
+            if (is_valid_render_resolution(targetW, targetH) && gRealCGLSetParameter) {
+                int overrideParams[2] = { targetW, targetH };
+                tInCGLHook = YES;
+                gRealCGLSetParameter(ctx, 304, overrideParams);
+                tInCGLHook = NO;
+                if (gCGLBackingLogged < 64) {
+                    gCGLBackingLogged++;
+                    bootlog_write("CGL", "CGLEnable(305) pre-seeded backing size %dx%d -> %dx%d ctx=%p",
+                                  curParams[0], curParams[1], targetW, targetH, ctx);
+                }
+            }
+        }
+    }
+    tInCGLHook = YES;
     int err = gRealCGLEnable ? gRealCGLEnable(ctx, pname) : 0;
+    tInCGLHook = NO;
     if (pname == 305 && gCGLBackingLogged < 64) {
         gCGLBackingLogged++;
-        bootlog_write("CGL", "CGLEnable(kCGLCESurfaceBackingSize) ctx=%p err=%d", ctx, err);
+        bootlog_write("CGL", "CGLEnable(kCGLCESurfaceBackingSize) ctx=%p drawable=%d err=%d",
+                      ctx, hasDrawable, err);
     }
     return err;
 }
@@ -1992,9 +2097,12 @@ static int hook_CGLDisable(void *ctx, int pname) {
     if (!gRealCGLDisable) {
         gRealCGLDisable = (Sims2CGLDisableFn)dlsym(RTLD_DEFAULT, "CGLDisable");
     }
+    if (tInCGLHook) {
+        return gRealCGLDisable ? gRealCGLDisable(ctx, pname) : 0;
+    }
     int targetW = 0, targetH = 0;
     get_target_render_resolution(&targetW, &targetH);
-    if (pname == 305 && targetW >= 640 && targetH >= 400) {
+    if (pname == 305 && ctx && is_valid_render_resolution(targetW, targetH)) {
         if (gCGLDisableLogged < 32) {
             gCGLDisableLogged++;
             bootlog_write("CGL", "CGLDisable(kCGLCESurfaceBackingSize) blocked to keep target %dx%d ctx=%p",
@@ -2002,7 +2110,10 @@ static int hook_CGLDisable(void *ctx, int pname) {
         }
         return 0;
     }
-    return gRealCGLDisable ? gRealCGLDisable(ctx, pname) : 0;
+    tInCGLHook = YES;
+    int err = gRealCGLDisable ? gRealCGLDisable(ctx, pname) : 0;
+    tInCGLHook = NO;
+    return err;
 }
 
 static void bootlog_window_geometry(const char *reason, NSWindow *win) {
