@@ -67,6 +67,9 @@ static IMP gOrigMiniaturizeIMP = NULL;
 static IMP gOrigMakeKeyAndOrderFrontIMP = NULL;
 static IMP gOrigOrderFrontRegardlessIMP = NULL;
 static IMP gOrigActivateIgnoringOtherAppsIMP = NULL;
+static IMP gOrigFocusSomeWindowIMP = NULL;
+static IMP gOrigCanBecomeKeyWindowIMP = NULL;
+static IMP gOrigCanBecomeMainWindowIMP = NULL;
 
 static Sims2ScrollAxis gScrollAxis = Sims2ScrollAxisNone;
 static double gScrollAccumX = 0.0;
@@ -82,6 +85,7 @@ static BOOL gMaskControlModifier = NO;
 static BOOL gCtrlMiddleDragActive = NO;
 static BOOL gCtrlDragWasRight = NO;
 static __weak NSWindow *gLastMouseDownWindow = nil;
+static __weak NSWindow *gPrimaryFullscreenWindow = nil;
 static __weak id gWindowListener = nil;
 
 static BOOL gAppHasActivatedOnce = NO;
@@ -644,6 +648,41 @@ static void release_ctrl_middle_drag(id listener) {
     gLastMouseDownWindow = nil;
 }
 
+static void format_key_label(NSEvent *ev, char *outBuf, size_t outBufSize) {
+    if (!outBuf || outBufSize == 0) {
+        return;
+    }
+    outBuf[0] = '\0';
+    if (!ev) {
+        snprintf(outBuf, outBufSize, "?");
+        return;
+    }
+    unsigned short kc = [ev keyCode];
+    switch (kc) {
+        case 36: snprintf(outBuf, outBufSize, "Return"); return;
+        case 48: snprintf(outBuf, outBufSize, "Tab"); return;
+        case 49: snprintf(outBuf, outBufSize, "Space"); return;
+        case 51: snprintf(outBuf, outBufSize, "Delete"); return;
+        case 53: snprintf(outBuf, outBufSize, "Escape"); return;
+        case 123: snprintf(outBuf, outBufSize, "Left"); return;
+        case 124: snprintf(outBuf, outBufSize, "Right"); return;
+        case 125: snprintf(outBuf, outBufSize, "Down"); return;
+        case 126: snprintf(outBuf, outBufSize, "Up"); return;
+        default: break;
+    }
+    NSString *chars = [ev charactersIgnoringModifiers];
+    if (chars && [chars length] > 0) {
+        unichar ch = [chars characterAtIndex:0];
+        if (ch >= 33 && ch < 127) {
+            snprintf(outBuf, outBufSize, "%c", (char)ch);
+            return;
+        }
+        snprintf(outBuf, outBufSize, "U+%04X", (unsigned int)ch);
+        return;
+    }
+    snprintf(outBuf, outBufSize, "kc=%u", (unsigned int)kc);
+}
+
 static NSEvent *swizzled_nextEventMatchingMask(id self, SEL _cmd, NSEventMask mask,
                                                NSDate *expiration, NSRunLoopMode mode, BOOL dequeue) {
     typedef NSEvent *(*Fn)(id, SEL, NSEventMask, NSDate *, NSRunLoopMode, BOOL);
@@ -656,6 +695,22 @@ static NSEvent *swizzled_nextEventMatchingMask(id self, SEL _cmd, NSEventMask ma
             handle_rotate_event(ev);
         } else if (t == NSEventTypeMagnify) {
             handle_magnify_event(ev);
+        } else if (t == NSEventTypeKeyDown || t == NSEventTypeKeyUp) {
+            if (![ev isARepeat]) {
+                NSEventModifierFlags rawFlags = raw_event_modifier_flags(ev);
+                BOOL isSynth = ([ev CGEvent] == NULL);
+                char keyLabel[32];
+                format_key_label(ev, keyLabel, sizeof(keyLabel));
+                devlog_write("KEY", "%s keyCode=%u key=%s synth=%d ctrl=%d opt=%d shift=%d cmd=%d",
+                             (t == NSEventTypeKeyDown) ? "keyDown" : "keyUp",
+                             (unsigned int)[ev keyCode],
+                             keyLabel,
+                             isSynth ? 1 : 0,
+                             (rawFlags & NSEventModifierFlagControl) ? 1 : 0,
+                             (rawFlags & NSEventModifierFlagOption) ? 1 : 0,
+                             (rawFlags & NSEventModifierFlagShift) ? 1 : 0,
+                             (rawFlags & NSEventModifierFlagCommand) ? 1 : 0);
+            }
         } else if (t == NSEventTypeFlagsChanged) {
             NSEventModifierFlags rawFlags = raw_event_modifier_flags(ev);
             if (gCtrlMiddleDragActive && ((rawFlags & NSEventModifierFlagControl) == 0)) {
@@ -910,17 +965,103 @@ static BOOL should_suppress_focus_steal_or_fullscreen_exit(void) {
     return NO;
 }
 
+static BOOL is_sdl_game_window(id winObj) {
+    if (!winObj || ![winObj isKindOfClass:[NSWindow class]]) {
+        return NO;
+    }
+    NSWindow *win = (NSWindow *)winObj;
+    id delegate = [win delegate];
+    Class listenerCls = objc_getClass("Cocoa_WindowListener");
+    if (delegate && listenerCls && [delegate isKindOfClass:listenerCls]) {
+        return YES;
+    }
+    return NO;
+}
+
+static BOOL is_secondary_orphan_game_window(id winObj) {
+    if (!gPrimaryFullscreenWindow || !winObj || winObj == gPrimaryFullscreenWindow) {
+        return NO;
+    }
+    if (!is_sdl_game_window(winObj)) {
+        return NO;
+    }
+    NSWindow *win = (NSWindow *)winObj;
+    if (([win styleMask] & NSWindowStyleMaskFullScreen) != 0) {
+        return NO;
+    }
+    return YES;
+}
+
+static void neutralize_single_orphan_window(NSWindow *win) {
+    if (!win) {
+        return;
+    }
+    [win setIgnoresMouseEvents:YES];
+    [win setCollectionBehavior:(NSWindowCollectionBehaviorStationary | NSWindowCollectionBehaviorIgnoresCycle)];
+    if ([win isVisible]) {
+        id delegate = [win delegate];
+        SEL pauseSel = @selector(pauseVisibleObservation);
+        SEL resumeSel = @selector(resumeVisibleObservation);
+        if (delegate && [delegate respondsToSelector:pauseSel]) {
+            IMP pauseIMP = [delegate methodForSelector:pauseSel];
+            if (pauseIMP) {
+                ((void (*)(id, SEL))pauseIMP)(delegate, pauseSel);
+            }
+        }
+        [win orderOut:nil];
+        if (delegate && [delegate respondsToSelector:resumeSel]) {
+            IMP resumeIMP = [delegate methodForSelector:resumeSel];
+            if (resumeIMP) {
+                ((void (*)(id, SEL))resumeIMP)(delegate, resumeSel);
+            }
+        }
+        devlog_write("WIN", "Neutralized secondary orphan SDLWindow win=%p (primary=%p)",
+                     (__bridge void *)win, (__bridge void *)gPrimaryFullscreenWindow);
+    }
+}
+
+static void neutralize_secondary_orphan_windows(NSWindow *primaryWin) {
+    if (primaryWin) {
+        gPrimaryFullscreenWindow = primaryWin;
+    }
+    if (!gPrimaryFullscreenWindow || !NSApp) {
+        return;
+    }
+    for (NSWindow *w in [NSApp windows]) {
+        if (is_secondary_orphan_game_window(w)) {
+            neutralize_single_orphan_window(w);
+        }
+    }
+}
+
 static void swizzled_windowDidBecomeKey(id self, SEL _cmd, NSNotification *notification) {
     gWindowListener = self;
+    id obj = [notification object];
+    BOOL isWin = [obj isKindOfClass:[NSWindow class]];
+    NSRect frame = isWin ? [(NSWindow *)obj frame] : NSZeroRect;
+    BOOL isFS = isWin ? (([(NSWindow *)obj styleMask] & NSWindowStyleMaskFullScreen) != 0) : NO;
+
+    if (isFS && isWin) {
+        neutralize_secondary_orphan_windows((NSWindow *)obj);
+    } else if (is_secondary_orphan_game_window(obj)) {
+        neutralize_single_orphan_window((NSWindow *)obj);
+        devlog_write("WIN", "SUPPRESSED orphan windowDidBecomeKey win=%p -> restoring primary=%p",
+                     (__bridge void *)obj, (__bridge void *)gPrimaryFullscreenWindow);
+        if (gAppIsActive && (!NSApp || [NSApp isActive]) &&
+            gPrimaryFullscreenWindow && gOrigMakeKeyAndOrderFrontIMP) {
+            typedef void (*OrderFn)(id, SEL, id);
+            ((OrderFn)gOrigMakeKeyAndOrderFrontIMP)(gPrimaryFullscreenWindow,
+                                                    @selector(makeKeyAndOrderFront:),
+                                                    nil);
+        }
+        return;
+    }
+
     if (!NSApp || [NSApp isActive]) {
         gAppHasActivatedOnce = YES;
         gAppIsActive = YES;
         gLastResignTimestamp = 0.0;
     }
-    id obj = [notification object];
-    BOOL isWin = [obj isKindOfClass:[NSWindow class]];
-    NSRect frame = isWin ? [(NSWindow *)obj frame] : NSZeroRect;
-    BOOL isFS = isWin ? (([(NSWindow *)obj styleMask] & NSWindowStyleMaskFullScreen) != 0) : NO;
     devlog_write("WIN", "windowDidBecomeKey win=%p active=%d fs=%d frame=%.0fx%.0f",
                  (__bridge void *)obj, (NSApp && [NSApp isActive]) ? 1 : 0, isFS ? 1 : 0,
                  frame.size.width, frame.size.height);
@@ -932,13 +1073,18 @@ static void swizzled_windowDidBecomeKey(id self, SEL _cmd, NSNotification *notif
 }
 
 static void swizzled_windowDidResignKey(id self, SEL _cmd, NSNotification *notification) {
+    id obj = [notification object];
+    if (is_secondary_orphan_game_window(obj)) {
+        devlog_write("WIN", "IGNORED orphan windowDidResignKey win=%p", (__bridge void *)obj);
+        return;
+    }
     gWindowListener = self;
     gLastResignTimestamp = CFAbsoluteTimeGetCurrent();
     reset_gesture_and_key_state(self);
     CGAssociateMouseAndMouseCursorPosition(true);
     CGDisplayShowCursor(kCGDirectMainDisplay);
     devlog_write("WIN", "windowDidResignKey win=%p active=%d",
-                 (__bridge void *)[notification object], (NSApp && [NSApp isActive]) ? 1 : 0);
+                 (__bridge void *)obj, (NSApp && [NSApp isActive]) ? 1 : 0);
 
     if (gOrigWindowDidResignKeyIMP) {
         typedef void (*ResignFn)(id, SEL, NSNotification *);
@@ -949,7 +1095,11 @@ static void swizzled_windowDidResignKey(id self, SEL _cmd, NSNotification *notif
 static void swizzled_windowWillEnterFullScreen(id self, SEL _cmd, NSNotification *notification) {
     gWindowListener = self;
     gInFullscreenTransition = YES;
-    devlog_write("WIN", "windowWillEnterFullScreen win=%p", (__bridge void *)[notification object]);
+    id obj = [notification object];
+    if ([obj isKindOfClass:[NSWindow class]]) {
+        neutralize_secondary_orphan_windows((NSWindow *)obj);
+    }
+    devlog_write("WIN", "windowWillEnterFullScreen win=%p", (__bridge void *)obj);
 
     if (gOrigWindowWillEnterFullScreenIMP) {
         typedef void (*EnterFSFn)(id, SEL, NSNotification *);
@@ -960,7 +1110,11 @@ static void swizzled_windowWillEnterFullScreen(id self, SEL _cmd, NSNotification
 static void swizzled_windowDidEnterFullScreen(id self, SEL _cmd, NSNotification *notification) {
     gWindowListener = self;
     gInFullscreenTransition = NO;
-    devlog_write("WIN", "windowDidEnterFullScreen win=%p", (__bridge void *)[notification object]);
+    id obj = [notification object];
+    if ([obj isKindOfClass:[NSWindow class]]) {
+        neutralize_secondary_orphan_windows((NSWindow *)obj);
+    }
+    devlog_write("WIN", "windowDidEnterFullScreen win=%p", (__bridge void *)obj);
 
     if (gOrigWindowDidEnterFullScreenIMP) {
         typedef void (*DidEnterFSFn)(id, SEL, NSNotification *);
@@ -984,6 +1138,9 @@ static void swizzled_windowWillExitFullScreen(id self, SEL _cmd, NSNotification 
 static void swizzled_windowDidExitFullScreen(id self, SEL _cmd, NSNotification *notification) {
     gWindowListener = self;
     gInFullscreenTransition = NO;
+    if ([notification object] == gPrimaryFullscreenWindow) {
+        gPrimaryFullscreenWindow = nil;
+    }
     devlog_write("WIN", "windowDidExitFullScreen win=%p active=%d",
                  (__bridge void *)[notification object], (NSApp && [NSApp isActive]) ? 1 : 0);
 
@@ -991,19 +1148,6 @@ static void swizzled_windowDidExitFullScreen(id self, SEL _cmd, NSNotification *
         typedef void (*DidExitFSFn)(id, SEL, NSNotification *);
         ((DidExitFSFn)gOrigWindowDidExitFullScreenIMP)(self, _cmd, notification);
     }
-}
-
-static BOOL is_sdl_game_window(id winObj) {
-    if (!winObj || ![winObj isKindOfClass:[NSWindow class]]) {
-        return NO;
-    }
-    NSWindow *win = (NSWindow *)winObj;
-    id delegate = [win delegate];
-    Class listenerCls = objc_getClass("Cocoa_WindowListener");
-    if (delegate && listenerCls && [delegate isKindOfClass:listenerCls]) {
-        return YES;
-    }
-    return NO;
 }
 
 static BOOL swizzled_setFullscreenSpace(id self, SEL _cmd, BOOL state) {
@@ -1045,6 +1189,18 @@ static void swizzled_miniaturize(id self, SEL _cmd, id sender) {
 }
 
 static void swizzled_makeKeyAndOrderFront(id self, SEL _cmd, id sender) {
+    if (is_secondary_orphan_game_window(self)) {
+        neutralize_single_orphan_window((NSWindow *)self);
+        devlog_write("WIN", "SUPPRESSED orphan makeKeyAndOrderFront: win=%p -> primary=%p",
+                     (__bridge void *)self, (__bridge void *)gPrimaryFullscreenWindow);
+        if (gAppIsActive && (!NSApp || [NSApp isActive]) &&
+            gPrimaryFullscreenWindow && ![gPrimaryFullscreenWindow isKeyWindow] &&
+            gOrigMakeKeyAndOrderFrontIMP) {
+            typedef void (*Fn)(id, SEL, id);
+            ((Fn)gOrigMakeKeyAndOrderFrontIMP)(gPrimaryFullscreenWindow, _cmd, sender);
+        }
+        return;
+    }
     if (is_sdl_game_window(self) && should_suppress_focus_steal_or_fullscreen_exit()) {
         devlog_write("WIN", "SUPPRESSED makeKeyAndOrderFront: (active=%d nsActive=%d) win=%p",
                      gAppIsActive ? 1 : 0, (NSApp && [NSApp isActive]) ? 1 : 0, (__bridge void *)self);
@@ -1057,6 +1213,11 @@ static void swizzled_makeKeyAndOrderFront(id self, SEL _cmd, id sender) {
 }
 
 static void swizzled_orderFrontRegardless(id self, SEL _cmd) {
+    if (is_secondary_orphan_game_window(self)) {
+        neutralize_single_orphan_window((NSWindow *)self);
+        devlog_write("WIN", "SUPPRESSED orphan orderFrontRegardless win=%p", (__bridge void *)self);
+        return;
+    }
     if (is_sdl_game_window(self) && should_suppress_focus_steal_or_fullscreen_exit()) {
         devlog_write("WIN", "SUPPRESSED orderFrontRegardless (active=%d nsActive=%d) win=%p",
                      gAppIsActive ? 1 : 0, (NSApp && [NSApp isActive]) ? 1 : 0, (__bridge void *)self);
@@ -1065,6 +1226,48 @@ static void swizzled_orderFrontRegardless(id self, SEL _cmd) {
     if (gOrigOrderFrontRegardlessIMP) {
         typedef void (*Fn)(id, SEL);
         ((Fn)gOrigOrderFrontRegardlessIMP)(self, _cmd);
+    }
+}
+
+static BOOL swizzled_canBecomeKeyWindow(id self, SEL _cmd) {
+    if (is_secondary_orphan_game_window(self)) {
+        return NO;
+    }
+    if (gOrigCanBecomeKeyWindowIMP) {
+        typedef BOOL (*Fn)(id, SEL);
+        return ((Fn)gOrigCanBecomeKeyWindowIMP)(self, _cmd);
+    }
+    return YES;
+}
+
+static BOOL swizzled_canBecomeMainWindow(id self, SEL _cmd) {
+    if (is_secondary_orphan_game_window(self)) {
+        return NO;
+    }
+    if (gOrigCanBecomeMainWindowIMP) {
+        typedef BOOL (*Fn)(id, SEL);
+        return ((Fn)gOrigCanBecomeMainWindowIMP)(self, _cmd);
+    }
+    return YES;
+}
+
+static void swizzled_focusSomeWindow(id self, SEL _cmd, NSNotification *notification) {
+    if (gPrimaryFullscreenWindow) {
+        neutralize_secondary_orphan_windows(gPrimaryFullscreenWindow);
+        devlog_write("WIN", "focusSomeWindow: redirected to primary fullscreen win=%p (isKey=%d)",
+                     (__bridge void *)gPrimaryFullscreenWindow,
+                     [gPrimaryFullscreenWindow isKeyWindow] ? 1 : 0);
+        if (![gPrimaryFullscreenWindow isKeyWindow] && gOrigMakeKeyAndOrderFrontIMP) {
+            typedef void (*Fn)(id, SEL, id);
+            ((Fn)gOrigMakeKeyAndOrderFrontIMP)(gPrimaryFullscreenWindow,
+                                               @selector(makeKeyAndOrderFront:),
+                                               nil);
+        }
+        return;
+    }
+    if (gOrigFocusSomeWindowIMP) {
+        typedef void (*Fn)(id, SEL, NSNotification *);
+        ((Fn)gOrigFocusSomeWindowIMP)(self, _cmd, notification);
     }
 }
 
@@ -1148,6 +1351,13 @@ static void sims2_trackpad_init(void) {
                                                                 @selector(activateIgnoringOtherApps:),
                                                                 (IMP)swizzled_activateIgnoringOtherApps);
 
+    Class appDelegateCls = objc_getClass("SDLAppDelegate");
+    if (appDelegateCls) {
+        gOrigFocusSomeWindowIMP = swizzle_instance_method(appDelegateCls,
+                                                          @selector(focusSomeWindow:),
+                                                          (IMP)swizzled_focusSomeWindow);
+    }
+
     Class evCls = [NSEvent class];
     gOrigButtonNumberIMP = swizzle_instance_method(evCls, @selector(buttonNumber), (IMP)swizzled_buttonNumber);
     gOrigEventModifierFlagsIMP = swizzle_instance_method(evCls, @selector(modifierFlags), (IMP)swizzled_eventModifierFlags);
@@ -1163,6 +1373,16 @@ static void sims2_trackpad_init(void) {
     gOrigMiniaturizeIMP = swizzle_instance_method(winCls, @selector(miniaturize:), (IMP)swizzled_miniaturize);
     gOrigMakeKeyAndOrderFrontIMP = swizzle_instance_method(winCls, @selector(makeKeyAndOrderFront:), (IMP)swizzled_makeKeyAndOrderFront);
     gOrigOrderFrontRegardlessIMP = swizzle_instance_method(winCls, @selector(orderFrontRegardless), (IMP)swizzled_orderFrontRegardless);
+
+    Class sdlWinCls = objc_getClass("SDLWindow");
+    if (sdlWinCls) {
+        gOrigCanBecomeKeyWindowIMP = swizzle_instance_method(sdlWinCls,
+                                                             @selector(canBecomeKeyWindow),
+                                                             (IMP)swizzled_canBecomeKeyWindow);
+        gOrigCanBecomeMainWindowIMP = swizzle_instance_method(sdlWinCls,
+                                                              @selector(canBecomeMainWindow),
+                                                              (IMP)swizzled_canBecomeMainWindow);
+    }
 
     Class listenerCls = objc_getClass("Cocoa_WindowListener");
     if (listenerCls) {
@@ -1216,6 +1436,7 @@ static void sims2_trackpad_init(void) {
         gAppIsActive = YES;
         gAppIsHiding = NO;
         gLastResignTimestamp = 0.0;
+        neutralize_secondary_orphan_windows(gPrimaryFullscreenWindow);
         devlog_write("APP", "WillBecomeActive");
     }];
     [nc addObserverForName:NSApplicationDidBecomeActiveNotification
@@ -1227,6 +1448,7 @@ static void sims2_trackpad_init(void) {
         gAppIsActive = YES;
         gAppIsHiding = NO;
         gLastResignTimestamp = 0.0;
+        neutralize_secondary_orphan_windows(gPrimaryFullscreenWindow);
         devlog_write("APP", "DidBecomeActive");
     }];
     [nc addObserverForName:NSApplicationWillHideNotification
@@ -1252,11 +1474,13 @@ static void sims2_trackpad_init(void) {
     NSString *bundleStr = [[NSBundle mainBundle] bundleIdentifier];
     const char *bundleId = bundleStr ? [bundleStr UTF8String] : "unknown";
     devlog_write("INIT",
-                 "pid=%d bundle=%s appHook=%d scrollHook=%d btnHook=%d modHook=%d mouseMoved=%d "
+                 "pid=%d bundle=%s appHook=%d focusHook=%d keyWinHook=%d scrollHook=%d btnHook=%d modHook=%d mouseMoved=%d "
                  "fsSpaceHook=%d miniHook=%d activateHook=%d rotKeys=(%u,%u) invert=%d ctrlOrbit=%d log=%s",
                  getpid(),
                  bundleId ? bundleId : "unknown",
                  gOrigNextEventIMP != NULL,
+                 gOrigFocusSomeWindowIMP != NULL,
+                 gOrigCanBecomeKeyWindowIMP != NULL,
                  gOrigScrollWheelIMP != NULL,
                  gOrigButtonNumberIMP != NULL,
                  gOrigEventModifierFlagsIMP != NULL,
@@ -1271,8 +1495,10 @@ static void sims2_trackpad_init(void) {
                  devLogPath[0] ? devLogPath : "disabled");
 
     log_msg([NSString stringWithFormat:
-             @"Loaded: appHook=%d scrollHook=%d btnHook=%d modHook=%d mouseMoved=%d fsSpaceHook=%d miniHook=%d activateHook=%d rotKeys=(%u,%u) invert=%d ctrlOrbit=%d",
+             @"Loaded: appHook=%d focusHook=%d keyWinHook=%d scrollHook=%d btnHook=%d modHook=%d mouseMoved=%d fsSpaceHook=%d miniHook=%d activateHook=%d rotKeys=(%u,%u) invert=%d ctrlOrbit=%d",
              gOrigNextEventIMP != NULL,
+             gOrigFocusSomeWindowIMP != NULL,
+             gOrigCanBecomeKeyWindowIMP != NULL,
              gOrigScrollWheelIMP != NULL,
              gOrigButtonNumberIMP != NULL,
              gOrigEventModifierFlagsIMP != NULL,
