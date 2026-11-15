@@ -86,6 +86,7 @@ static __weak id gWindowListener = nil;
 
 static BOOL gAppHasActivatedOnce = NO;
 static BOOL gAppIsActive = YES;
+static BOOL gAppIsHiding = NO;
 static BOOL gInFullscreenTransition = NO;
 static CFAbsoluteTime gLastResignTimestamp = 0.0;
 
@@ -992,15 +993,30 @@ static void swizzled_windowDidExitFullScreen(id self, SEL _cmd, NSNotification *
     }
 }
 
+static BOOL is_sdl_game_window(id winObj) {
+    if (!winObj || ![winObj isKindOfClass:[NSWindow class]]) {
+        return NO;
+    }
+    NSWindow *win = (NSWindow *)winObj;
+    id delegate = [win delegate];
+    Class listenerCls = objc_getClass("Cocoa_WindowListener");
+    if (delegate && listenerCls && [delegate isKindOfClass:listenerCls]) {
+        return YES;
+    }
+    return NO;
+}
+
 static BOOL swizzled_setFullscreenSpace(id self, SEL _cmd, BOOL state) {
     gWindowListener = self;
-    if (!state && should_suppress_focus_steal_or_fullscreen_exit()) {
+    if (!state && !gAppIsHiding && !(NSApp && [NSApp isHidden]) &&
+        should_suppress_focus_steal_or_fullscreen_exit()) {
         CFAbsoluteTime dt = (gLastResignTimestamp > 0.0) ? (CFAbsoluteTimeGetCurrent() - gLastResignTimestamp) : -1.0;
         devlog_write("WIN", "SUPPRESSED setFullscreenSpace:NO (active=%d nsActive=%d dt=%.3fs)",
                      gAppIsActive ? 1 : 0, (NSApp && [NSApp isActive]) ? 1 : 0, dt);
         return YES;
     }
-    devlog_write("WIN", "setFullscreenSpace:%d (active=%d)", state ? 1 : 0, gAppIsActive ? 1 : 0);
+    devlog_write("WIN", "setFullscreenSpace:%d (active=%d hiding=%d)",
+                 state ? 1 : 0, gAppIsActive ? 1 : 0, gAppIsHiding ? 1 : 0);
     if (gOrigSetFullscreenSpaceIMP) {
         typedef BOOL (*Fn)(id, SEL, BOOL);
         return ((Fn)gOrigSetFullscreenSpaceIMP)(self, _cmd, state);
@@ -1009,15 +1025,19 @@ static BOOL swizzled_setFullscreenSpace(id self, SEL _cmd, BOOL state) {
 }
 
 static void swizzled_miniaturize(id self, SEL _cmd, id sender) {
-    NSWindow *win = (NSWindow *)self;
-    BOOL isFullscreen = (([win styleMask] & NSWindowStyleMaskFullScreen) != 0);
-    if (isFullscreen || gInFullscreenTransition || should_suppress_focus_steal_or_fullscreen_exit()) {
-        devlog_write("WIN", "SUPPRESSED miniaturize: (fs=%d trans=%d active=%d) win=%p",
-                     isFullscreen ? 1 : 0, gInFullscreenTransition ? 1 : 0,
-                     gAppIsActive ? 1 : 0, (__bridge void *)win);
-        return;
+    if (is_sdl_game_window(self) && sender == nil) {
+        NSWindow *win = (NSWindow *)self;
+        BOOL isFullscreen = (([win styleMask] & NSWindowStyleMaskFullScreen) != 0);
+        if (isFullscreen || gInFullscreenTransition || should_suppress_focus_steal_or_fullscreen_exit()) {
+            devlog_write("WIN", "SUPPRESSED miniaturize: (fs=%d trans=%d active=%d) win=%p",
+                         isFullscreen ? 1 : 0, gInFullscreenTransition ? 1 : 0,
+                         gAppIsActive ? 1 : 0, (__bridge void *)win);
+            return;
+        }
     }
-    devlog_write("WIN", "miniaturize: win=%p", (__bridge void *)win);
+    if (is_sdl_game_window(self)) {
+        devlog_write("WIN", "miniaturize: sender=%p win=%p", (__bridge void *)sender, (__bridge void *)self);
+    }
     if (gOrigMiniaturizeIMP) {
         typedef void (*Fn)(id, SEL, id);
         ((Fn)gOrigMiniaturizeIMP)(self, _cmd, sender);
@@ -1025,7 +1045,7 @@ static void swizzled_miniaturize(id self, SEL _cmd, id sender) {
 }
 
 static void swizzled_makeKeyAndOrderFront(id self, SEL _cmd, id sender) {
-    if (should_suppress_focus_steal_or_fullscreen_exit()) {
+    if (is_sdl_game_window(self) && should_suppress_focus_steal_or_fullscreen_exit()) {
         devlog_write("WIN", "SUPPRESSED makeKeyAndOrderFront: (active=%d nsActive=%d) win=%p",
                      gAppIsActive ? 1 : 0, (NSApp && [NSApp isActive]) ? 1 : 0, (__bridge void *)self);
         return;
@@ -1037,7 +1057,7 @@ static void swizzled_makeKeyAndOrderFront(id self, SEL _cmd, id sender) {
 }
 
 static void swizzled_orderFrontRegardless(id self, SEL _cmd) {
-    if (should_suppress_focus_steal_or_fullscreen_exit()) {
+    if (is_sdl_game_window(self) && should_suppress_focus_steal_or_fullscreen_exit()) {
         devlog_write("WIN", "SUPPRESSED orderFrontRegardless (active=%d nsActive=%d) win=%p",
                      gAppIsActive ? 1 : 0, (NSApp && [NSApp isActive]) ? 1 : 0, (__bridge void *)self);
         return;
@@ -1194,6 +1214,7 @@ static void sims2_trackpad_init(void) {
         (void)note;
         gAppHasActivatedOnce = YES;
         gAppIsActive = YES;
+        gAppIsHiding = NO;
         gLastResignTimestamp = 0.0;
         devlog_write("APP", "WillBecomeActive");
     }];
@@ -1204,8 +1225,25 @@ static void sims2_trackpad_init(void) {
         (void)note;
         gAppHasActivatedOnce = YES;
         gAppIsActive = YES;
+        gAppIsHiding = NO;
         gLastResignTimestamp = 0.0;
         devlog_write("APP", "DidBecomeActive");
+    }];
+    [nc addObserverForName:NSApplicationWillHideNotification
+                    object:nil
+                     queue:nil
+                usingBlock:^(NSNotification *note) {
+        (void)note;
+        gAppIsHiding = YES;
+        devlog_write("APP", "WillHide");
+    }];
+    [nc addObserverForName:NSApplicationDidUnhideNotification
+                    object:nil
+                     queue:nil
+                usingBlock:^(NSNotification *note) {
+        (void)note;
+        gAppIsHiding = NO;
+        devlog_write("APP", "DidUnhide");
     }];
 
     uint16_t initLeft = 43, initRight = 47;
