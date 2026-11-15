@@ -30,7 +30,7 @@
 * ✅ **Migration des sauvegardes garantie sans écrasement :** Copie vos sauvegardes Sandbox via la **permission Automatisation Finder** vers `~/Library/Application Support/Aspyr/The Sims 2/` (ou vers `The Sims 2 (Sandbox Backup YYYY-MM-DD)` si des données actives existent déjà).
 * ✅ **Protection automatique `userProps.xml` (`v1.3.0`) :** Inspecte `activeDeviceDisplayMode`, crée une sauvegarde de retour (`Config/userProps.xml.backup`) avant toute retouche, et ne corrige que les modes invalides, absents de CoreGraphics/NSScreen ou ≠ 60 Hz / 32 bpp.
 * ✅ **Règles graphiques Retina / Apple Silicon (`Graphics Rules.sgr`) :** Sauvegarde l'original (`Graphics Rules.sgr.backup`), débloque les résolutions jusqu'à `5120x3200`, passe le profil par défaut en `$High` (effets, éclairage, ombres, matériaux) et relève le fallback VRAM (`textureMemory`) à `1024 Mo`.
-* ✅ **Module Trackpad natif MacBook (`libsims2_trackpad.dylib`) :** Auto-chargé dans `Sims2XP_Exe` via `LC_LOAD_WEAK_DYLIB` sans Xcode : **`Option (⌥)` + clic-glissé** = orbite 3D libre + inclinaison verticale (pitch), **pincement à 2 doigts** = zoom `+/-`, **swipe horizontal ou rotation à 2 doigts** = rotation caméra `,`/`.`.
+* ✅ **Module Trackpad natif MacBook (`libsims2_trackpad.dylib`) :** Auto-chargé dans `Sims2XP_Exe` via `LC_LOAD_WEAK_DYLIB` sans Xcode : **`Control (^)` + clic-glissé** = incliner / tourner l'angle de la caméra (orbite 3D & pitch), **`Option (⌥)` + glisser (ou clic-glissé)** = se déplacer sur la carte (curseur 4 flèches), **pincement à 2 doigts** = zoom `+/-`, **swipe horizontal ou rotation à 2 doigts** = rotation caméra `,`/`.`, et `Command+Tab` sans rebond vers le Bureau.
 * ✅ **Diagnostic Mods/CC & `maxfiles` (`v1.3.0`) :** Compte vos `.package` dans `Downloads/`, alerte si des `.zip`/`.rar`/`.7z` s'y trouvent ou si vous approchez du plafond de `10 240`, et propose `[o/N]` l'installation d'un `LaunchDaemon` géré uniquement si `launchctl limit maxfiles` hard < `10 240`.
 * ✅ **Utilitaire de maintenance à menu interactif (`clean_sims2_cache.command` `v1.3.0`) :** `[1]` Purger les caches *(Entrée par défaut)*, `[2]` Réinitialiser l'affichage `userProps.xml`, `[3]` Diagnostiquer les Mods & `maxfiles`, `[4]` Quitter.
 
@@ -111,9 +111,11 @@
 * **Diagnostic système `maxfiles` (`Sims2XP_Exe`):** `0x1000b2920`–`0x1000b2970` appelle `getrlimit(RLIMIT_NOFILE)` puis `setrlimit(RLIMIT_NOFILE, min(rlim_max, 0x2800 = 10240))`.
 * **Optimisation `Graphics Rules.sgr` :** Sauvegarde `Graphics Rules.sgr.backup`, relève `textureMemory` de `32` à `1024` Mo, débloque `maxResWidth`/`maxResHeight` jusqu'à `5120x3200`, et bascule `EffectsQuality`, `LightingQuality`, `Shadows` et `MaterialDetail` sur `$High`.
 * **Module Trackpad Cocoa natif (`trackpad_mod/libsims2_trackpad.dylib`) :** Injecté via `LC_LOAD_WEAK_DYLIB` (`@executable_path/libsims2_trackpad.dylib`) sans Xcode ni CLT :
-  - `Option (⌥)` + clic-glissé : émulation `SDL_BUTTON_MIDDLE` pour orbite 3D libre et inclinaison verticale (pitch).
+  - `Control (^)` + clic-glissé : émulation `SDL_BUTTON_MIDDLE` pour incliner et tourner l'angle de la caméra (orbite 3D libre & pitch).
+  - `Option (⌥)` + glisser (ou `Option` + clic-glissé) : déplacement panoramique caméra (curseur 4 flèches `cTSUserToolCameraHandDrag`) sans blocage du clic gauche.
   - Pincement à 2 doigts (`NSEventTypeMagnify`) : zoom `+/-`.
   - Swipe horizontal ou rotation à 2 doigts : rotation caméra `,`/`.`.
+  - Plein écran Space (`SDL_VIDEO_MAC_FULLSCREEN_SPACES=1`) + `SDL_VIDEO_MINIMIZE_ON_FOCUS_LOSS=0` (sans rebond au retour de `Command+Tab`).
 
 > *Ce projet est une initiative communautaire de préservation logicielle (article 5(1) de la directive européenne 2009/24/CE). Aucun binaire propriétaire n'est distribué ni aucun DRM contourné.*
 
@@ -140,7 +142,8 @@
 | **`restore_sims2.command`** | Official uninstaller: verifies `Sims2XP_Exe.backup`, atomically restores original binary and `Graphics Rules.sgr.backup`, removes `libsims2_trackpad.dylib`, re-signs strictly, and cleans `/Library/LaunchDaemons/limit.maxfiles.plist` **only** if tagged as managed by this patch. | **Yes** (when `/Applications` or managed plist exists) |
 
 ### Native MacBook Trackpad Controls (`libsims2_trackpad.dylib`)
-* **Option (`⌥`) + Click & Drag:** Free 3D camera orbit & vertical pitch (emulates middle mouse drag).
+* **Control (`^`) + Click & Drag:** Tilt & orbit the 3D camera freely (vertical pitch & orbit via middle mouse drag).
+* **Option (`⌥`) + Slide (or Click & Drag):** Pan / move across the neighborhood or lot (4-way arrow hand cursor).
 * **Two-Finger Pinch:** Zoom in/out (`+`/`-`).
 * **Two-Finger Horizontal Swipe or Rotate:** Smooth camera rotation (`,`/`.`).
 * **Retina & High Graphics (`Graphics Rules.sgr`):** Unlocks resolutions up to `5120x3200`, sets `$High` shadows/lighting/effects/material defaults, raises `textureMemory` fallback to `1024` MB, and preserves `Graphics Rules.sgr.backup`.

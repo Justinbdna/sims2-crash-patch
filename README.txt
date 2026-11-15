@@ -18,9 +18,10 @@
                                    fallback VRAM 1024 Mo, Graphics Rules.sgr.backup)
                                  • Installe & injecte le module Trackpad natif
                                    libsims2_trackpad.dylib via LC_LOAD_WEAK_DYLIB
-                                   sans Xcode (Option + clic-glissé = orbite 3D
-                                   libre + inclinaison verticale, pincement 2
-                                   doigts = zoom +/-, swipe/rotation 2 doigts = ,/.)
+                                   sans Xcode (Control + clic-glissé = inclinaison/
+                                   orbite 3D, Option + glisser ou clic-glissé = se
+                                   déplacer, pincement 2 doigts = zoom +/-,
+                                   swipe/rotation 2 doigts = ,/.)
                                  • Re-signe l'application proprement
                                  • Copie vos sauvegardes Sandbox sans écraser
                                  • Purge les caches corrompus (Actif + Sandbox)
@@ -195,8 +196,10 @@
    - Graphics Rules.sgr : sauvegarde Graphics Rules.sgr.backup, déblocage jusqu'à
      5120x3200, profil $High (ombres, éclairage, effets, matériaux), textureMemory 1024 Mo.
    - Trackpad natif (libsims2_trackpad.dylib) : chargé via LC_LOAD_WEAK_DYLIB
-     sans Xcode : Option (⌥) + clic-glissé = orbite 3D libre + inclinaison
-     verticale, pincement 2 doigts = zoom +/-, swipe horizontal / rotation 2 doigts = ,/.
+     sans Xcode : Control (^) + clic-glissé = inclinaison / orbite 3D libre,
+     Option (⌥) + glisser ou clic-glissé = se déplacer (curseur 4 flèches),
+     pincement 2 doigts = zoom +/-, swipe horizontal / rotation 2 doigts = ,/.,
+     SDL_VIDEO_MINIMIZE_ON_FOCUS_LOSS=0 (Cmd+Tab sans rebond vers le Bureau).
    - Ce projet est une initiative communautaire de préservation logicielle
      (article 5(1) de la directive européenne 2009/24/CE), sans distribution de
      fichiers du jeu ni contournement de DRM.
@@ -215,9 +218,9 @@
                                    saves Graphics Rules.sgr.backup)
                                  • Installs & injects native Trackpad module
                                    libsims2_trackpad.dylib via LC_LOAD_WEAK_DYLIB
-                                   without Xcode (Option + drag = free 3D orbit +
-                                   pitch, 2-finger pinch = zoom +/-, 2-finger
-                                   horizontal swipe/rotate = camera ,/.)
+                                   without Xcode (Control + drag = 3D orbit/tilt,
+                                   Option + slide or drag = camera pan, 2-finger
+                                   pinch = zoom +/-, 2-finger swipe/rotate = ,/.)
                                  • Re-signs app locally (ad-hoc, --strict check)
                                  • Copies Sandbox saves with zero overwrite
                                  • Purges corrupted caches (Active + Sandbox)

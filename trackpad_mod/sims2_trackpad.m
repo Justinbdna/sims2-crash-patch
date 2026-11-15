@@ -14,15 +14,17 @@
  *   2. Out-of-focus cursor grab/warp protection in Cocoa_WindowListener::mouseMoved:
  *   3. Two-finger pinch gesture (NSEventTypeMagnify) -> native scrollWheel zoom (layout-independent, non-inverted)
  *   4. Two-finger horizontal slide (scrollWheel X) & twist (NSEventTypeRotate) -> dynamic Carbon AZERTY/QWERTY camera rotation (, / .)
- *   5. Option (⌥) + left or right click-drag -> SDL_BUTTON_MIDDLE emulation (360° orbit & pitch) with Option flag stripped
- *   6. Axis lock & momentum suppression on horizontal swipes so zoom and rotation don't fight.
+ *   5. Control (^) + left or right click-drag -> SDL_BUTTON_MIDDLE emulation (360° orbit & pitch)
+ *   6. Option (⌥) + slide or click-drag -> native hand camera pan (4-way arrow cursor) without click cancellation
+ *   7. Axis lock & momentum suppression on horizontal swipes so zoom and rotation don't fight.
  *
  * Env config (optional overrides):
  *   SIMS2_ROTATE_INVERT=0|1      (default 0)
  *   SIMS2_ROTATE_STEP=<float>    (default 28.0 trackpad points per rotation step)
  *   SIMS2_TWIST_STEP=<float>     (default 12.0 degrees per rotation step)
  *   SIMS2_PINCH_STEP=<float>     (default 0.08 magnification units per zoom step)
- *   SIMS2_OPTION_ORBIT=0|1       (default 1, Option+drag emulates middle mouse button)
+ *   SIMS2_CTRL_ORBIT=0|1         (default 1, Control+drag emulates middle mouse button)
+ *   SIMS2_OPTION_ORBIT=0|1       (legacy fallback alias if SIMS2_CTRL_ORBIT is unset)
  *   SIMS2_TRACKPAD_DEBUG=0|1     (default 0, logs via NSLog)
  */
 
@@ -45,7 +47,6 @@ static IMP gOrigRightMouseDownIMP = NULL;
 static IMP gOrigRightMouseUpIMP = NULL;
 static IMP gOrigRightMouseDraggedIMP = NULL;
 static IMP gOrigMouseMovedIMP = NULL;
-static IMP gOrigFlagsChangedIMP = NULL;
 static IMP gOrigWindowDidResignKeyIMP = NULL;
 static IMP gOrigWindowWillExitFullScreenIMP = NULL;
 
@@ -59,10 +60,10 @@ static __weak NSEvent *gForcedNonInvertedEvent = nil;
 static BOOL gForceScrollNonInverted = NO;
 
 static BOOL gSpoofMiddleButton = NO;
-static BOOL gMaskOptionModifier = NO;
-static BOOL gOptionMiddleDragActive = NO;
-static BOOL gOptionDragWasRight = NO;
-static BOOL gSendingSyntheticFlags = NO;
+static BOOL gMaskControlModifier = NO;
+static BOOL gCtrlMiddleDragActive = NO;
+static BOOL gCtrlDragWasRight = NO;
+static BOOL gOptionHandPanActive = NO;
 static __weak NSWindow *gLastMouseDownWindow = nil;
 static __weak id gWindowListener = nil;
 
@@ -439,46 +440,22 @@ static void handle_magnify_event(NSEvent *event) {
     }
 }
 
-static void clear_sdl_option_modifier_state(id listener, NSEvent *baseEvent) {
-    if (gSendingSyntheticFlags) {
-        return;
+static NSEventModifierFlags raw_event_modifier_flags(NSEvent *event) {
+    if (!event) {
+        return 0;
     }
-    NSEventModifierFlags cleanFlags = ([baseEvent modifierFlags] & ~NSEventModifierFlagOption);
-    NSTimeInterval ts = [[NSProcessInfo processInfo] systemUptime];
-    NSWindow *win = [baseEvent window] ?: [NSApp keyWindow];
-    NSInteger winNum = win ? [win windowNumber] : 0;
-    NSEvent *flagsEv = [NSEvent keyEventWithType:NSEventTypeFlagsChanged
-                                        location:[baseEvent locationInWindow]
-                                   modifierFlags:cleanFlags
-                                       timestamp:ts
-                                    windowNumber:winNum
-                                         context:nil
-                                      characters:@""
-                     charactersIgnoringModifiers:@""
-                                       isARepeat:NO
-                                         keyCode:(uint16_t)kVK_Option];
-    if (!flagsEv) {
-        return;
-    }
-
-    gSendingSyntheticFlags = YES;
-    if (listener && gOrigFlagsChangedIMP) {
-        typedef void (*FlagsFn)(id, SEL, NSEvent *);
-        ((FlagsFn)gOrigFlagsChangedIMP)(listener, @selector(flagsChanged:), flagsEv);
-    } else if (NSApp) {
-        [NSApp sendEvent:flagsEv];
-    }
-    gSendingSyntheticFlags = NO;
+    typedef NSEventModifierFlags (*Fn)(id, SEL);
+    return gOrigEventModifierFlagsIMP ? ((Fn)gOrigEventModifierFlagsIMP)(event, @selector(modifierFlags)) : [event modifierFlags];
 }
 
-static void release_option_middle_drag(id listener) {
-    if (!gOptionMiddleDragActive) {
+static void release_ctrl_middle_drag(id listener) {
+    if (!gCtrlMiddleDragActive) {
         return;
     }
     NSWindow *win = gLastMouseDownWindow;
-    IMP upIMP = gOptionDragWasRight ? gOrigRightMouseUpIMP : gOrigMouseUpIMP;
-    SEL upSEL = gOptionDragWasRight ? @selector(rightMouseUp:) : @selector(mouseUp:);
-    NSEventType upType = gOptionDragWasRight ? NSEventTypeRightMouseUp : NSEventTypeLeftMouseUp;
+    IMP upIMP = gCtrlDragWasRight ? gOrigRightMouseUpIMP : gOrigMouseUpIMP;
+    SEL upSEL = gCtrlDragWasRight ? @selector(rightMouseUp:) : @selector(mouseUp:);
+    NSEventType upType = gCtrlDragWasRight ? NSEventTypeRightMouseUp : NSEventTypeLeftMouseUp;
 
     if (win && upIMP) {
         NSTimeInterval ts = [[NSProcessInfo processInfo] systemUptime];
@@ -494,14 +471,14 @@ static void release_option_middle_drag(id listener) {
         if (synthUp && listener) {
             typedef void (*MouseUpFn)(id, SEL, NSEvent *);
             gSpoofMiddleButton = YES;
-            gMaskOptionModifier = YES;
+            gMaskControlModifier = YES;
             ((MouseUpFn)upIMP)(listener, upSEL, synthUp);
             gSpoofMiddleButton = NO;
-            gMaskOptionModifier = NO;
+            gMaskControlModifier = NO;
         }
     }
-    gOptionMiddleDragActive = NO;
-    gOptionDragWasRight = NO;
+    gCtrlMiddleDragActive = NO;
+    gCtrlDragWasRight = NO;
     gLastMouseDownWindow = nil;
 }
 
@@ -517,6 +494,14 @@ static NSEvent *swizzled_nextEventMatchingMask(id self, SEL _cmd, NSEventMask ma
             handle_rotate_event(ev);
         } else if (t == NSEventTypeMagnify) {
             handle_magnify_event(ev);
+        } else if (t == NSEventTypeFlagsChanged) {
+            NSEventModifierFlags rawFlags = raw_event_modifier_flags(ev);
+            if (gCtrlMiddleDragActive && ((rawFlags & NSEventModifierFlagControl) == 0)) {
+                release_ctrl_middle_drag(resolve_window_listener());
+            }
+            if (gOptionHandPanActive && ((rawFlags & NSEventModifierFlagOption) == 0)) {
+                gOptionHandPanActive = NO;
+            }
         }
     }
     return ev;
@@ -553,8 +538,8 @@ static NSInteger swizzled_buttonNumber(id self, SEL _cmd) {
 static NSEventModifierFlags swizzled_eventModifierFlags(id self, SEL _cmd) {
     typedef NSEventModifierFlags (*Fn)(id, SEL);
     NSEventModifierFlags flags = gOrigEventModifierFlagsIMP ? ((Fn)gOrigEventModifierFlagsIMP)(self, _cmd) : 0;
-    if (gMaskOptionModifier || gOptionMiddleDragActive) {
-        flags &= ~NSEventModifierFlagOption;
+    if (gMaskControlModifier || gCtrlMiddleDragActive) {
+        flags &= ~NSEventModifierFlagControl;
     }
     return flags;
 }
@@ -562,8 +547,8 @@ static NSEventModifierFlags swizzled_eventModifierFlags(id self, SEL _cmd) {
 static NSEventModifierFlags swizzled_classModifierFlags(id self, SEL _cmd) {
     typedef NSEventModifierFlags (*Fn)(id, SEL);
     NSEventModifierFlags flags = gOrigClassModifierFlagsIMP ? ((Fn)gOrigClassModifierFlagsIMP)(self, _cmd) : 0;
-    if (gMaskOptionModifier || gOptionMiddleDragActive) {
-        flags &= ~NSEventModifierFlagOption;
+    if (gMaskControlModifier || gCtrlMiddleDragActive) {
+        flags &= ~NSEventModifierFlagControl;
     }
     return flags;
 }
@@ -576,86 +561,127 @@ static BOOL swizzled_isDirectionInvertedFromDevice(id self, SEL _cmd) {
     return gOrigIsDirectionInvertedIMP ? ((Fn)gOrigIsDirectionInvertedIMP)(self, _cmd) : NO;
 }
 
-static void handle_option_mouse_down(id self, SEL _cmd, NSEvent *event, IMP origIMP, BOOL isRight) {
+static void handle_camera_mouse_down(id self, SEL _cmd, NSEvent *event, IMP origIMP, BOOL isRight) {
     gWindowListener = self;
     typedef void (*Fn)(id, SEL, NSEvent *);
     if (!origIMP) {
         return;
     }
-    if (gEnableOptionOrbit && !gOptionMiddleDragActive && (([event modifierFlags] & NSEventModifierFlagOption) != 0)) {
-        clear_sdl_option_modifier_state(self, event);
-        gOptionMiddleDragActive = YES;
-        gOptionDragWasRight = isRight;
+    if (gSpoofMiddleButton) {
+        ((Fn)origIMP)(self, _cmd, event);
+        return;
+    }
+    NSEventModifierFlags rawFlags = raw_event_modifier_flags(event);
+    BOOL ctrlHeld = (rawFlags & NSEventModifierFlagControl) != 0;
+    BOOL optionHeld = (rawFlags & NSEventModifierFlagOption) != 0;
+
+    if (gEnableOptionOrbit && !gCtrlMiddleDragActive && ctrlHeld) {
+        gOptionHandPanActive = NO;
+        gCtrlMiddleDragActive = YES;
+        gCtrlDragWasRight = isRight;
         gLastMouseDownWindow = [event window];
         gSpoofMiddleButton = YES;
-        gMaskOptionModifier = YES;
+        gMaskControlModifier = YES;
         ((Fn)origIMP)(self, _cmd, event);
         gSpoofMiddleButton = NO;
-        gMaskOptionModifier = NO;
+        gMaskControlModifier = NO;
         return;
     }
+    if (gCtrlMiddleDragActive) {
+        return;
+    }
+    if (optionHeld && !ctrlHeld) {
+        gOptionHandPanActive = YES;
+        return;
+    }
+    gOptionHandPanActive = NO;
     ((Fn)origIMP)(self, _cmd, event);
 }
 
-static void handle_option_mouse_drag(id self, SEL _cmd, NSEvent *event, IMP origIMP, BOOL isRight) {
+static void handle_camera_mouse_drag(id self, SEL _cmd, NSEvent *event, IMP origIMP, BOOL isRight) {
     gWindowListener = self;
     typedef void (*Fn)(id, SEL, NSEvent *);
     if (!origIMP) {
         return;
     }
-    if (gOptionMiddleDragActive && (isRight == gOptionDragWasRight)) {
-        gSpoofMiddleButton = YES;
-        gMaskOptionModifier = YES;
+    NSEventModifierFlags rawFlags = raw_event_modifier_flags(event);
+    if (gCtrlMiddleDragActive) {
+        if ((rawFlags & NSEventModifierFlagControl) == 0) {
+            release_ctrl_middle_drag(self);
+            return;
+        }
+        if (isRight == gCtrlDragWasRight) {
+            gSpoofMiddleButton = YES;
+            gMaskControlModifier = YES;
+            ((Fn)origIMP)(self, _cmd, event);
+            gSpoofMiddleButton = NO;
+            gMaskControlModifier = NO;
+        }
+        return;
+    }
+    if (gOptionHandPanActive) {
+        if ((rawFlags & NSEventModifierFlagOption) == 0) {
+            gOptionHandPanActive = NO;
+            return;
+        }
         ((Fn)origIMP)(self, _cmd, event);
-        gSpoofMiddleButton = NO;
-        gMaskOptionModifier = NO;
         return;
     }
     ((Fn)origIMP)(self, _cmd, event);
 }
 
-static void handle_option_mouse_up(id self, SEL _cmd, NSEvent *event, IMP origIMP, BOOL isRight) {
+static void handle_camera_mouse_up(id self, SEL _cmd, NSEvent *event, IMP origIMP, BOOL isRight) {
     gWindowListener = self;
     typedef void (*Fn)(id, SEL, NSEvent *);
     if (!origIMP) {
         return;
     }
-    if (gOptionMiddleDragActive && (isRight == gOptionDragWasRight)) {
-        gOptionMiddleDragActive = NO;
-        gOptionDragWasRight = NO;
-        gLastMouseDownWindow = nil;
-        gSpoofMiddleButton = YES;
-        gMaskOptionModifier = YES;
+    if (gSpoofMiddleButton) {
         ((Fn)origIMP)(self, _cmd, event);
-        gSpoofMiddleButton = NO;
-        gMaskOptionModifier = NO;
+        return;
+    }
+    if (gCtrlMiddleDragActive) {
+        if (isRight == gCtrlDragWasRight) {
+            gCtrlMiddleDragActive = NO;
+            gCtrlDragWasRight = NO;
+            gLastMouseDownWindow = nil;
+            gSpoofMiddleButton = YES;
+            gMaskControlModifier = YES;
+            ((Fn)origIMP)(self, _cmd, event);
+            gSpoofMiddleButton = NO;
+            gMaskControlModifier = NO;
+        }
+        return;
+    }
+    if (gOptionHandPanActive) {
+        gOptionHandPanActive = NO;
         return;
     }
     ((Fn)origIMP)(self, _cmd, event);
 }
 
 static void swizzled_mouseDown(id self, SEL _cmd, NSEvent *event) {
-    handle_option_mouse_down(self, _cmd, event, gOrigMouseDownIMP, NO);
+    handle_camera_mouse_down(self, _cmd, event, gOrigMouseDownIMP, NO);
 }
 
 static void swizzled_mouseUp(id self, SEL _cmd, NSEvent *event) {
-    handle_option_mouse_up(self, _cmd, event, gOrigMouseUpIMP, NO);
+    handle_camera_mouse_up(self, _cmd, event, gOrigMouseUpIMP, NO);
 }
 
 static void swizzled_mouseDragged(id self, SEL _cmd, NSEvent *event) {
-    handle_option_mouse_drag(self, _cmd, event, gOrigMouseDraggedIMP, NO);
+    handle_camera_mouse_drag(self, _cmd, event, gOrigMouseDraggedIMP, NO);
 }
 
 static void swizzled_rightMouseDown(id self, SEL _cmd, NSEvent *event) {
-    handle_option_mouse_down(self, _cmd, event, gOrigRightMouseDownIMP, YES);
+    handle_camera_mouse_down(self, _cmd, event, gOrigRightMouseDownIMP, YES);
 }
 
 static void swizzled_rightMouseUp(id self, SEL _cmd, NSEvent *event) {
-    handle_option_mouse_up(self, _cmd, event, gOrigRightMouseUpIMP, YES);
+    handle_camera_mouse_up(self, _cmd, event, gOrigRightMouseUpIMP, YES);
 }
 
 static void swizzled_rightMouseDragged(id self, SEL _cmd, NSEvent *event) {
-    handle_option_mouse_drag(self, _cmd, event, gOrigRightMouseDraggedIMP, YES);
+    handle_camera_mouse_drag(self, _cmd, event, gOrigRightMouseDraggedIMP, YES);
 }
 
 /*
@@ -675,8 +701,9 @@ static void swizzled_mouseMoved(id self, SEL _cmd, NSEvent *event) {
 }
 
 static void reset_gesture_and_key_state(id listener) {
-    release_option_middle_drag(listener);
+    release_ctrl_middle_drag(listener);
     release_active_rotate_keys();
+    gOptionHandPanActive = NO;
     gScrollAxis = Sims2ScrollAxisNone;
     gIsTwisting = NO;
     gScrollAccumX = 0.0;
@@ -727,7 +754,7 @@ static void sims2_trackpad_init(void) {
     setenv("SDL_VIDEO_MAC_FULLSCREEN_SPACES", "1", 0);
     setenv("SDL_HINT_ALLOW_FULLSCREEN_NOTIFICATIONS", "1", 0);
     setenv("SDL_ALLOW_TOPMOST", "1", 0);
-    setenv("SDL_VIDEO_MINIMIZE_ON_FOCUS_LOSS", "1", 0);
+    setenv("SDL_VIDEO_MINIMIZE_ON_FOCUS_LOSS", "0", 1);
 
     const char *inv = getenv("SIMS2_ROTATE_INVERT");
     if (inv && inv[0] == '1') {
@@ -748,8 +775,10 @@ static void sims2_trackpad_init(void) {
         double v = atof(pinchStr);
         if (v >= 0.02 && v <= 0.50) gPinchStep = v;
     }
+    const char *ctrlOrbitStr = getenv("SIMS2_CTRL_ORBIT");
     const char *optOrbitStr = getenv("SIMS2_OPTION_ORBIT");
-    if (optOrbitStr && optOrbitStr[0] == '0') {
+    if ((ctrlOrbitStr && ctrlOrbitStr[0] == '0') ||
+        (!ctrlOrbitStr && optOrbitStr && optOrbitStr[0] == '0')) {
         gEnableOptionOrbit = NO;
     }
     const char *dbg = getenv("SIMS2_TRACKPAD_DEBUG");
@@ -786,10 +815,6 @@ static void sims2_trackpad_init(void) {
         gOrigRightMouseUpIMP = swizzle_instance_method(listenerCls, @selector(rightMouseUp:), (IMP)swizzled_rightMouseUp);
         gOrigRightMouseDraggedIMP = swizzle_instance_method(listenerCls, @selector(rightMouseDragged:), (IMP)swizzled_rightMouseDragged);
         gOrigMouseMovedIMP = swizzle_instance_method(listenerCls, @selector(mouseMoved:), (IMP)swizzled_mouseMoved);
-        Method flagsMethod = class_getInstanceMethod(listenerCls, @selector(flagsChanged:));
-        if (flagsMethod) {
-            gOrigFlagsChangedIMP = method_getImplementation(flagsMethod);
-        }
         gOrigWindowDidResignKeyIMP = swizzle_instance_method(listenerCls, @selector(windowDidResignKey:), (IMP)swizzled_windowDidResignKey);
         gOrigWindowWillExitFullScreenIMP = swizzle_instance_method(listenerCls, @selector(windowWillExitFullScreen:), (IMP)swizzled_windowWillExitFullScreen);
     }
@@ -798,7 +823,7 @@ static void sims2_trackpad_init(void) {
     resolve_camera_rotate_keycodes(&initLeft, &initRight);
 
     log_msg([NSString stringWithFormat:
-             @"Loaded: appHook=%d scrollHook=%d btnHook=%d modHook=%d mouseMoved=%d rotKeys=(%u,%u) invert=%d optOrbit=%d",
+             @"Loaded: appHook=%d scrollHook=%d btnHook=%d modHook=%d mouseMoved=%d rotKeys=(%u,%u) invert=%d ctrlOrbit=%d",
              gOrigNextEventIMP != NULL,
              gOrigScrollWheelIMP != NULL,
              gOrigButtonNumberIMP != NULL,
