@@ -12,16 +12,19 @@
                                    (/Applications ou ~/Applications)
                                  • Sauvegarde le binaire d'origine vérifié
                                    (Sims2XP_Exe.backup)
-                                 • Applique le double patch atomique 60 Hz
+                                 • Applique le patch atomique 60 Hz & affichage
+                                   plein écran (<= 2560x1600, fill sous encoche)
                                  • Optimise Graphics Rules.sgr (résolutions
-                                   jusqu'à 5120x3200, profil $High ombres/textures,
-                                   fallback VRAM 1024 Mo, Graphics Rules.sgr.backup)
+                                   jusqu'à 2560x1600, natif 1800x1169 par défaut,
+                                   profil $High ombres/textures, fallback VRAM
+                                   1024 Mo, Graphics Rules.sgr.backup)
                                  • Installe & injecte le module Trackpad natif
                                    libsims2_trackpad.dylib via LC_LOAD_WEAK_DYLIB
                                    sans Xcode (Control + clic-glissé = inclinaison/
-                                   orbite 3D, Option + glisser ou clic-glissé = se
-                                   déplacer, pincement 2 doigts = zoom +/-,
-                                   swipe/rotation 2 doigts = ,/.)
+                                   orbite 3D, Option natif conservé pour déplacer
+                                   la caméra, pincement 2 doigts = zoom +/-,
+                                   swipe/rotation 2 doigts = ,/., anti-rebond
+                                   Command+Tab & calage sous encoche)
                                  • Re-signe l'application proprement
                                  • Copie vos sauvegardes Sandbox sans écraser
                                  • Purge les caches corrompus (Actif + Sandbox)
@@ -149,7 +152,8 @@
    -> Chaque exécution des scripts enregistre un journal technique propre
       (0 % CPU en arrière-plan, aucun mot de passe enregistré) dans :
       ~/Library/Logs/Sims2-Crash-Patch/latest.log
-      Copiez-collez ce fichier (et Documents/Logs du jeu si besoin) !
+      En jeu, le module écrit aussi launch_boot.log et trackpad_events.log
+      dans ce même dossier. Copiez-collez ces fichiers si besoin !
 
    CAS 5 : Le jeu démarre mais mes anciens quartiers / familles semblent absents
    -> Regardez dans ~/Library/Application Support/Aspyr/ (Finder : menu Aller ->
@@ -190,16 +194,17 @@
       ne sont jamais supprimées).
 
 6. PRÉCISIONS TECHNIQUES & MENTION LÉGALE
-   - Patch binaire dual ancré dans FUN_1000fe510 (0xfe6dc -> 60 Hz / 0x3c dans R15D,
-     0xfe741 -> NOPs sur branche _CVDisplayLink). Zéro dépendance Xcode CLT
-     (/usr/bin/perl, /usr/bin/osascript, /usr/bin/codesign natifs uniquement).
+   - Patch binaire 60 Hz (FUN_1000fe510 : 0xfe6dc + 0xfe741) & affichage
+     plein écran (0x5e610, 0x1303243 <= 2560x1600, 0xa7619 fill sous encoche).
+     Zéro dépendance Xcode CLT (/usr/bin/perl, /usr/bin/osascript, /usr/bin/codesign).
    - Graphics Rules.sgr : sauvegarde Graphics Rules.sgr.backup, déblocage jusqu'à
-     5120x3200, profil $High (ombres, éclairage, effets, matériaux), textureMemory 1024 Mo.
-   - Trackpad natif (libsims2_trackpad.dylib) : chargé via LC_LOAD_WEAK_DYLIB
-     sans Xcode : Control (^) + clic-glissé = inclinaison / orbite 3D libre,
-     Option (⌥) + glisser ou clic-glissé = se déplacer (curseur 4 flèches),
-     pincement 2 doigts = zoom +/-, swipe horizontal / rotation 2 doigts = ,/.,
-     SDL_VIDEO_MINIMIZE_ON_FOCUS_LOSS=0 (Cmd+Tab sans rebond vers le Bureau).
+     2560x1600 (défaut natif 1800x1169), profil $High (ombres, éclairage, effets,
+     matériaux), textureMemory 1024 Mo.
+   - Trackpad & Affichage natif (libsims2_trackpad.dylib) : chargé via
+     LC_LOAD_WEAK_DYLIB sans Xcode : Control (^) + clic-glissé = inclinaison /
+     orbite 3D libre, Option (⌥) natif laissé au jeu, pincement 2 doigts = zoom +/-,
+     swipe horizontal / rotation 2 doigts = ,/., SDL_VIDEO_MINIMIZE_ON_FOCUS_LOSS=0
+     (Cmd+Tab sans rebond), calage NSScreen.visibleFrame & filtrage CoreGraphics.
    - Ce projet est une initiative communautaire de préservation logicielle
      (article 5(1) de la directive européenne 2009/24/CE), sans distribution de
      fichiers du jeu ni contournement de DRM.
@@ -212,15 +217,18 @@
                                  • Verifies Admin rights & locates app bundle
                                    (/Applications or ~/Applications)
                                  • Backs up verified original Sims2XP_Exe.backup
-                                 • Applies atomic dual 60 Hz lock patch
-                                 • Upgrades Graphics Rules.sgr (up to 5120x3200,
-                                   $High shadows/textures, 1024 MB VRAM fallback,
-                                   saves Graphics Rules.sgr.backup)
+                                 • Applies atomic 60 Hz lock & fullscreen display
+                                   patches (<= 2560x1600, notch fill)
+                                 • Upgrades Graphics Rules.sgr (up to 2560x1600,
+                                   1800x1169 native default, $High shadows/
+                                   textures, 1024 MB VRAM fallback, saves
+                                   Graphics Rules.sgr.backup)
                                  • Installs & injects native Trackpad module
                                    libsims2_trackpad.dylib via LC_LOAD_WEAK_DYLIB
                                    without Xcode (Control + drag = 3D orbit/tilt,
-                                   Option + slide or drag = camera pan, 2-finger
-                                   pinch = zoom +/-, 2-finger swipe/rotate = ,/.)
+                                   Option left native for game pan, 2-finger
+                                   pinch = zoom +/-, 2-finger swipe/rotate = ,/.,
+                                   Command+Tab & notch Space fixes)
                                  • Re-signs app locally (ad-hoc, --strict check)
                                  • Copies Sandbox saves with zero overwrite
                                  • Purges corrupted caches (Active + Sandbox)
@@ -280,9 +288,11 @@
      and drag Neighborhoods/Downloads into ~/Library/Application Support/Aspyr/The Sims 2/
      (or grant Full Disk Access to Terminal). Note: if you already have active
      saves in Application Support, you can still launch normally.
-   - Case 4B (Sharing diagnostic logs): Each script run saves a lightweight log
+   - Case 4B (Sharing diagnostic logs): Each script run writes a lightweight log
      (0% background CPU, zero passwords saved) to:
      ~/Library/Logs/Sims2-Crash-Patch/latest.log
+     In-game, the dylib also writes launch_boot.log and trackpad_events.log in
+     the same folder.
    - Case 5 (Old saves appear missing -> Sandbox Backup folder): Check
      ~/Library/Application Support/Aspyr/ for "The Sims 2 (Sandbox Backup ...)"
      and merge Neighborhoods/Downloads while the game is closed.
@@ -300,6 +310,7 @@
      App Store version reads ~/Library/Containers/com.aspyr.sims2.appstore/).
 
 5. TECHNICAL & LEGAL NOTICE
-   - Dual binary patch in FUN_1000fe510 (0xfe6dc + 0xfe741), zero Xcode CLT.
+   - 60 Hz binary patch (FUN_1000fe510: 0xfe6dc + 0xfe741) & display patches
+     (0x5e610, 0x1303243 <= 2560x1600, 0xa7619 notch fill), zero Xcode CLT.
    - Community software preservation under EU Directive 2009/24/EC Art. 5(1).
 ================================================================================
