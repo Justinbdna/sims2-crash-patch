@@ -231,37 +231,19 @@ var did = $.CGMainDisplayID();
 var cur = $.CGDisplayCopyDisplayMode(did);
 var curW = Math.round($.CGDisplayModeGetWidth(cur));
 var curH = Math.round($.CGDisplayModeGetHeight(cur));
-var catalog = [
-    "1280x720", "1280x800", "1440x900", "1512x945", "1600x900",
-    "1680x1050", "1728x1080", "1800x1125", "1920x1080", "1920x1200",
-    "2048x1280", "2056x1285", "2304x1440", "2560x1440", "2560x1600"
-];
-var notchedMap = {
-    "1024x665": "1280x800",
-    "1147x745": "1280x800",
-    "1280x832": "1280x800",
-    "1312x848": "1440x900",
-    "1352x878": "1440x900",
-    "1496x967": "1512x945",
-    "1512x982": "1512x945",
-    "1728x1117": "1728x1080",
-    "1800x1169": "1800x1125",
-    "2048x1330": "2048x1280",
-    "2056x1329": "2056x1285",
-    "2294x1490": "2304x1440"
+// Real macOS hardware modes only (no synthetic catalog): whitelist + current desktop mode.
+var whitelist = {
+    "1280x800": 1, "1440x900": 1, "1512x982": 1, "1680x1050": 1,
+    "1800x1169": 1, "2048x1280": 1, "2560x1600": 1,
+    "1728x1080": 1, "1920x1080": 1, "1920x1200": 1, "2560x1440": 1
 };
+var notchedMap = {};
 function isAllowedNonNotched(w, h) {
     if (w < 800 || h < 600 || w <= h || w > 2560 || h > 1600) return false;
-    var k = w + "x" + h;
-    if (notchedMap[k]) return false;
-    var asp = w / h;
-    if (asp > 1.52 && asp < 1.57) return false;
-    return true;
+    if (w === curW && h === curH) return true;
+    return whitelist[w + "x" + h] === 1;
 }
 var seen = {};
-for (var c = 0; c < catalog.length; c++) {
-    seen[catalog[c]] = 1;
-}
 if (isAllowedNonNotched(curW, curH)) seen[curW + "x" + curH] = 1;
 var optsDict = $.CFDictionaryCreateMutable($(), 1, $.kCFTypeDictionaryKeyCallBacks, $.kCFTypeDictionaryValueCallBacks);
 $.CFDictionarySetValue(optsDict, $.kCGDisplayShowDuplicateLowResolutionModes, $.kCFBooleanTrue);
@@ -273,9 +255,6 @@ if (arr && arr.count) {
         var h = Math.round($.CGDisplayModeGetHeight(m));
         if (isAllowedNonNotched(w, h)) {
             seen[w + "x" + h] = 1;
-            if (w >= 1920 && (w % 2 === 0) && (h % 2 === 0) && isAllowedNonNotched(w / 2, h / 2)) {
-                seen[(w / 2) + "x" + (h / 2)] = 1;
-            }
         }
     }
 }
@@ -301,8 +280,8 @@ if (notchedMap[curKey]) {
     curH = parseInt(mapped[1], 10);
 }
 if (curW > 2560 || curH > 1600) {
-    curW = 1800;
-    curH = 1125;
+    curW = 1280;
+    curH = 800;
 }
 if (curW > 0 && curH > 0) {
     "CUR=" + curW + "x" + curH + "\nMODES=" + Object.keys(seen).join(",");
@@ -404,27 +383,16 @@ if (defined $modes_csv && $modes_csv ne "") {
     }
 }
 
-my %notched_map = (
-    "1024x665"  => "1280x800",
-    "1147x745"  => "1280x800",
-    "1280x832"  => "1280x800",
-    "1312x848"  => "1440x900",
-    "1352x878"  => "1440x900",
-    "1496x967"  => "1512x945",
-    "1512x982"  => "1512x945",
-    "1728x1117" => "1728x1080",
-    "1800x1169" => "1800x1125",
-    "2048x1330" => "2048x1280",
-    "2056x1329" => "2056x1285",
-    "2294x1490" => "2304x1440",
-);
+# Native notched modes (1800x1169, 1512x982...) are kept as-is: the engine's
+# cDeviceEnumDX only accepts modes really exposed by macOS.
+my %notched_map = ();
 
 my $fallback_res = ($cur_res && $cur_res =~ /^\d+x\d+$/) ? $cur_res : "1280x800";
 if (exists $notched_map{$fallback_res} && $supported{$notched_map{$fallback_res}}) {
     $fallback_res = $notched_map{$fallback_res};
 }
 if ($fallback_res =~ /^(\d+)x(\d+)$/ && ($1 > 2560 || $2 > 1600)) {
-    $fallback_res = $supported{"1800x1125"} ? "1800x1125" : "1280x800";
+    $fallback_res = "1280x800";
 }
 my $target_mode = "";
 my $need_fix = 0;
