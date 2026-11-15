@@ -1,6 +1,9 @@
 #import <Cocoa/Cocoa.h>
 #import <Carbon/Carbon.h>
 #import <CoreGraphics/CoreGraphics.h>
+#import <mach-o/dyld.h>
+#import <mach-o/loader.h>
+#import <mach-o/nlist.h>
 #import <objc/runtime.h>
 #import <errno.h>
 #import <math.h>
@@ -8,6 +11,7 @@
 #import <stdarg.h>
 #import <stdio.h>
 #import <stdlib.h>
+#import <string.h>
 #import <sys/stat.h>
 #import <sys/time.h>
 #import <time.h>
@@ -1296,6 +1300,466 @@ static IMP swizzle_instance_method(Class cls, SEL sel, IMP newIMP) {
     return method_setImplementation(m, newIMP);
 }
 
+/*
+ * Calibrated multi-resolution display mode catalog (Phase 3).
+ *
+ * Hooks CoreGraphics display mode enumeration in the host MH_EXECUTE image's
+ * (__DATA,__la_symbol_ptr) so The Sims 2's in-game graphics dropdown exposes
+ * 15 clean calibrated resolutions (<= 2560x1600, excluding 3K/4K unreadable UI
+ * modes and notched-height modes such as 1800x1169 or 1512x982).
+ *
+ * Synthetic modes are full NSObject/CFRuntime instances implementing isEqual:
+ * and hash so SDL's GetDisplayMode CFEqual() checks and CGDisplayModeRetain /
+ * Release remain balanced and leak-free.
+ */
+
+@interface Sims2SyntheticDisplayMode : NSObject
+@property (nonatomic, readonly) size_t width;
+@property (nonatomic, readonly) size_t height;
+@property (nonatomic, readonly) size_t pixelWidth;
+@property (nonatomic, readonly) size_t pixelHeight;
+@property (nonatomic, readonly) double refreshRate;
+- (instancetype)initWithWidth:(size_t)w height:(size_t)h refreshRate:(double)hz;
+@end
+
+@implementation Sims2SyntheticDisplayMode
+
+- (instancetype)initWithWidth:(size_t)w height:(size_t)h refreshRate:(double)hz {
+    self = [super init];
+    if (self) {
+        _width = w;
+        _height = h;
+        _pixelWidth = w;
+        _pixelHeight = h;
+        _refreshRate = hz;
+    }
+    return self;
+}
+
+- (BOOL)isEqual:(id)object {
+    if (self == object) {
+        return YES;
+    }
+    if (![object isKindOfClass:[Sims2SyntheticDisplayMode class]]) {
+        return NO;
+    }
+    Sims2SyntheticDisplayMode *other = (Sims2SyntheticDisplayMode *)object;
+    return _width == other->_width &&
+           _height == other->_height &&
+           _pixelWidth == other->_pixelWidth &&
+           _pixelHeight == other->_pixelHeight &&
+           fabs(_refreshRate - other->_refreshRate) < 0.01;
+}
+
+- (NSUInteger)hash {
+    return ((NSUInteger)_width << 16) ^ (NSUInteger)_height ^ ((NSUInteger)_refreshRate << 1);
+}
+
+@end
+
+typedef struct {
+    size_t width;
+    size_t height;
+} Sims2CatalogResolution;
+
+static const Sims2CatalogResolution kSims2ResolutionCatalog[] = {
+    { 1280,  720 },
+    { 1280,  800 },
+    { 1440,  900 },
+    { 1512,  945 },
+    { 1600,  900 },
+    { 1680, 1050 },
+    { 1728, 1080 },
+    { 1800, 1125 },
+    { 1920, 1080 },
+    { 1920, 1200 },
+    { 2048, 1280 },
+    { 2056, 1285 },
+    { 2304, 1440 },
+    { 2560, 1440 },
+    { 2560, 1600 },
+};
+
+static const size_t kSims2CatalogCount =
+    sizeof(kSims2ResolutionCatalog) / sizeof(kSims2ResolutionCatalog[0]);
+
+static __strong Sims2SyntheticDisplayMode *
+    gSyntheticModes[sizeof(kSims2ResolutionCatalog) / sizeof(kSims2ResolutionCatalog[0])];
+static const void *
+    gSyntheticModePtrs[sizeof(kSims2ResolutionCatalog) / sizeof(kSims2ResolutionCatalog[0])] = { NULL };
+
+static void ensure_synthetic_modes(void) {
+    static dispatch_once_t onceToken;
+    dispatch_once(&onceToken, ^{
+        for (size_t i = 0; i < kSims2CatalogCount; i++) {
+            Sims2SyntheticDisplayMode *m =
+                [[Sims2SyntheticDisplayMode alloc]
+                    initWithWidth:kSims2ResolutionCatalog[i].width
+                           height:kSims2ResolutionCatalog[i].height
+                      refreshRate:60.0];
+            gSyntheticModes[i] = m;
+            gSyntheticModePtrs[i] = (__bridge const void *)m;
+        }
+    });
+}
+
+static Sims2SyntheticDisplayMode *lookup_synthetic_mode(CGDisplayModeRef mode) {
+    if (!mode) {
+        return nil;
+    }
+    ensure_synthetic_modes();
+    for (size_t i = 0; i < kSims2CatalogCount; i++) {
+        if (gSyntheticModePtrs[i] == (const void *)mode) {
+            return gSyntheticModes[i];
+        }
+    }
+    return nil;
+}
+
+static BOOL is_notched_or_disallowed_mode(size_t w, size_t h) {
+    if (w < 800 || h < 600 || w <= h) {
+        return YES;
+    }
+    if (w > 2560 || h > 1600) {
+        return YES;
+    }
+    if ((w == 1024 && h == 665) ||
+        (w == 1147 && h == 745) ||
+        (w == 1280 && h == 832) ||
+        (w == 1312 && h == 848) ||
+        (w == 1352 && h == 878) ||
+        (w == 1496 && h == 967) ||
+        (w == 1512 && h == 982) ||
+        (w == 1728 && h == 1117) ||
+        (w == 1800 && h == 1169) ||
+        (w == 2048 && h == 1330) ||
+        (w == 2056 && h == 1329) ||
+        (w == 2294 && h == 1490)) {
+        return YES;
+    }
+    double aspect = (double)w / (double)h;
+    if (aspect > 1.52 && aspect < 1.57) {
+        return YES;
+    }
+    return NO;
+}
+
+static BOOL is_32bit_argb_pixel_encoding(CGDisplayModeRef mode) {
+    if (!mode) {
+        return NO;
+    }
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wdeprecated-declarations"
+    CFStringRef enc = CGDisplayModeCopyPixelEncoding(mode);
+#pragma clang diagnostic pop
+    if (!enc) {
+        return NO;
+    }
+    BOOL ok = (CFStringCompare(enc, CFSTR("--------RRRRRRRRGGGGGGGGBBBBBBBB"),
+                               kCFCompareCaseInsensitive) == kCFCompareEqualTo);
+    CFRelease(enc);
+    return ok;
+}
+
+static CFArrayRef hook_CGDisplayCopyAllDisplayModes(CGDirectDisplayID display,
+                                                    CFDictionaryRef options) {
+    ensure_synthetic_modes();
+    CFArrayRef realModes = CGDisplayCopyAllDisplayModes(display, options);
+    CFMutableArrayRef result = CFArrayCreateMutable(kCFAllocatorDefault,
+                                                    (CFIndex)kSims2CatalogCount,
+                                                    &kCFTypeArrayCallBacks);
+    if (!result) {
+        return realModes;
+    }
+
+    CGDisplayModeRef bestReal[sizeof(kSims2ResolutionCatalog) / sizeof(kSims2ResolutionCatalog[0])];
+    double bestDelta[sizeof(kSims2ResolutionCatalog) / sizeof(kSims2ResolutionCatalog[0])];
+    BOOL bestIs1x[sizeof(kSims2ResolutionCatalog) / sizeof(kSims2ResolutionCatalog[0])];
+    for (size_t c = 0; c < kSims2CatalogCount; c++) {
+        bestReal[c] = NULL;
+        bestDelta[c] = 1e9;
+        bestIs1x[c] = NO;
+    }
+
+    if (realModes) {
+        CFIndex realCount = CFArrayGetCount(realModes);
+        for (CFIndex i = 0; i < realCount; i++) {
+            CGDisplayModeRef m = (CGDisplayModeRef)CFArrayGetValueAtIndex(realModes, i);
+            if (!m) {
+                continue;
+            }
+            size_t w = CGDisplayModeGetWidth(m);
+            size_t h = CGDisplayModeGetHeight(m);
+            if (is_notched_or_disallowed_mode(w, h)) {
+                continue;
+            }
+            if (!is_32bit_argb_pixel_encoding(m)) {
+                continue;
+            }
+
+            size_t catIdx = kSims2CatalogCount;
+            for (size_t c = 0; c < kSims2CatalogCount; c++) {
+                if (kSims2ResolutionCatalog[c].width == w &&
+                    kSims2ResolutionCatalog[c].height == h) {
+                    catIdx = c;
+                    break;
+                }
+            }
+            if (catIdx >= kSims2CatalogCount) {
+                continue;
+            }
+
+            double hz = CGDisplayModeGetRefreshRate(m);
+            double delta = fabs((hz > 0.1 ? hz : 60.0) - 60.0);
+            BOOL is1x = (CGDisplayModeGetPixelWidth(m) == w &&
+                         CGDisplayModeGetPixelHeight(m) == h);
+
+            if (!bestReal[catIdx] ||
+                (delta < bestDelta[catIdx] - 0.5) ||
+                (fabs(delta - bestDelta[catIdx]) <= 0.5 && is1x && !bestIs1x[catIdx])) {
+                bestReal[catIdx] = m;
+                bestDelta[catIdx] = delta;
+                bestIs1x[catIdx] = is1x;
+            }
+        }
+    }
+
+    size_t usedReal = 0;
+    size_t usedSynthetic = 0;
+    for (size_t c = 0; c < kSims2CatalogCount; c++) {
+        if (bestReal[c]) {
+            CFArrayAppendValue(result, bestReal[c]);
+            usedReal++;
+        } else {
+            CFArrayAppendValue(result, gSyntheticModePtrs[c]);
+            usedSynthetic++;
+        }
+    }
+
+    if (realModes) {
+        CFRelease(realModes);
+    }
+
+    static BOOL sLoggedEnum = NO;
+    if (!sLoggedEnum) {
+        sLoggedEnum = YES;
+        devlog_write("DISPLAY",
+                     "CGDisplayCopyAllDisplayModes(display=%u): catalog=%ld real=%zu synthetic=%zu",
+                     (unsigned)display, (long)CFArrayGetCount(result), usedReal, usedSynthetic);
+    }
+
+    return (CFArrayRef)result;
+}
+
+static size_t hook_CGDisplayModeGetWidth(CGDisplayModeRef mode) {
+    Sims2SyntheticDisplayMode *syn = lookup_synthetic_mode(mode);
+    if (syn) {
+        return syn.width;
+    }
+    return mode ? CGDisplayModeGetWidth(mode) : 0;
+}
+
+static size_t hook_CGDisplayModeGetHeight(CGDisplayModeRef mode) {
+    Sims2SyntheticDisplayMode *syn = lookup_synthetic_mode(mode);
+    if (syn) {
+        return syn.height;
+    }
+    return mode ? CGDisplayModeGetHeight(mode) : 0;
+}
+
+static size_t hook_CGDisplayModeGetPixelWidth(CGDisplayModeRef mode) {
+    Sims2SyntheticDisplayMode *syn = lookup_synthetic_mode(mode);
+    if (syn) {
+        return syn.pixelWidth;
+    }
+    return mode ? CGDisplayModeGetPixelWidth(mode) : 0;
+}
+
+static size_t hook_CGDisplayModeGetPixelHeight(CGDisplayModeRef mode) {
+    Sims2SyntheticDisplayMode *syn = lookup_synthetic_mode(mode);
+    if (syn) {
+        return syn.pixelHeight;
+    }
+    return mode ? CGDisplayModeGetPixelHeight(mode) : 0;
+}
+
+static double hook_CGDisplayModeGetRefreshRate(CGDisplayModeRef mode) {
+    Sims2SyntheticDisplayMode *syn = lookup_synthetic_mode(mode);
+    if (syn) {
+        return syn.refreshRate;
+    }
+    return mode ? CGDisplayModeGetRefreshRate(mode) : 0.0;
+}
+
+static CFStringRef hook_CGDisplayModeCopyPixelEncoding(CGDisplayModeRef mode) {
+    if (lookup_synthetic_mode(mode)) {
+        return (CFStringRef)CFRetain(CFSTR("--------RRRRRRRRGGGGGGGGBBBBBBBB"));
+    }
+    if (!mode) {
+        return NULL;
+    }
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wdeprecated-declarations"
+    return CGDisplayModeCopyPixelEncoding(mode);
+#pragma clang diagnostic pop
+}
+
+static CGDisplayModeRef hook_CGDisplayModeRetain(CGDisplayModeRef mode) {
+    if (!mode) {
+        return NULL;
+    }
+    if (lookup_synthetic_mode(mode)) {
+        return (CGDisplayModeRef)CFRetain(mode);
+    }
+    return CGDisplayModeRetain(mode);
+}
+
+static void hook_CGDisplayModeRelease(CGDisplayModeRef mode) {
+    if (!mode) {
+        return;
+    }
+    if (lookup_synthetic_mode(mode)) {
+        CFRelease(mode);
+        return;
+    }
+    CGDisplayModeRelease(mode);
+}
+
+static CGError hook_CGDisplaySetDisplayMode(CGDirectDisplayID display,
+                                            CGDisplayModeRef mode,
+                                            CFDictionaryRef options) {
+    Sims2SyntheticDisplayMode *syn = lookup_synthetic_mode(mode);
+    if (syn) {
+        devlog_write("DISPLAY",
+                     "CGDisplaySetDisplayMode synthetic %zux%zu accepted (Spaces FBO)",
+                     syn.width, syn.height);
+        return kCGErrorSuccess;
+    }
+    return CGDisplaySetDisplayMode(display, mode, options);
+}
+
+typedef struct {
+    const char *symbolName;
+    void *replacement;
+} Sims2SymbolHookEntry;
+
+static const Sims2SymbolHookEntry kSims2CoreGraphicsHooks[] = {
+    { "_CGDisplayCopyAllDisplayModes",   (void *)hook_CGDisplayCopyAllDisplayModes },
+    { "_CGDisplayModeGetWidth",          (void *)hook_CGDisplayModeGetWidth },
+    { "_CGDisplayModeGetHeight",         (void *)hook_CGDisplayModeGetHeight },
+    { "_CGDisplayModeGetPixelWidth",     (void *)hook_CGDisplayModeGetPixelWidth },
+    { "_CGDisplayModeGetPixelHeight",    (void *)hook_CGDisplayModeGetPixelHeight },
+    { "_CGDisplayModeGetRefreshRate",    (void *)hook_CGDisplayModeGetRefreshRate },
+    { "_CGDisplayModeCopyPixelEncoding", (void *)hook_CGDisplayModeCopyPixelEncoding },
+    { "_CGDisplayModeRetain",            (void *)hook_CGDisplayModeRetain },
+    { "_CGDisplayModeRelease",           (void *)hook_CGDisplayModeRelease },
+    { "_CGDisplaySetDisplayMode",        (void *)hook_CGDisplaySetDisplayMode },
+};
+
+static size_t hook_coregraphics_la_symbol_ptrs(void) {
+    const struct mach_header_64 *execHdr = NULL;
+    intptr_t execSlide = 0;
+
+    uint32_t imageCount = _dyld_image_count();
+    for (uint32_t i = 0; i < imageCount; i++) {
+        const struct mach_header *mh = _dyld_get_image_header(i);
+        if (mh && mh->magic == MH_MAGIC_64 && mh->filetype == MH_EXECUTE) {
+            execHdr = (const struct mach_header_64 *)mh;
+            execSlide = _dyld_get_image_vmaddr_slide(i);
+            break;
+        }
+    }
+    if (!execHdr) {
+        return 0;
+    }
+
+    const struct segment_command_64 *linkeditCmd = NULL;
+    const struct symtab_command *symtabCmd = NULL;
+    const struct dysymtab_command *dysymtabCmd = NULL;
+    const struct section_64 *symPtrSections[8];
+    size_t symPtrSectionCount = 0;
+
+    const uint8_t *cmdPtr = (const uint8_t *)(execHdr + 1);
+    for (uint32_t i = 0; i < execHdr->ncmds; i++) {
+        const struct load_command *lc = (const struct load_command *)cmdPtr;
+        if (lc->cmdsize < sizeof(struct load_command)) {
+            break;
+        }
+        if (lc->cmd == LC_SEGMENT_64) {
+            const struct segment_command_64 *seg = (const struct segment_command_64 *)cmdPtr;
+            if (strcmp(seg->segname, SEG_LINKEDIT) == 0) {
+                linkeditCmd = seg;
+            } else if (strcmp(seg->segname, SEG_DATA) == 0 &&
+                       (seg->initprot & VM_PROT_WRITE) != 0) {
+                const struct section_64 *sects = (const struct section_64 *)(seg + 1);
+                for (uint32_t s = 0; s < seg->nsects; s++) {
+                    uint32_t stype = sects[s].flags & SECTION_TYPE;
+                    if ((stype == S_LAZY_SYMBOL_POINTERS || stype == S_NON_LAZY_SYMBOL_POINTERS) &&
+                        symPtrSectionCount < (sizeof(symPtrSections) / sizeof(symPtrSections[0]))) {
+                        symPtrSections[symPtrSectionCount++] = &sects[s];
+                    }
+                }
+            }
+        } else if (lc->cmd == LC_SYMTAB) {
+            symtabCmd = (const struct symtab_command *)cmdPtr;
+        } else if (lc->cmd == LC_DYSYMTAB) {
+            dysymtabCmd = (const struct dysymtab_command *)cmdPtr;
+        }
+        cmdPtr += lc->cmdsize;
+    }
+
+    if (!linkeditCmd || !symtabCmd || !dysymtabCmd ||
+        symPtrSectionCount == 0 || dysymtabCmd->nindirectsyms == 0) {
+        return 0;
+    }
+
+    uintptr_t linkeditBase =
+        (uintptr_t)linkeditCmd->vmaddr + (uintptr_t)execSlide - (uintptr_t)linkeditCmd->fileoff;
+    const struct nlist_64 *symtab =
+        (const struct nlist_64 *)(linkeditBase + (uintptr_t)symtabCmd->symoff);
+    const char *strtab =
+        (const char *)(linkeditBase + (uintptr_t)symtabCmd->stroff);
+    const uint32_t *indirectSymtab =
+        (const uint32_t *)(linkeditBase + (uintptr_t)dysymtabCmd->indirectsymoff);
+
+    const size_t hookTableCount =
+        sizeof(kSims2CoreGraphicsHooks) / sizeof(kSims2CoreGraphicsHooks[0]);
+    size_t hookedCount = 0;
+
+    for (size_t s = 0; s < symPtrSectionCount; s++) {
+        const struct section_64 *sect = symPtrSections[s];
+        uint32_t indirectOff = sect->reserved1;
+        size_t ptrCount = (size_t)(sect->size / sizeof(void *));
+        if (indirectOff > dysymtabCmd->nindirectsyms ||
+            ptrCount > (size_t)(dysymtabCmd->nindirectsyms - indirectOff)) {
+            continue;
+        }
+
+        void **ptrs = (void **)((uintptr_t)sect->addr + (uintptr_t)execSlide);
+        for (size_t j = 0; j < ptrCount; j++) {
+            uint32_t symIdx = indirectSymtab[indirectOff + j];
+            if ((symIdx & (INDIRECT_SYMBOL_ABS | INDIRECT_SYMBOL_LOCAL)) != 0 ||
+                symIdx >= symtabCmd->nsyms) {
+                continue;
+            }
+            uint32_t strx = symtab[symIdx].n_un.n_strx;
+            if (strx == 0 || strx >= symtabCmd->strsize) {
+                continue;
+            }
+            const char *symName = strtab + strx;
+            for (size_t h = 0; h < hookTableCount; h++) {
+                if (strcmp(symName, kSims2CoreGraphicsHooks[h].symbolName) == 0) {
+                    ptrs[j] = kSims2CoreGraphicsHooks[h].replacement;
+                    hookedCount++;
+                    break;
+                }
+            }
+        }
+    }
+
+    return hookedCount;
+}
+
 __attribute__((constructor))
 static void sims2_trackpad_init(void) {
     char devLogPath[600];
@@ -1470,12 +1934,13 @@ static void sims2_trackpad_init(void) {
 
     uint16_t initLeft = 43, initRight = 47;
     resolve_camera_rotate_keycodes(&initLeft, &initRight);
+    size_t cgHooks = hook_coregraphics_la_symbol_ptrs();
 
     NSString *bundleStr = [[NSBundle mainBundle] bundleIdentifier];
     const char *bundleId = bundleStr ? [bundleStr UTF8String] : "unknown";
     devlog_write("INIT",
                  "pid=%d bundle=%s appHook=%d focusHook=%d keyWinHook=%d scrollHook=%d btnHook=%d modHook=%d mouseMoved=%d "
-                 "fsSpaceHook=%d miniHook=%d activateHook=%d rotKeys=(%u,%u) invert=%d ctrlOrbit=%d log=%s",
+                 "fsSpaceHook=%d miniHook=%d activateHook=%d cgHooks=%zu rotKeys=(%u,%u) invert=%d ctrlOrbit=%d log=%s",
                  getpid(),
                  bundleId ? bundleId : "unknown",
                  gOrigNextEventIMP != NULL,
@@ -1488,6 +1953,7 @@ static void sims2_trackpad_init(void) {
                  gOrigSetFullscreenSpaceIMP != NULL,
                  gOrigMiniaturizeIMP != NULL,
                  gOrigActivateIgnoringOtherAppsIMP != NULL,
+                 cgHooks,
                  initLeft,
                  initRight,
                  gInvertRotation,
@@ -1495,7 +1961,7 @@ static void sims2_trackpad_init(void) {
                  devLogPath[0] ? devLogPath : "disabled");
 
     log_msg([NSString stringWithFormat:
-             @"Loaded: appHook=%d focusHook=%d keyWinHook=%d scrollHook=%d btnHook=%d modHook=%d mouseMoved=%d fsSpaceHook=%d miniHook=%d activateHook=%d rotKeys=(%u,%u) invert=%d ctrlOrbit=%d",
+             @"Loaded: appHook=%d focusHook=%d keyWinHook=%d scrollHook=%d btnHook=%d modHook=%d mouseMoved=%d fsSpaceHook=%d miniHook=%d activateHook=%d cgHooks=%zu rotKeys=(%u,%u) invert=%d ctrlOrbit=%d",
              gOrigNextEventIMP != NULL,
              gOrigFocusSomeWindowIMP != NULL,
              gOrigCanBecomeKeyWindowIMP != NULL,
@@ -1506,6 +1972,7 @@ static void sims2_trackpad_init(void) {
              gOrigSetFullscreenSpaceIMP != NULL,
              gOrigMiniaturizeIMP != NULL,
              gOrigActivateIgnoringOtherAppsIMP != NULL,
+             cgHooks,
              initLeft,
              initRight,
              gInvertRotation,

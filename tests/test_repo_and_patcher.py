@@ -705,11 +705,13 @@ class TestMacScriptsIntegrity(unittest.TestCase):
 
             patched_text = grules.read_text(encoding="utf-8")
             self.assertIn("1024", patched_text)
-            self.assertIn("5120", patched_text)
-            self.assertIn("3200", patched_text)
+            self.assertIn("2560", patched_text)
+            self.assertIn("1600", patched_text)
             self.assertIn("$High", patched_text)
             self.assertNotIn("seti textureMemory       32", patched_text)
             self.assertNotIn("2048", patched_text)
+            self.assertNotIn("5120", patched_text)
+            self.assertNotIn("3200", patched_text)
             self.assertNotIn("$Medium", patched_text)
 
             # Second call must be strictly idempotent and keep original backup intact
@@ -720,6 +722,19 @@ class TestMacScriptsIntegrity(unittest.TestCase):
                 grules_bak.as_posix(),
             )
             self.assertEqual(r2.returncode, 0, r2.stderr or r2.stdout)
+            self.assertEqual(grules.read_text(encoding="utf-8"), patched_text)
+            self.assertEqual(grules_bak.read_text(encoding="utf-8"), sample_grules)
+
+            # Phase 1/2 already-patched 5120x3200 must upgrade cleanly to 2560x1600
+            legacy_phase2 = patched_text.replace("2560", "5120").replace("1600", "3200")
+            grules.write_text(legacy_phase2, encoding="utf-8")
+            r_upgrade = self._run_bash_lib(
+                "patch_sims2.command",
+                'patch_graphics_rules_sgr "$1" "$2"',
+                grules.as_posix(),
+                grules_bak.as_posix(),
+            )
+            self.assertEqual(r_upgrade.returncode, 0, r_upgrade.stderr or r_upgrade.stdout)
             self.assertEqual(grules.read_text(encoding="utf-8"), patched_text)
             self.assertEqual(grules_bak.read_text(encoding="utf-8"), sample_grules)
 
@@ -892,15 +907,302 @@ class TestMacScriptsIntegrity(unittest.TestCase):
         self.assertIn("gForcedNonInvertedEvent", src_m)
         self.assertIn("resolve_window_listener", src_m)
 
+        # Phase 3 CoreGraphics __DATA,__la_symbol_ptr catalog hooks (15 calibrated modes, <= 2560x1600, no 3K/4K, no notch)
+        self.assertIn("Sims2SyntheticDisplayMode", src_m)
+        self.assertIn("hook_coregraphics_la_symbol_ptrs", src_m)
+        self.assertIn("S_LAZY_SYMBOL_POINTERS", src_m)
+        self.assertIn("--------RRRRRRRRGGGGGGGGBBBBBBBB", src_m)
+        for cg_sym in (
+            "_CGDisplayCopyAllDisplayModes",
+            "_CGDisplayModeGetWidth",
+            "_CGDisplayModeGetHeight",
+            "_CGDisplayModeGetPixelWidth",
+            "_CGDisplayModeGetPixelHeight",
+            "_CGDisplayModeGetRefreshRate",
+            "_CGDisplayModeCopyPixelEncoding",
+            "_CGDisplayModeRetain",
+            "_CGDisplayModeRelease",
+            "_CGDisplaySetDisplayMode",
+        ):
+            self.assertIn(cg_sym, src_m)
+        for cat_pair in (
+            "{ 1280,  720 }",
+            "{ 1280,  800 }",
+            "{ 1440,  900 }",
+            "{ 1512,  945 }",
+            "{ 1600,  900 }",
+            "{ 1680, 1050 }",
+            "{ 1728, 1080 }",
+            "{ 1800, 1125 }",
+            "{ 1920, 1080 }",
+            "{ 1920, 1200 }",
+            "{ 2048, 1280 }",
+            "{ 2056, 1285 }",
+            "{ 2304, 1440 }",
+            "{ 2560, 1440 }",
+            "{ 2560, 1600 }",
+        ):
+            self.assertIn(cat_pair, src_m)
+
         # Compiled dylib header check (Mach-O 64-bit x86_64 MH_DYLIB)
         raw = dylib.read_bytes()
         magic, cputype, _, filetype = struct.unpack_from("<IIII", raw, 0)
         self.assertEqual(magic, 0xFEEDFACF)
         self.assertEqual(cputype, 0x01000007)
         self.assertEqual(filetype, 6)
+        for cg_sym in (
+            b"CGDisplayCopyAllDisplayModes",
+            b"CGDisplayModeCopyPixelEncoding",
+            b"CGDisplayModeGetWidth",
+            b"CGDisplayModeGetHeight",
+            b"CGDisplayModeGetPixelWidth",
+            b"CGDisplayModeGetPixelHeight",
+            b"CGDisplayModeGetRefreshRate",
+            b"CGDisplayModeRetain",
+            b"CGDisplayModeRelease",
+            b"CGDisplaySetDisplayMode",
+            b"Sims2SyntheticDisplayMode",
+        ):
+            self.assertIn(cg_sym, raw)
         if sys.platform == "darwin":
             cs = subprocess.run(["codesign", "--verify", "--strict", dylib.as_posix()], capture_output=True, text=True)
             self.assertEqual(cs.returncode, 0, cs.stderr)
+
+    def test_v14_option_a_userprops_and_graphics_rules_1800x1125(self) -> None:
+        if not vp.find_perl():
+            self.skipTest("perl not available on PATH")
+
+        sample_tmpl = (
+            '<?xml version="1.0" encoding="utf-8"?>\n'
+            "<cGZPersistDBSegment>\n"
+            '  <AnyString key="activeDeviceDisplayMode" type="0x0b8bea18">{mode}</AnyString>\n'
+            '  <AnyBoolean key="usePixelAspectRatio" type="0xcba908e1">true</AnyBoolean>\n'
+            "</cGZPersistDBSegment>\n"
+        )
+
+        for script in ("patch_sims2.command", "clean_sims2_cache.command"):
+            with tempfile.TemporaryDirectory() as tmp:
+                base = Path(tmp)
+                xml = base / "userProps.xml"
+                orig_text = sample_tmpl.format(mode="1800x1169x32x60")
+                xml.write_text(orig_text, encoding="utf-8")
+
+                # 1. Notched 1800x1169 upgrades cleanly to Option A 1800x1125 when 1800x1125 is supported
+                r1 = self._run_bash_lib(
+                    script,
+                    'repair_userprops_xml "$1" "1800x1169" "1800x1169,1800x1125,1440x900,1280x800" 0',
+                    xml.as_posix(),
+                )
+                self.assertEqual(r1.returncode, 0, r1.stderr or r1.stdout)
+                updated_text = xml.read_text(encoding="utf-8")
+                self.assertIn(">1800x1125x32x60<", updated_text)
+                self.assertIn(">true<", updated_text)
+                bak = Path(str(xml) + ".backup")
+                self.assertEqual(bak.read_text(encoding="utf-8"), orig_text)
+
+                # 2. Idempotent re-run at 1800x1125x32x60
+                r2 = self._run_bash_lib(
+                    script,
+                    'repair_userprops_xml "$1" "1800x1125" "1800x1169,1800x1125,1440x900,1280x800" 0',
+                    xml.as_posix(),
+                )
+                self.assertEqual(r2.returncode, 0, r2.stderr or r2.stdout)
+                self.assertEqual(xml.read_text(encoding="utf-8"), updated_text)
+
+                # 3. Custom supported resolution (1440x900 & 2560x1440) preserved when force_reset=0, resets to 1800x1125 on force_reset=1
+                xml.write_text(sample_tmpl.format(mode="1440x900x32x60"), encoding="utf-8")
+                r_keep = self._run_bash_lib(
+                    script,
+                    'repair_userprops_xml "$1" "1800x1169" "1800x1125,1440x900,2560x1440,1280x800" 0',
+                    xml.as_posix(),
+                )
+                self.assertEqual(r_keep.returncode, 0)
+                self.assertIn(">1440x900x32x60<", xml.read_text(encoding="utf-8"))
+
+                # 3K/4K resolution must be rejected back to 1800x1125
+                xml.write_text(sample_tmpl.format(mode="3024x1964x32x60"), encoding="utf-8")
+                r_cap = self._run_bash_lib(
+                    script,
+                    'repair_userprops_xml "$1" "1800x1169" "1800x1125,1440x900,2560x1440,1280x800" 0',
+                    xml.as_posix(),
+                )
+                self.assertEqual(r_cap.returncode, 0)
+                self.assertIn(">1800x1125x32x60<", xml.read_text(encoding="utf-8"))
+
+                r_reset = self._run_bash_lib(
+                    script,
+                    'repair_userprops_xml "$1" "1800x1169" "1800x1125,1440x900,2560x1440,1280x800" 1',
+                    xml.as_posix(),
+                )
+                self.assertEqual(r_reset.returncode, 0)
+                self.assertIn(">1800x1125x32x60<", xml.read_text(encoding="utf-8"))
+
+        real_like_grules = (
+            "seti textureMemory       32\n"
+            "option ScreenModeResolution\n"
+            "   setting $Low\n"
+            "      uintProp maxResWidth      2048\n"
+            "      uintProp maxResHeight     2048\n"
+            "      uintProp defaultResWidth  800\n"
+            "      uintProp defaultResHeight 600\n"
+            "   setting $Medium\n"
+            "      uintProp maxResWidth      2048\n"
+            "      uintProp maxResHeight     2048\n"
+            "      uintProp defaultResWidth  1024\n"
+            "      uintProp defaultResHeight 768\n"
+            "   setting $High\n"
+            "      uintProp maxResWidth      2048\n"
+            "      uintProp maxResHeight     2048\n"
+            "      uintProp defaultResWidth  1024\n"
+            "      uintProp defaultResHeight 768\n"
+            "end\n"
+            "# Override defaults (SIM-281,416)\n"
+            "setOption EffectsQuality        $Medium\n"
+            "intProp configParserErrorCode 0\n"
+        )
+
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp)
+            grules = base / "Graphics Rules.sgr"
+            grules_bak = base / "Graphics Rules.sgr.backup"
+            grules.write_text(real_like_grules, encoding="utf-8")
+
+            r_gr1 = self._run_bash_lib(
+                "patch_sims2.command",
+                'patch_graphics_rules_sgr "$1" "$2" 1800 1125',
+                grules.as_posix(),
+                grules_bak.as_posix(),
+            )
+            self.assertEqual(r_gr1.returncode, 0, r_gr1.stderr or r_gr1.stdout)
+            patched_gr = grules.read_text(encoding="utf-8")
+            self.assertIn("uintProp defaultResWidth  1800", patched_gr)
+            self.assertIn("uintProp defaultResHeight 1125", patched_gr)
+            self.assertIn("uintProp defaultResWidth  800", patched_gr)
+            # $Medium keeps its original 1024x768 default while $High shifts to 1800x1125 and maxRes is capped at 2560x1600
+            self.assertIn("setting $Medium\n      uintProp maxResWidth      2560\n      uintProp maxResHeight     1600\n      uintProp defaultResWidth  1024", patched_gr)
+            self.assertIn("intProp configParserErrorCode 0", patched_gr)
+            self.assertEqual(grules_bak.read_text(encoding="utf-8"), real_like_grules)
+
+            # Second run must be strictly idempotent
+            r_gr2 = self._run_bash_lib(
+                "patch_sims2.command",
+                'patch_graphics_rules_sgr "$1" "$2" 1800 1125',
+                grules.as_posix(),
+                grules_bak.as_posix(),
+            )
+            self.assertEqual(r_gr2.returncode, 0, r_gr2.stderr or r_gr2.stdout)
+            self.assertEqual(grules.read_text(encoding="utf-8"), patched_gr)
+            self.assertIn("OK:already_patched", r_gr2.stdout + r_gr2.stderr)
+
+            # Phase 1/2 5120x3200 file upgrades cleanly to 2560x1600 while preserving default 1800x1125
+            grules.write_text(patched_gr.replace("2560", "5120").replace("1600", "3200"), encoding="utf-8")
+            r_gr3 = self._run_bash_lib(
+                "patch_sims2.command",
+                'patch_graphics_rules_sgr "$1" "$2" 1800 1125',
+                grules.as_posix(),
+                grules_bak.as_posix(),
+            )
+            self.assertEqual(r_gr3.returncode, 0, r_gr3.stderr or r_gr3.stdout)
+            self.assertEqual(grules.read_text(encoding="utf-8"), patched_gr)
+
+    def test_v14_option_a_binary_display_patch_and_restore_guard(self) -> None:
+        perl_bin = vp.find_perl()
+        if not perl_bin:
+            self.skipTest("perl not available on PATH")
+
+        orig_asl = bytes.fromhex("39f17fd04139f87fcb")
+        repl_asl = bytes.fromhex("39f190904139f89090")
+        orig_val_p0 = bytes.fromhex("0f57c9f3480f2ac9f3480f2ad0f30f5eca0f2ec10f8538ffffff7b40")
+        orig_val_p2 = bytes.fromhex("0f57c9f3480f2ac9f3480f2ad0f30f5eca3b45c077063b4dc4764190")
+        repl_val_p3 = bytes.fromhex("3d000a0000771581f940060000770deb4b9090909090909090909090")
+        orig_stretch = bytes.fromhex("e86277fbff84c074108b43183b45f0")
+        repl_stretch = bytes.fromhex("e86277fbff84c0eb108b43183b45f0")
+
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_dir = Path(tmp)
+            exe = tmp_dir / "Sims2XP_Exe"
+            pristine = (
+                b"\x00" * 32
+                + ORIG1
+                + b"\x90" * 16
+                + ORIG2
+                + b"\x90" * 16
+                + orig_asl
+                + b"\x90" * 16
+                + orig_stretch
+                + b"\x90" * 16
+                + orig_val_p0
+                + b"\xff" * 32
+            )
+            exe.write_bytes(pristine)
+
+            r1 = self._run_bash_lib(
+                "patch_sims2.command",
+                'patch_option_a_display_binary "$1"',
+                exe.as_posix(),
+            )
+            self.assertEqual(r1.returncode, 0, r1.stderr or r1.stdout)
+            patched = exe.read_bytes()
+            self.assertIn(repl_asl, patched)
+            self.assertIn(repl_val_p3, patched)
+            self.assertIn(repl_stretch, patched)
+            self.assertNotIn(orig_asl, patched)
+            self.assertNotIn(orig_val_p0, patched)
+            self.assertNotIn(orig_stretch, patched)
+            # 60Hz bytes remain completely untouched
+            self.assertIn(ORIG1, patched)
+            self.assertIn(ORIG2, patched)
+
+            # Second run must be idempotent
+            r2 = self._run_bash_lib(
+                "patch_sims2.command",
+                'patch_option_a_display_binary "$1"',
+                exe.as_posix(),
+            )
+            self.assertEqual(r2.returncode, 0, r2.stderr or r2.stdout)
+            self.assertEqual(exe.read_bytes(), patched)
+
+            # Phase 2 -> Phase 3 upgrade path must preserve Option A stretch & 60Hz bytes
+            exe_p2 = tmp_dir / "Sims2XP_Exe_p2"
+            phase2_bin = (
+                b"\x00" * 32
+                + ORIG1
+                + b"\x90" * 16
+                + ORIG2
+                + b"\x90" * 16
+                + orig_asl
+                + b"\x90" * 16
+                + repl_stretch
+                + b"\x90" * 16
+                + orig_val_p2
+                + b"\xff" * 32
+            )
+            exe_p2.write_bytes(phase2_bin)
+            r_p2 = self._run_bash_lib(
+                "patch_sims2.command",
+                'patch_option_a_display_binary "$1"',
+                exe_p2.as_posix(),
+            )
+            self.assertEqual(r_p2.returncode, 0, r_p2.stderr or r_p2.stdout)
+            self.assertEqual(exe_p2.read_bytes(), patched)
+
+            # restore_sims2.command is_pristine_binary must reject binaries containing Phase 2 or Phase 3 patches
+            restore_blocks = vp.extract_perl_blocks((ROOT_DIR / "restore_sims2.command").read_text(encoding="utf-8"))
+            restore_pl = tmp_dir / "check_pristine.pl"
+            restore_pl.write_text(restore_blocks[0], encoding="utf-8")
+            self.assertEqual(subprocess.run([perl_bin, str(restore_pl), str(exe)]).returncode, 1)
+            exe_p2.write_bytes(phase2_bin)
+            self.assertEqual(subprocess.run([perl_bin, str(restore_pl), str(exe_p2)]).returncode, 1)
+
+            bad_exe = tmp_dir / "BadExe"
+            bad_exe.write_bytes(b"\xcc" * 128)
+            r_bad = self._run_bash_lib(
+                "patch_sims2.command",
+                'patch_option_a_display_binary "$1"',
+                bad_exe.as_posix(),
+            )
+            self.assertNotEqual(r_bad.returncode, 0)
+            self.assertEqual(bad_exe.read_bytes(), b"\xcc" * 128)
 
 
 

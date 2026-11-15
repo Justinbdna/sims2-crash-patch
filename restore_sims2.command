@@ -309,11 +309,19 @@ my $orig1 = pack("H*", "f20f1045d0f2440f2cf84889df");
 my $repl1 = pack("H*", "41bf3c000000909090904889df");
 my $orig2 = pack("H*", "41bf3c000000440f45f8c70300000000");
 my $repl2 = pack("H*", "41bf3c00000090909090c70300000000");
+my $repl_asl     = pack("H*", "39f190904139f89090");
+my $repl_aspect  = pack("H*", "3b45c077063b4dc4764190");
+my $repl_val_p3  = pack("H*", "3d000a0000771581f940060000770deb4b9090909090909090909090");
+my $repl_stretch = pack("H*", "e86277fbff84c0eb108b43183b45f0");
 
 if (count_occurrences($buf, $orig1) == 1 &&
     count_occurrences($buf, $orig2) == 1 &&
     count_occurrences($buf, $repl1) == 0 &&
     count_occurrences($buf, $repl2) == 0 &&
+    index($buf, $repl_asl) == -1 &&
+    index($buf, $repl_aspect) == -1 &&
+    index($buf, $repl_val_p3) == -1 &&
+    index($buf, $repl_stretch) == -1 &&
     index($buf, "libsims2_trackpad.dylib") == -1) {
     exit 0;
 }
