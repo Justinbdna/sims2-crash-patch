@@ -860,7 +860,7 @@ class TestMacScriptsIntegrity(unittest.TestCase):
         self.assertIn("![NSApp isActive]", src_m)
         self.assertIn("![win isKeyWindow]", src_m)
 
-        # Brique 3 layout-independent pinch zoom, Carbon AZERTY/QWERTY rotation, Control-orbit & Option-pan
+        # Brique 3 layout-independent pinch zoom, Carbon AZERTY/QWERTY rotation, Control-orbit & Cmd+Tab anti-bounce
         self.assertIn("CGEventCreateScrollWheelEvent", src_m)
         self.assertIn("gForceScrollNonInverted", src_m)
         self.assertIn("TISCopyCurrentKeyboardLayoutInputSource", src_m)
@@ -873,9 +873,14 @@ class TestMacScriptsIntegrity(unittest.TestCase):
         self.assertIn("rightMouseDown:", src_m)
         self.assertIn("rightMouseDragged:", src_m)
         self.assertIn("mouseDragged:", src_m)
+        self.assertIn("gCtrlMiddleDragActive", src_m)
         self.assertIn("!gCtrlMiddleDragActive", src_m)
         self.assertIn("isRight == gCtrlDragWasRight", src_m)
-        self.assertIn("gOptionHandPanActive", src_m)
+        self.assertNotIn("gOptionHandPanActive", src_m)
+        self.assertIn("trackpad_events.log", src_m)
+        self.assertIn("swizzled_setFullscreenSpace", src_m)
+        self.assertIn("swizzled_miniaturize", src_m)
+        self.assertIn("swizzled_activateIgnoringOtherApps", src_m)
         self.assertIn("raw_event_modifier_flags", src_m)
         self.assertIn("gSuppressedScrollEvent", src_m)
         self.assertIn("gForcedNonInvertedEvent", src_m)
