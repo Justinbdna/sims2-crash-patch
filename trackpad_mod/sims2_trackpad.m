@@ -1,6 +1,7 @@
 #import <Cocoa/Cocoa.h>
 #import <Carbon/Carbon.h>
 #import <CoreGraphics/CoreGraphics.h>
+#import <dlfcn.h>
 #import <mach-o/dyld.h>
 #import <mach-o/loader.h>
 #import <mach-o/nlist.h>
@@ -29,6 +30,8 @@
  *   5. Control (^) + left or right click-drag -> SDL_BUTTON_MIDDLE emulation (360° orbit & pitch)
  *   6. Native Option (⌥) camera hand-drag left untouched for the base game
  *   7. Axis lock & momentum suppression on horizontal swipes + developer event log (trackpad_events.log)
+ *   8. Permanent boot journal (launch_boot.log), including C++ __cxa_throw
+ *   9. Fullscreen geometry locked to NSScreen.visibleFrame under the notch, with a 1512x982 Retina fallback
  *
  * Env config (optional overrides):
  *   SIMS2_ROTATE_INVERT=0|1      (default 0)
@@ -39,6 +42,8 @@
  *   SIMS2_OPTION_ORBIT=0|1       (legacy fallback alias if SIMS2_CTRL_ORBIT is unset)
  *   SIMS2_TRACKPAD_DEBUG=0|1     (default 0, logs via NSLog)
  *   SIMS2_TRACKPAD_DEVLOG=0|1    (default 1, writes ~/Library/Logs/Sims2-Crash-Patch/trackpad_events.log)
+ *
+ * launch_boot.log is always written during development (not gated by SIMS2_TRACKPAD_DEVLOG).
  */
 
 typedef NS_ENUM(NSInteger, Sims2ScrollAxis) {
@@ -101,6 +106,14 @@ static CFAbsoluteTime gLastResignTimestamp = 0.0;
 static FILE *gDevLogFile = NULL;
 static BOOL gDevLogEnabled = YES;
 static pthread_mutex_t gDevLogMutex = PTHREAD_MUTEX_INITIALIZER;
+static FILE *gBootLogFile = NULL;
+static pthread_mutex_t gBootLogMutex = PTHREAD_MUTEX_INITIALIZER;
+static intptr_t gExecSlide = 0;
+static BOOL gNotchFitInProgress = NO;
+static NSRect gNotchTargetFrame = {{0, 0}, {0, 0}};
+static int gNotchClampAttempts = 0;
+static const CGFloat kSims2RetinaFallbackWidth = 1512.0;
+static const CGFloat kSims2RetinaFallbackHeight = 982.0;
 static CFAbsoluteTime gLastOptionHoverLogTime = 0.0;
 static CFAbsoluteTime gLastScrollLogTime = 0.0;
 static CFAbsoluteTime gLastPinchLogTime = 0.0;
@@ -1301,148 +1314,116 @@ static IMP swizzle_instance_method(Class cls, SEL sel, IMP newIMP) {
 }
 
 /*
- * Calibrated multi-resolution display mode catalog (Phase 3).
+ * Real hardware display-mode filter, NSWindow visibleFrame alignment & permanent
+ * boot diagnostics (launch_boot.log).
  *
- * Hooks CoreGraphics display mode enumeration in the host MH_EXECUTE image's
- * (__DATA,__la_symbol_ptr) so The Sims 2's in-game graphics dropdown exposes
- * 15 clean calibrated resolutions (<= 2560x1600, excluding 3K/4K unreadable UI
- * modes and notched-height modes such as 1800x1169 or 1512x982).
- *
- * Synthetic modes are full NSObject/CFRuntime instances implementing isEqual:
- * and hash so SDL's GetDisplayMode CFEqual() checks and CGDisplayModeRetain /
- * Release remain balanced and leak-free.
+ * The previous synthetic CGDisplayModeRef catalog crashed cDeviceEnumDX at boot
+ * (uncaught N11nGZGraphic46cErrorE thrown at 0x10081cfc1). This block keeps ONLY
+ * genuine CoreGraphics hardware modes (zero fake objects), filtered to a
+ * readable whitelist (<= 2560x1600, no 3K/4K), always preserving the desktop
+ * mode (e.g. 1800x1169) and exposing the 1512x982 Retina fallback cleanly.
  */
 
-@interface Sims2SyntheticDisplayMode : NSObject
-@property (nonatomic, readonly) size_t width;
-@property (nonatomic, readonly) size_t height;
-@property (nonatomic, readonly) size_t pixelWidth;
-@property (nonatomic, readonly) size_t pixelHeight;
-@property (nonatomic, readonly) double refreshRate;
-- (instancetype)initWithWidth:(size_t)w height:(size_t)h refreshRate:(double)hz;
-@end
+static void bootlog_write(const char *category, const char *fmt, ...) __attribute__((format(printf, 2, 3)));
 
-@implementation Sims2SyntheticDisplayMode
-
-- (instancetype)initWithWidth:(size_t)w height:(size_t)h refreshRate:(double)hz {
-    self = [super init];
-    if (self) {
-        _width = w;
-        _height = h;
-        _pixelWidth = w;
-        _pixelHeight = h;
-        _refreshRate = hz;
+static void bootlog_write(const char *category, const char *fmt, ...) {
+    if (!gBootLogFile || !fmt) {
+        return;
     }
-    return self;
+    struct timeval tv;
+    gettimeofday(&tv, NULL);
+    time_t sec = tv.tv_sec;
+    struct tm tm_info;
+    localtime_r(&sec, &tm_info);
+
+    char msgBuf[1536];
+    va_list ap;
+    va_start(ap, fmt);
+    vsnprintf(msgBuf, sizeof(msgBuf), fmt, ap);
+    va_end(ap);
+
+    pthread_mutex_lock(&gBootLogMutex);
+    if (gBootLogFile) {
+        fprintf(gBootLogFile, "[%02d:%02d:%02d.%03d] [%s] %s\n",
+                tm_info.tm_hour, tm_info.tm_min, tm_info.tm_sec, (int)(tv.tv_usec / 1000),
+                category ? category : "LOG", msgBuf);
+        fflush(gBootLogFile);
+    }
+    pthread_mutex_unlock(&gBootLogMutex);
 }
 
-- (BOOL)isEqual:(id)object {
-    if (self == object) {
-        return YES;
+static void bootlog_init(void) {
+    const char *home = getenv("HOME");
+    if (!home || home[0] == '\0') {
+        NSString *nsHome = NSHomeDirectory();
+        home = nsHome ? [nsHome UTF8String] : NULL;
     }
-    if (![object isKindOfClass:[Sims2SyntheticDisplayMode class]]) {
-        return NO;
+    if (!home || home[0] == '\0') {
+        return;
     }
-    Sims2SyntheticDisplayMode *other = (Sims2SyntheticDisplayMode *)object;
-    return _width == other->_width &&
-           _height == other->_height &&
-           _pixelWidth == other->_pixelWidth &&
-           _pixelHeight == other->_pixelHeight &&
-           fabs(_refreshRate - other->_refreshRate) < 0.01;
+    char dir[512];
+    char logPath[600];
+    char prevPath[600];
+    snprintf(dir, sizeof(dir), "%s/Library", home);
+    ensure_dir_exists(dir);
+    snprintf(dir, sizeof(dir), "%s/Library/Logs", home);
+    ensure_dir_exists(dir);
+    snprintf(dir, sizeof(dir), "%s/Library/Logs/Sims2-Crash-Patch", home);
+    ensure_dir_exists(dir);
+    snprintf(logPath, sizeof(logPath), "%s/launch_boot.log", dir);
+    snprintf(prevPath, sizeof(prevPath), "%s/launch_boot.previous.log", dir);
+
+    struct stat st;
+    if (stat(logPath, &st) == 0) {
+        rename(logPath, prevPath);
+    }
+    FILE *fp = fopen(logPath, "w");
+    if (!fp) {
+        return;
+    }
+    pthread_mutex_lock(&gBootLogMutex);
+    gBootLogFile = fp;
+    pthread_mutex_unlock(&gBootLogMutex);
 }
 
-- (NSUInteger)hash {
-    return ((NSUInteger)_width << 16) ^ (NSUInteger)_height ^ ((NSUInteger)_refreshRate << 1);
+static void bootlog_userprops(void) {
+    NSString *path = [NSHomeDirectory() stringByAppendingPathComponent:
+                      @"Library/Application Support/Aspyr/The Sims 2/Config/userProps.xml"];
+    NSString *xml = [NSString stringWithContentsOfFile:path encoding:NSUTF8StringEncoding error:NULL];
+    if (!xml) {
+        bootlog_write("USERPROPS", "absent or unreadable: %s", [path UTF8String]);
+        return;
+    }
+    NSRange keyRange = [xml rangeOfString:@"key=\"activeDeviceDisplayMode\""];
+    if (keyRange.location == NSNotFound) {
+        bootlog_write("USERPROPS", "activeDeviceDisplayMode key missing (auto-detect)");
+        return;
+    }
+    NSRange searchRange = NSMakeRange(keyRange.location, xml.length - keyRange.location);
+    NSRange gt = [xml rangeOfString:@">" options:0 range:searchRange];
+    NSRange lt = (gt.location != NSNotFound)
+        ? [xml rangeOfString:@"<" options:0 range:NSMakeRange(gt.location, xml.length - gt.location)]
+        : NSMakeRange(NSNotFound, 0);
+    if (gt.location == NSNotFound || lt.location == NSNotFound || lt.location <= gt.location) {
+        bootlog_write("USERPROPS", "activeDeviceDisplayMode unparsable");
+        return;
+    }
+    NSString *val = [xml substringWithRange:NSMakeRange(gt.location + 1, lt.location - gt.location - 1)];
+    bootlog_write("USERPROPS", "activeDeviceDisplayMode=%s", [val UTF8String]);
 }
-
-@end
 
 typedef struct {
     size_t width;
     size_t height;
 } Sims2CatalogResolution;
 
-static const Sims2CatalogResolution kSims2ResolutionCatalog[] = {
-    { 1280,  720 },
-    { 1280,  800 },
-    { 1440,  900 },
-    { 1512,  945 },
-    { 1600,  900 },
-    { 1680, 1050 },
-    { 1728, 1080 },
-    { 1800, 1125 },
-    { 1920, 1080 },
-    { 1920, 1200 },
-    { 2048, 1280 },
-    { 2056, 1285 },
-    { 2304, 1440 },
-    { 2560, 1440 },
-    { 2560, 1600 },
+static const Sims2CatalogResolution kSims2ResolutionWhitelist[] = {
+    { 1280,  800 }, { 1440,  900 }, { 1512,  982 }, { 1680, 1050 },
+    { 1800, 1169 }, { 2048, 1280 }, { 2560, 1600 },
+    { 1728, 1080 }, { 1920, 1080 }, { 1920, 1200 }, { 2560, 1440 },
 };
-
-static const size_t kSims2CatalogCount =
-    sizeof(kSims2ResolutionCatalog) / sizeof(kSims2ResolutionCatalog[0]);
-
-static __strong Sims2SyntheticDisplayMode *
-    gSyntheticModes[sizeof(kSims2ResolutionCatalog) / sizeof(kSims2ResolutionCatalog[0])];
-static const void *
-    gSyntheticModePtrs[sizeof(kSims2ResolutionCatalog) / sizeof(kSims2ResolutionCatalog[0])] = { NULL };
-
-static void ensure_synthetic_modes(void) {
-    static dispatch_once_t onceToken;
-    dispatch_once(&onceToken, ^{
-        for (size_t i = 0; i < kSims2CatalogCount; i++) {
-            Sims2SyntheticDisplayMode *m =
-                [[Sims2SyntheticDisplayMode alloc]
-                    initWithWidth:kSims2ResolutionCatalog[i].width
-                           height:kSims2ResolutionCatalog[i].height
-                      refreshRate:60.0];
-            gSyntheticModes[i] = m;
-            gSyntheticModePtrs[i] = (__bridge const void *)m;
-        }
-    });
-}
-
-static Sims2SyntheticDisplayMode *lookup_synthetic_mode(CGDisplayModeRef mode) {
-    if (!mode) {
-        return nil;
-    }
-    ensure_synthetic_modes();
-    for (size_t i = 0; i < kSims2CatalogCount; i++) {
-        if (gSyntheticModePtrs[i] == (const void *)mode) {
-            return gSyntheticModes[i];
-        }
-    }
-    return nil;
-}
-
-static BOOL is_notched_or_disallowed_mode(size_t w, size_t h) {
-    if (w < 800 || h < 600 || w <= h) {
-        return YES;
-    }
-    if (w > 2560 || h > 1600) {
-        return YES;
-    }
-    if ((w == 1024 && h == 665) ||
-        (w == 1147 && h == 745) ||
-        (w == 1280 && h == 832) ||
-        (w == 1312 && h == 848) ||
-        (w == 1352 && h == 878) ||
-        (w == 1496 && h == 967) ||
-        (w == 1512 && h == 982) ||
-        (w == 1728 && h == 1117) ||
-        (w == 1800 && h == 1169) ||
-        (w == 2048 && h == 1330) ||
-        (w == 2056 && h == 1329) ||
-        (w == 2294 && h == 1490)) {
-        return YES;
-    }
-    double aspect = (double)w / (double)h;
-    if (aspect > 1.52 && aspect < 1.57) {
-        return YES;
-    }
-    return NO;
-}
+static const size_t kSims2WhitelistCount =
+    sizeof(kSims2ResolutionWhitelist) / sizeof(kSims2ResolutionWhitelist[0]);
 
 static BOOL is_32bit_argb_pixel_encoding(CGDisplayModeRef mode) {
     if (!mode) {
@@ -1461,181 +1442,270 @@ static BOOL is_32bit_argb_pixel_encoding(CGDisplayModeRef mode) {
     return ok;
 }
 
+static BOOL is_whitelisted_or_desktop(size_t w, size_t h, size_t curW, size_t curH) {
+    if (w < 800 || h < 600 || w <= h || w > 2560 || h > 1600) {
+        return NO;
+    }
+    if ((w == curW && h == curH) ||
+        (w == (size_t)kSims2RetinaFallbackWidth && h == (size_t)kSims2RetinaFallbackHeight)) {
+        return YES;
+    }
+    for (size_t i = 0; i < kSims2WhitelistCount; i++) {
+        if (kSims2ResolutionWhitelist[i].width == w && kSims2ResolutionWhitelist[i].height == h) {
+            return YES;
+        }
+    }
+    return NO;
+}
+
 static CFArrayRef hook_CGDisplayCopyAllDisplayModes(CGDirectDisplayID display,
                                                     CFDictionaryRef options) {
-    ensure_synthetic_modes();
     CFArrayRef realModes = CGDisplayCopyAllDisplayModes(display, options);
-    CFMutableArrayRef result = CFArrayCreateMutable(kCFAllocatorDefault,
-                                                    (CFIndex)kSims2CatalogCount,
-                                                    &kCFTypeArrayCallBacks);
+    if (!realModes) {
+        bootlog_write("DISPLAY", "CGDisplayCopyAllDisplayModes(display=%u) -> NULL", (unsigned)display);
+        return NULL;
+    }
+
+    size_t curW = 0, curH = 0;
+    CGDisplayModeRef cur = CGDisplayCopyDisplayMode(display);
+    if (cur) {
+        curW = CGDisplayModeGetWidth(cur);
+        curH = CGDisplayModeGetHeight(cur);
+        CGDisplayModeRelease(cur);
+    }
+
+    CFIndex realCount = CFArrayGetCount(realModes);
+    CFMutableArrayRef result = CFArrayCreateMutable(kCFAllocatorDefault, 0, &kCFTypeArrayCallBacks);
     if (!result) {
         return realModes;
     }
 
-    CGDisplayModeRef bestReal[sizeof(kSims2ResolutionCatalog) / sizeof(kSims2ResolutionCatalog[0])];
-    double bestDelta[sizeof(kSims2ResolutionCatalog) / sizeof(kSims2ResolutionCatalog[0])];
-    BOOL bestIs1x[sizeof(kSims2ResolutionCatalog) / sizeof(kSims2ResolutionCatalog[0])];
-    for (size_t c = 0; c < kSims2CatalogCount; c++) {
-        bestReal[c] = NULL;
-        bestDelta[c] = 1e9;
-        bestIs1x[c] = NO;
-    }
+    /* Keep one genuine macOS mode per WxH (closest to 60 Hz, then 1x backing). */
+    for (CFIndex i = 0; i < realCount; i++) {
+        CGDisplayModeRef m = (CGDisplayModeRef)CFArrayGetValueAtIndex(realModes, i);
+        if (!m) {
+            continue;
+        }
+        size_t w = CGDisplayModeGetWidth(m);
+        size_t h = CGDisplayModeGetHeight(m);
+        if (!is_whitelisted_or_desktop(w, h, curW, curH) || !is_32bit_argb_pixel_encoding(m)) {
+            continue;
+        }
+        double hz = CGDisplayModeGetRefreshRate(m);
+        double delta = fabs((hz > 0.1 ? hz : 60.0) - 60.0);
+        BOOL is1x = (CGDisplayModeGetPixelWidth(m) == w && CGDisplayModeGetPixelHeight(m) == h);
 
-    if (realModes) {
-        CFIndex realCount = CFArrayGetCount(realModes);
-        for (CFIndex i = 0; i < realCount; i++) {
-            CGDisplayModeRef m = (CGDisplayModeRef)CFArrayGetValueAtIndex(realModes, i);
-            if (!m) {
-                continue;
+        CFIndex existing = -1;
+        CFIndex resCount = CFArrayGetCount(result);
+        for (CFIndex r = 0; r < resCount; r++) {
+            CGDisplayModeRef e = (CGDisplayModeRef)CFArrayGetValueAtIndex(result, r);
+            if (CGDisplayModeGetWidth(e) == w && CGDisplayModeGetHeight(e) == h) {
+                existing = r;
+                break;
             }
-            size_t w = CGDisplayModeGetWidth(m);
-            size_t h = CGDisplayModeGetHeight(m);
-            if (is_notched_or_disallowed_mode(w, h)) {
-                continue;
-            }
-            if (!is_32bit_argb_pixel_encoding(m)) {
-                continue;
-            }
-
-            size_t catIdx = kSims2CatalogCount;
-            for (size_t c = 0; c < kSims2CatalogCount; c++) {
-                if (kSims2ResolutionCatalog[c].width == w &&
-                    kSims2ResolutionCatalog[c].height == h) {
-                    catIdx = c;
-                    break;
-                }
-            }
-            if (catIdx >= kSims2CatalogCount) {
-                continue;
-            }
-
-            double hz = CGDisplayModeGetRefreshRate(m);
-            double delta = fabs((hz > 0.1 ? hz : 60.0) - 60.0);
-            BOOL is1x = (CGDisplayModeGetPixelWidth(m) == w &&
-                         CGDisplayModeGetPixelHeight(m) == h);
-
-            if (!bestReal[catIdx] ||
-                (delta < bestDelta[catIdx] - 0.5) ||
-                (fabs(delta - bestDelta[catIdx]) <= 0.5 && is1x && !bestIs1x[catIdx])) {
-                bestReal[catIdx] = m;
-                bestDelta[catIdx] = delta;
-                bestIs1x[catIdx] = is1x;
-            }
+        }
+        if (existing < 0) {
+            CFArrayAppendValue(result, m);
+            continue;
+        }
+        CGDisplayModeRef e = (CGDisplayModeRef)CFArrayGetValueAtIndex(result, existing);
+        double eHz = CGDisplayModeGetRefreshRate(e);
+        double eDelta = fabs((eHz > 0.1 ? eHz : 60.0) - 60.0);
+        BOOL e1x = (CGDisplayModeGetPixelWidth(e) == w && CGDisplayModeGetPixelHeight(e) == h);
+        if (delta < eDelta - 0.5 || (fabs(delta - eDelta) <= 0.5 && is1x && !e1x)) {
+            CFArraySetValueAtIndex(result, existing, m);
         }
     }
 
-    size_t usedReal = 0;
-    size_t usedSynthetic = 0;
-    for (size_t c = 0; c < kSims2CatalogCount; c++) {
-        if (bestReal[c]) {
-            CFArrayAppendValue(result, bestReal[c]);
-            usedReal++;
-        } else {
-            CFArrayAppendValue(result, gSyntheticModePtrs[c]);
-            usedSynthetic++;
+    CFIndex keptCount = CFArrayGetCount(result);
+    if (keptCount == 0) {
+        CFRelease(result);
+        bootlog_write("DISPLAY", "filter kept 0/%ld modes -> returning unfiltered macOS list", (long)realCount);
+        return realModes;
+    }
+
+    static int sLoggedEnum = 0;
+    if (sLoggedEnum < 4) {
+        sLoggedEnum++;
+        char listBuf[1024];
+        size_t off = 0;
+        listBuf[0] = '\0';
+        for (CFIndex r = 0; r < keptCount && off < sizeof(listBuf) - 32; r++) {
+            CGDisplayModeRef e = (CGDisplayModeRef)CFArrayGetValueAtIndex(result, r);
+            off += (size_t)snprintf(listBuf + off, sizeof(listBuf) - off, "%s%zux%zu@%.0f",
+                                    r ? "," : "",
+                                    CGDisplayModeGetWidth(e), CGDisplayModeGetHeight(e),
+                                    CGDisplayModeGetRefreshRate(e));
         }
+        bootlog_write("DISPLAY", "CGDisplayCopyAllDisplayModes(display=%u) real=%ld kept=%ld desktop=%zux%zu modes=[%s]",
+                      (unsigned)display, (long)realCount, (long)keptCount, curW, curH, listBuf);
+        devlog_write("DISPLAY", "CGDisplayCopyAllDisplayModes(display=%u): real=%ld kept=%ld (real HW only)",
+                     (unsigned)display, (long)realCount, (long)keptCount);
     }
 
-    if (realModes) {
-        CFRelease(realModes);
-    }
-
-    static BOOL sLoggedEnum = NO;
-    if (!sLoggedEnum) {
-        sLoggedEnum = YES;
-        devlog_write("DISPLAY",
-                     "CGDisplayCopyAllDisplayModes(display=%u): catalog=%ld real=%zu synthetic=%zu",
-                     (unsigned)display, (long)CFArrayGetCount(result), usedReal, usedSynthetic);
-    }
-
+    CFRelease(realModes);
     return (CFArrayRef)result;
 }
 
-static size_t hook_CGDisplayModeGetWidth(CGDisplayModeRef mode) {
-    Sims2SyntheticDisplayMode *syn = lookup_synthetic_mode(mode);
-    if (syn) {
-        return syn.width;
+typedef void (*Sims2CxaThrowFn)(void *, void *, void (*)(void *));
+static Sims2CxaThrowFn gRealCxaThrow = NULL;
+static int gCxaThrowLogged = 0;
+
+__attribute__((noreturn))
+static void hook_cxa_throw(void *thrownException, void *tinfo, void (*dest)(void *)) {
+    if (gCxaThrowLogged < 200) {
+        gCxaThrowLogged++;
+        const char *typeName = "?";
+        if (tinfo) {
+            const char *n = *(const char * const *)((const char *)tinfo + sizeof(void *));
+            if (n) {
+                typeName = n;
+            }
+        }
+        uintptr_t caller = (uintptr_t)__builtin_return_address(0);
+        uintptr_t unslid = caller - (uintptr_t)gExecSlide;
+        bootlog_write("CXX_THROW", "#%d type=%s caller=0x%lx (exe 0x%lx) obj=%p",
+                      gCxaThrowLogged, typeName, (unsigned long)caller, (unsigned long)unslid, thrownException);
+        if (thrownException && typeName && strstr(typeName, "basic_string")) {
+            const unsigned char *s = (const unsigned char *)thrownException;
+            const char *text = (s[0] & 1) ? *(const char * const *)(s + 16) : (const char *)(s + 1);
+            if (text) {
+                bootlog_write("CXX_THROW", "  what=\"%.300s\"", text);
+            }
+        }
     }
-    return mode ? CGDisplayModeGetWidth(mode) : 0;
+    if (!gRealCxaThrow) {
+        gRealCxaThrow = (Sims2CxaThrowFn)dlsym(RTLD_DEFAULT, "__cxa_throw");
+    }
+    gRealCxaThrow(thrownException, tinfo, dest);
+    __builtin_unreachable();
 }
 
-static size_t hook_CGDisplayModeGetHeight(CGDisplayModeRef mode) {
-    Sims2SyntheticDisplayMode *syn = lookup_synthetic_mode(mode);
-    if (syn) {
-        return syn.height;
+typedef void (*Sims2GlViewportFn)(int, int, int, int);
+static Sims2GlViewportFn gRealGlViewport = NULL;
+static int gLastViewport[4] = { -1, -1, -1, -1 };
+static int gViewportLogged = 0;
+
+static void hook_glViewport(int x, int y, int w, int h) {
+    if (!gRealGlViewport) {
+        gRealGlViewport = (Sims2GlViewportFn)dlsym(RTLD_DEFAULT, "glViewport");
     }
-    return mode ? CGDisplayModeGetHeight(mode) : 0;
+    if ((x != gLastViewport[0] || y != gLastViewport[1] || w != gLastViewport[2] || h != gLastViewport[3]) &&
+        gViewportLogged < 60) {
+        gViewportLogged++;
+        gLastViewport[0] = x;
+        gLastViewport[1] = y;
+        gLastViewport[2] = w;
+        gLastViewport[3] = h;
+        bootlog_write("GL", "glViewport(%d,%d,%d,%d)", x, y, w, h);
+    }
+    if (gRealGlViewport) {
+        gRealGlViewport(x, y, w, h);
+    }
 }
 
-static size_t hook_CGDisplayModeGetPixelWidth(CGDisplayModeRef mode) {
-    Sims2SyntheticDisplayMode *syn = lookup_synthetic_mode(mode);
-    if (syn) {
-        return syn.pixelWidth;
-    }
-    return mode ? CGDisplayModeGetPixelWidth(mode) : 0;
-}
-
-static size_t hook_CGDisplayModeGetPixelHeight(CGDisplayModeRef mode) {
-    Sims2SyntheticDisplayMode *syn = lookup_synthetic_mode(mode);
-    if (syn) {
-        return syn.pixelHeight;
-    }
-    return mode ? CGDisplayModeGetPixelHeight(mode) : 0;
-}
-
-static double hook_CGDisplayModeGetRefreshRate(CGDisplayModeRef mode) {
-    Sims2SyntheticDisplayMode *syn = lookup_synthetic_mode(mode);
-    if (syn) {
-        return syn.refreshRate;
-    }
-    return mode ? CGDisplayModeGetRefreshRate(mode) : 0.0;
-}
-
-static CFStringRef hook_CGDisplayModeCopyPixelEncoding(CGDisplayModeRef mode) {
-    if (lookup_synthetic_mode(mode)) {
-        return (CFStringRef)CFRetain(CFSTR("--------RRRRRRRRGGGGGGGGBBBBBBBB"));
-    }
-    if (!mode) {
-        return NULL;
-    }
-#pragma clang diagnostic push
-#pragma clang diagnostic ignored "-Wdeprecated-declarations"
-    return CGDisplayModeCopyPixelEncoding(mode);
-#pragma clang diagnostic pop
-}
-
-static CGDisplayModeRef hook_CGDisplayModeRetain(CGDisplayModeRef mode) {
-    if (!mode) {
-        return NULL;
-    }
-    if (lookup_synthetic_mode(mode)) {
-        return (CGDisplayModeRef)CFRetain(mode);
-    }
-    return CGDisplayModeRetain(mode);
-}
-
-static void hook_CGDisplayModeRelease(CGDisplayModeRef mode) {
-    if (!mode) {
+static void bootlog_window_geometry(const char *reason, NSWindow *win) {
+    if (!win) {
         return;
     }
-    if (lookup_synthetic_mode(mode)) {
-        CFRelease(mode);
-        return;
-    }
-    CGDisplayModeRelease(mode);
+    NSScreen *scr = win.screen ?: [NSScreen mainScreen];
+    NSRect f = win.frame;
+    NSRect cb = win.contentView ? win.contentView.bounds : NSZeroRect;
+    NSRect sf = scr ? scr.frame : NSZeroRect;
+    NSRect vf = scr ? scr.visibleFrame : NSZeroRect;
+    BOOL fs = (win.styleMask & NSWindowStyleMaskFullScreen) != 0;
+    bootlog_write("WIN", "%s win=%p class=%s fs=%d frame=%.0fx%.0f@(%.0f,%.0f) content=%.0fx%.0f "
+                  "screen=%.0fx%.0f visible=%.0fx%.0f@(%.0f,%.0f) scale=%.1f",
+                  reason, (__bridge void *)win, object_getClassName(win), fs,
+                  f.size.width, f.size.height, f.origin.x, f.origin.y,
+                  cb.size.width, cb.size.height,
+                  sf.size.width, sf.size.height,
+                  vf.size.width, vf.size.height, vf.origin.x, vf.origin.y,
+                  scr ? scr.backingScaleFactor : 0.0);
 }
 
-static CGError hook_CGDisplaySetDisplayMode(CGDirectDisplayID display,
-                                            CGDisplayModeRef mode,
-                                            CFDictionaryRef options) {
-    Sims2SyntheticDisplayMode *syn = lookup_synthetic_mode(mode);
-    if (syn) {
-        devlog_write("DISPLAY",
-                     "CGDisplaySetDisplayMode synthetic %zux%zu accepted (Spaces FBO)",
-                     syn.width, syn.height);
-        return kCGErrorSuccess;
+static void clamp_fullscreen_window_to_visible_frame(NSWindow *win) {
+    if (gNotchFitInProgress || !win || !is_sdl_game_window(win) ||
+        !(win.styleMask & NSWindowStyleMaskFullScreen)) {
+        return;
     }
-    return CGDisplaySetDisplayMode(display, mode, options);
+    NSScreen *scr = win.screen ?: [NSScreen mainScreen];
+    if (!scr) {
+        return;
+    }
+    NSRect vf = scr.visibleFrame;
+    NSRect f = win.frame;
+    if (vf.size.width < 640.0 || vf.size.height < 480.0) {
+        return;
+    }
+    if (fabs(f.size.width - vf.size.width) <= 1.0 && fabs(f.size.height - vf.size.height) <= 1.0 &&
+        fabs(f.origin.x - vf.origin.x) <= 1.0 && fabs(f.origin.y - vf.origin.y) <= 1.0) {
+        gNotchTargetFrame = vf;
+        gNotchClampAttempts = 0;
+        return;
+    }
+    if (NSEqualRects(gNotchTargetFrame, vf) && gNotchClampAttempts >= 8) {
+        return;
+    }
+    if (!NSEqualRects(gNotchTargetFrame, vf)) {
+        gNotchTargetFrame = vf;
+        gNotchClampAttempts = 0;
+    }
+    gNotchClampAttempts++;
+    gNotchFitInProgress = YES;
+    bootlog_write("WIN", "clamp fs #%d %.0fx%.0f@(%.0f,%.0f) -> visibleFrame %.0fx%.0f@(%.0f,%.0f)",
+                  gNotchClampAttempts,
+                  f.size.width, f.size.height, f.origin.x, f.origin.y,
+                  vf.size.width, vf.size.height, vf.origin.x, vf.origin.y);
+    [win setFrame:vf display:YES];
+    if (win.contentView) {
+        NSRect bounds = NSMakeRect(0.0, 0.0, vf.size.width, vf.size.height);
+        if (!NSEqualRects(win.contentView.frame, bounds)) {
+            [win.contentView setFrame:bounds];
+        }
+    }
+    gNotchFitInProgress = NO;
+    bootlog_window_geometry("after-clamp", win);
+}
+
+static void register_boot_window_observers(void) {
+    NSNotificationCenter *nc = [NSNotificationCenter defaultCenter];
+    [nc addObserverForName:NSApplicationDidFinishLaunchingNotification object:nil queue:nil
+                usingBlock:^(NSNotification *note) {
+        (void)note;
+        NSScreen *scr = [NSScreen mainScreen];
+        if (scr) {
+            NSRect sf = scr.frame;
+            NSRect vf = scr.visibleFrame;
+            bootlog_write("SCREEN", "main frame=%.0fx%.0f visibleFrame=%.0fx%.0f@(%.0f,%.0f) scale=%.1f",
+                          sf.size.width, sf.size.height, vf.size.width, vf.size.height,
+                          vf.origin.x, vf.origin.y, scr.backingScaleFactor);
+        }
+        bootlog_write("APP", "DidFinishLaunching");
+    }];
+    [nc addObserverForName:NSWindowDidBecomeKeyNotification object:nil queue:nil
+                usingBlock:^(NSNotification *note) {
+        NSWindow *win = (NSWindow *)note.object;
+        bootlog_window_geometry("DidBecomeKey", win);
+        clamp_fullscreen_window_to_visible_frame(win);
+    }];
+    [nc addObserverForName:NSWindowDidResizeNotification object:nil queue:nil
+                usingBlock:^(NSNotification *note) {
+        NSWindow *win = (NSWindow *)note.object;
+        bootlog_window_geometry("DidResize", win);
+        clamp_fullscreen_window_to_visible_frame(win);
+    }];
+    [nc addObserverForName:NSWindowDidEnterFullScreenNotification object:nil queue:nil
+                usingBlock:^(NSNotification *note) {
+        NSWindow *win = (NSWindow *)note.object;
+        bootlog_window_geometry("DidEnterFullScreen", win);
+        clamp_fullscreen_window_to_visible_frame(win);
+    }];
+    [nc addObserverForName:NSWindowDidExitFullScreenNotification object:nil queue:nil
+                usingBlock:^(NSNotification *note) {
+        gNotchClampAttempts = 0;
+        bootlog_window_geometry("DidExitFullScreen", (NSWindow *)note.object);
+    }];
 }
 
 typedef struct {
@@ -1644,16 +1714,9 @@ typedef struct {
 } Sims2SymbolHookEntry;
 
 static const Sims2SymbolHookEntry kSims2CoreGraphicsHooks[] = {
-    { "_CGDisplayCopyAllDisplayModes",   (void *)hook_CGDisplayCopyAllDisplayModes },
-    { "_CGDisplayModeGetWidth",          (void *)hook_CGDisplayModeGetWidth },
-    { "_CGDisplayModeGetHeight",         (void *)hook_CGDisplayModeGetHeight },
-    { "_CGDisplayModeGetPixelWidth",     (void *)hook_CGDisplayModeGetPixelWidth },
-    { "_CGDisplayModeGetPixelHeight",    (void *)hook_CGDisplayModeGetPixelHeight },
-    { "_CGDisplayModeGetRefreshRate",    (void *)hook_CGDisplayModeGetRefreshRate },
-    { "_CGDisplayModeCopyPixelEncoding", (void *)hook_CGDisplayModeCopyPixelEncoding },
-    { "_CGDisplayModeRetain",            (void *)hook_CGDisplayModeRetain },
-    { "_CGDisplayModeRelease",           (void *)hook_CGDisplayModeRelease },
-    { "_CGDisplaySetDisplayMode",        (void *)hook_CGDisplaySetDisplayMode },
+    { "_CGDisplayCopyAllDisplayModes", (void *)hook_CGDisplayCopyAllDisplayModes },
+    { "___cxa_throw",                  (void *)hook_cxa_throw },
+    { "_glViewport",                   (void *)hook_glViewport },
 };
 
 static size_t hook_coregraphics_la_symbol_ptrs(void) {
@@ -1666,6 +1729,7 @@ static size_t hook_coregraphics_la_symbol_ptrs(void) {
         if (mh && mh->magic == MH_MAGIC_64 && mh->filetype == MH_EXECUTE) {
             execHdr = (const struct mach_header_64 *)mh;
             execSlide = _dyld_get_image_vmaddr_slide(i);
+            gExecSlide = execSlide;
             break;
         }
     }
@@ -1751,6 +1815,7 @@ static size_t hook_coregraphics_la_symbol_ptrs(void) {
                 if (strcmp(symName, kSims2CoreGraphicsHooks[h].symbolName) == 0) {
                     ptrs[j] = kSims2CoreGraphicsHooks[h].replacement;
                     hookedCount++;
+                    bootlog_write("HOOK", "rebound %s in %s", symName, sect->sectname);
                     break;
                 }
             }
@@ -1762,6 +1827,10 @@ static size_t hook_coregraphics_la_symbol_ptrs(void) {
 
 __attribute__((constructor))
 static void sims2_trackpad_init(void) {
+    bootlog_init();
+    bootlog_write("BOOT", "libsims2_trackpad loaded pid=%d", getpid());
+    bootlog_userprops();
+
     char devLogPath[600];
     devlog_init(devLogPath, sizeof(devLogPath));
 
@@ -1934,10 +2003,14 @@ static void sims2_trackpad_init(void) {
 
     uint16_t initLeft = 43, initRight = 47;
     resolve_camera_rotate_keycodes(&initLeft, &initRight);
+    register_boot_window_observers();
     size_t cgHooks = hook_coregraphics_la_symbol_ptrs();
 
     NSString *bundleStr = [[NSBundle mainBundle] bundleIdentifier];
     const char *bundleId = bundleStr ? [bundleStr UTF8String] : "unknown";
+    bootlog_write("INIT", "bundle=%s execSlide=0x%lx cgHooks=%zu fsSpaceHook=%d focusHook=%d",
+                  bundleId ? bundleId : "unknown", (unsigned long)gExecSlide, cgHooks,
+                  gOrigSetFullscreenSpaceIMP != NULL, gOrigFocusSomeWindowIMP != NULL);
     devlog_write("INIT",
                  "pid=%d bundle=%s appHook=%d focusHook=%d keyWinHook=%d scrollHook=%d btnHook=%d modHook=%d mouseMoved=%d "
                  "fsSpaceHook=%d miniHook=%d activateHook=%d cgHooks=%zu rotKeys=(%u,%u) invert=%d ctrlOrbit=%d log=%s",

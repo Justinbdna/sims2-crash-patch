@@ -907,40 +907,32 @@ class TestMacScriptsIntegrity(unittest.TestCase):
         self.assertIn("gForcedNonInvertedEvent", src_m)
         self.assertIn("resolve_window_listener", src_m)
 
-        # Phase 3 CoreGraphics __DATA,__la_symbol_ptr catalog hooks (15 calibrated modes, <= 2560x1600, no 3K/4K, no notch)
-        self.assertIn("Sims2SyntheticDisplayMode", src_m)
+        # Real hardware CoreGraphics __DATA,__la_symbol_ptr hooks + permanent launch_boot.log + visibleFrame clamp (no synthetic modes)
+        self.assertNotIn("Sims2SyntheticDisplayMode", src_m)
         self.assertIn("hook_coregraphics_la_symbol_ptrs", src_m)
         self.assertIn("S_LAZY_SYMBOL_POINTERS", src_m)
         self.assertIn("--------RRRRRRRRGGGGGGGGBBBBBBBB", src_m)
-        for cg_sym in (
+        self.assertIn("launch_boot.log", src_m)
+        self.assertIn("bootlog_userprops", src_m)
+        self.assertIn("clamp_fullscreen_window_to_visible_frame", src_m)
+        for hooked_sym in (
             "_CGDisplayCopyAllDisplayModes",
-            "_CGDisplayModeGetWidth",
-            "_CGDisplayModeGetHeight",
-            "_CGDisplayModeGetPixelWidth",
-            "_CGDisplayModeGetPixelHeight",
-            "_CGDisplayModeGetRefreshRate",
-            "_CGDisplayModeCopyPixelEncoding",
-            "_CGDisplayModeRetain",
-            "_CGDisplayModeRelease",
-            "_CGDisplaySetDisplayMode",
+            "___cxa_throw",
+            "_glViewport",
         ):
-            self.assertIn(cg_sym, src_m)
+            self.assertIn(hooked_sym, src_m)
         for cat_pair in (
-            "{ 1280,  720 }",
             "{ 1280,  800 }",
             "{ 1440,  900 }",
-            "{ 1512,  945 }",
-            "{ 1600,  900 }",
+            "{ 1512,  982 }",
             "{ 1680, 1050 }",
+            "{ 1800, 1169 }",
+            "{ 2048, 1280 }",
+            "{ 2560, 1600 }",
             "{ 1728, 1080 }",
-            "{ 1800, 1125 }",
             "{ 1920, 1080 }",
             "{ 1920, 1200 }",
-            "{ 2048, 1280 }",
-            "{ 2056, 1285 }",
-            "{ 2304, 1440 }",
             "{ 2560, 1440 }",
-            "{ 2560, 1600 }",
         ):
             self.assertIn(cat_pair, src_m)
 
@@ -958,12 +950,12 @@ class TestMacScriptsIntegrity(unittest.TestCase):
             b"CGDisplayModeGetPixelWidth",
             b"CGDisplayModeGetPixelHeight",
             b"CGDisplayModeGetRefreshRate",
-            b"CGDisplayModeRetain",
-            b"CGDisplayModeRelease",
-            b"CGDisplaySetDisplayMode",
-            b"Sims2SyntheticDisplayMode",
+            b"launch_boot.log",
+            b"__cxa_throw",
+            b"glViewport",
         ):
             self.assertIn(cg_sym, raw)
+        self.assertNotIn(b"Sims2SyntheticDisplayMode", raw)
         if sys.platform == "darwin":
             cs = subprocess.run(["codesign", "--verify", "--strict", dylib.as_posix()], capture_output=True, text=True)
             self.assertEqual(cs.returncode, 0, cs.stderr)
@@ -987,55 +979,56 @@ class TestMacScriptsIntegrity(unittest.TestCase):
                 orig_text = sample_tmpl.format(mode="1800x1169x32x60")
                 xml.write_text(orig_text, encoding="utf-8")
 
-                # 1. Notched 1800x1169 upgrades cleanly to Option A 1800x1125 when 1800x1125 is supported
+                # 1. Native hardware 1800x1169 is preserved so cDeviceEnumDX validates without exception
                 r1 = self._run_bash_lib(
                     script,
-                    'repair_userprops_xml "$1" "1800x1169" "1800x1169,1800x1125,1440x900,1280x800" 0',
+                    'repair_userprops_xml "$1" "1800x1169" "1800x1169,1512x982,1280x800" 0',
                     xml.as_posix(),
                 )
                 self.assertEqual(r1.returncode, 0, r1.stderr or r1.stdout)
                 updated_text = xml.read_text(encoding="utf-8")
-                self.assertIn(">1800x1125x32x60<", updated_text)
+                self.assertIn(">1800x1169x32x60<", updated_text)
                 self.assertIn(">true<", updated_text)
-                bak = Path(str(xml) + ".backup")
-                self.assertEqual(bak.read_text(encoding="utf-8"), orig_text)
 
-                # 2. Idempotent re-run at 1800x1125x32x60
+                # 2. Unsupported notched 1800x1125 upgrades cleanly to native 1800x1169 when supported
+                xml.write_text(sample_tmpl.format(mode="1800x1125x32x60"), encoding="utf-8")
                 r2 = self._run_bash_lib(
                     script,
-                    'repair_userprops_xml "$1" "1800x1125" "1800x1169,1800x1125,1440x900,1280x800" 0',
+                    'repair_userprops_xml "$1" "1800x1169" "1800x1169,1512x982,1280x800" 0',
                     xml.as_posix(),
                 )
                 self.assertEqual(r2.returncode, 0, r2.stderr or r2.stdout)
-                self.assertEqual(xml.read_text(encoding="utf-8"), updated_text)
+                self.assertIn(">1800x1169x32x60<", xml.read_text(encoding="utf-8"))
+                bak = Path(str(xml) + ".backup")
+                self.assertEqual(bak.read_text(encoding="utf-8"), sample_tmpl.format(mode="1800x1125x32x60"))
 
-                # 3. Custom supported resolution (1440x900 & 2560x1440) preserved when force_reset=0, resets to 1800x1125 on force_reset=1
-                xml.write_text(sample_tmpl.format(mode="1440x900x32x60"), encoding="utf-8")
+                # 3. Custom supported resolution (1512x982) preserved when force_reset=0, resets to 1800x1169 on force_reset=1
+                xml.write_text(sample_tmpl.format(mode="1512x982x32x60"), encoding="utf-8")
                 r_keep = self._run_bash_lib(
                     script,
-                    'repair_userprops_xml "$1" "1800x1169" "1800x1125,1440x900,2560x1440,1280x800" 0',
+                    'repair_userprops_xml "$1" "1800x1169" "1800x1169,1512x982,2560x1440,1280x800" 0',
                     xml.as_posix(),
                 )
                 self.assertEqual(r_keep.returncode, 0)
-                self.assertIn(">1440x900x32x60<", xml.read_text(encoding="utf-8"))
+                self.assertIn(">1512x982x32x60<", xml.read_text(encoding="utf-8"))
 
-                # 3K/4K resolution must be rejected back to 1800x1125
+                # 3K/4K resolution must be rejected back to 1800x1169
                 xml.write_text(sample_tmpl.format(mode="3024x1964x32x60"), encoding="utf-8")
                 r_cap = self._run_bash_lib(
                     script,
-                    'repair_userprops_xml "$1" "1800x1169" "1800x1125,1440x900,2560x1440,1280x800" 0',
+                    'repair_userprops_xml "$1" "1800x1169" "1800x1169,1512x982,2560x1440,1280x800" 0',
                     xml.as_posix(),
                 )
                 self.assertEqual(r_cap.returncode, 0)
-                self.assertIn(">1800x1125x32x60<", xml.read_text(encoding="utf-8"))
+                self.assertIn(">1800x1169x32x60<", xml.read_text(encoding="utf-8"))
 
                 r_reset = self._run_bash_lib(
                     script,
-                    'repair_userprops_xml "$1" "1800x1169" "1800x1125,1440x900,2560x1440,1280x800" 1',
+                    'repair_userprops_xml "$1" "1800x1169" "1800x1169,1512x982,2560x1440,1280x800" 1',
                     xml.as_posix(),
                 )
                 self.assertEqual(r_reset.returncode, 0)
-                self.assertIn(">1800x1125x32x60<", xml.read_text(encoding="utf-8"))
+                self.assertIn(">1800x1169x32x60<", xml.read_text(encoding="utf-8"))
 
         real_like_grules = (
             "seti textureMemory       32\n"
@@ -1069,16 +1062,16 @@ class TestMacScriptsIntegrity(unittest.TestCase):
 
             r_gr1 = self._run_bash_lib(
                 "patch_sims2.command",
-                'patch_graphics_rules_sgr "$1" "$2" 1800 1125',
+                'patch_graphics_rules_sgr "$1" "$2" 1800 1169',
                 grules.as_posix(),
                 grules_bak.as_posix(),
             )
             self.assertEqual(r_gr1.returncode, 0, r_gr1.stderr or r_gr1.stdout)
             patched_gr = grules.read_text(encoding="utf-8")
             self.assertIn("uintProp defaultResWidth  1800", patched_gr)
-            self.assertIn("uintProp defaultResHeight 1125", patched_gr)
+            self.assertIn("uintProp defaultResHeight 1169", patched_gr)
             self.assertIn("uintProp defaultResWidth  800", patched_gr)
-            # $Medium keeps its original 1024x768 default while $High shifts to 1800x1125 and maxRes is capped at 2560x1600
+            # $Medium keeps its original 1024x768 default while $High shifts to 1800x1169 and maxRes is capped at 2560x1600
             self.assertIn("setting $Medium\n      uintProp maxResWidth      2560\n      uintProp maxResHeight     1600\n      uintProp defaultResWidth  1024", patched_gr)
             self.assertIn("intProp configParserErrorCode 0", patched_gr)
             self.assertEqual(grules_bak.read_text(encoding="utf-8"), real_like_grules)
@@ -1086,7 +1079,7 @@ class TestMacScriptsIntegrity(unittest.TestCase):
             # Second run must be strictly idempotent
             r_gr2 = self._run_bash_lib(
                 "patch_sims2.command",
-                'patch_graphics_rules_sgr "$1" "$2" 1800 1125',
+                'patch_graphics_rules_sgr "$1" "$2" 1800 1169',
                 grules.as_posix(),
                 grules_bak.as_posix(),
             )
@@ -1094,11 +1087,11 @@ class TestMacScriptsIntegrity(unittest.TestCase):
             self.assertEqual(grules.read_text(encoding="utf-8"), patched_gr)
             self.assertIn("OK:already_patched", r_gr2.stdout + r_gr2.stderr)
 
-            # Phase 1/2 5120x3200 file upgrades cleanly to 2560x1600 while preserving default 1800x1125
+            # Phase 1/2 5120x3200 file upgrades cleanly to 2560x1600 while preserving default 1800x1169
             grules.write_text(patched_gr.replace("2560", "5120").replace("1600", "3200"), encoding="utf-8")
             r_gr3 = self._run_bash_lib(
                 "patch_sims2.command",
-                'patch_graphics_rules_sgr "$1" "$2" 1800 1125',
+                'patch_graphics_rules_sgr "$1" "$2" 1800 1169',
                 grules.as_posix(),
                 grules_bak.as_posix(),
             )
