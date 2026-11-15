@@ -881,6 +881,7 @@ class TestMacScriptsIntegrity(unittest.TestCase):
         self.assertIn("swizzled_setFullscreenSpace", src_m)
         self.assertIn("swizzled_miniaturize", src_m)
         self.assertIn("swizzled_activateIgnoringOtherApps", src_m)
+        self.assertIn("is_sdl_game_window", src_m)
         self.assertIn("raw_event_modifier_flags", src_m)
         self.assertIn("gSuppressedScrollEvent", src_m)
         self.assertIn("gForcedNonInvertedEvent", src_m)
