@@ -788,7 +788,7 @@ main() {
     fi
 
     # 1. Check if the game is currently running
-    if pgrep -x "Sims2XP_Exe" >/dev/null 2>&1 || pgrep -x "AppBundleExe" >/dev/null 2>&1; then
+    if [ "${SIMS2_SKIP_RUNNING_CHECK:-0}" != "1" ] && (pgrep -x "Sims2XP_Exe" >/dev/null 2>&1 || pgrep -x "AppBundleExe" >/dev/null 2>&1); then
         echo -e "${YELLOW}[!] Attention / Warning:${NC} Les Sims 2 est actuellement ouvert."
         echo "    Fermez le jeu avant d'utiliser cet utilitaire pour éviter toute corruption."
         echo "    Please quit The Sims 2 before running this utility."

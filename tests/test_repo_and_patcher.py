@@ -597,6 +597,7 @@ class TestMacScriptsIntegrity(unittest.TestCase):
             with tempfile.TemporaryDirectory() as tmp:
                 env = dict(os.environ)
                 env["SIMS2_NONINTERACTIVE"] = "1"
+                env["SIMS2_SKIP_RUNNING_CHECK"] = "1"
                 env["SIMS2_LOG_DIR"] = tmp
                 res_quit = subprocess.run(
                     [bash_bin, "./clean_sims2_cache.command"],
@@ -1094,6 +1095,8 @@ class TestMacScriptsIntegrity(unittest.TestCase):
                     text=True,
                 )
                 self.assertEqual(r_rep.returncode, 0, r_rep.stderr or r_rep.stdout)
+                self.assertNotIn("command not found", r_rep.stderr)
+                self.assertNotIn("hw.model", r_rep.stderr)
                 report_path = log_dir / "github_support_report.md"
                 self.assertTrue(report_path.is_file())
                 rep_text = report_path.read_text(encoding="utf-8")
