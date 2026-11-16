@@ -33,7 +33,7 @@
 
 ### 🇫🇷 Français
 1. **Téléchargez et décompressez** [`sims2-crash-patch-v1.4.0.zip`](https://github.com/Justinbdna/sims2-crash-patch/releases) *(fermez d'abord Les Sims 2 avec `Cmd + Q`)*.
-2. **Débloquez Gatekeeper :** faites **Clic droit → Ouvrir** sur `patch_sims2.command` *(sur macOS 15+, si une alerte bloque encore l'ouverture : cliquez sur **Terminé**, allez dans **Réglages Système → Confidentialité et sécurité → Ouvrir quand même → Ouvrir**)*.
+2. **Débloquez Gatekeeper :** double-cliquez sur `patch_sims2.command` → si macOS affiche *« bloqué pour protéger votre Mac »*, cliquez sur **Terminé**, ouvrez **Réglages Système → Confidentialité et sécurité**, descendez tout en bas et cliquez sur **Ouvrir quand même**.
 3. **Appuyez sur `Entrée` (`[1]`)** dans le Terminal :
    - Tapez votre mot de passe session Mac à l'aveugle (`Password:`, **aucun caractère `*` ne s'affiche**, c'est la sécurité normale de macOS) puis faites `Entrée`.
    - Quand macOS affiche *« Terminal souhaite contrôler Finder »*, cliquez sur **Autoriser** pour copier vos sauvegardes sans rien écraser.
@@ -41,7 +41,7 @@
 
 ### 🇬🇧 English
 1. **Download and unzip** [`sims2-crash-patch-v1.4.0.zip`](https://github.com/Justinbdna/sims2-crash-patch/releases) *(quit The Sims 2 first with `Cmd + Q`)*.
-2. **Bypass Gatekeeper:** **Right-click → Open** on `patch_sims2.command` *(on macOS 15+, if macOS still blocks it: click **Done**, go to **System Settings → Privacy & Security → Open Anyway → Open**)*.
+2. **Bypass Gatekeeper:** double-click `patch_sims2.command` → if macOS shows *"blocked to protect your Mac"*, click **Done**, open **System Settings → Privacy & Security**, scroll down and click **Open Anyway**.
 3. **Press `Enter` (`[1]`)** in Terminal:
    - Type your Mac login password blindly at `Password:` (**nothing prints on screen**, that is standard macOS security) and press `Enter`.
    - When macOS asks *"Terminal wants access to control Finder"*, click **Allow** so your App Store saves are safely copied without overwriting anything.
@@ -87,7 +87,7 @@ Par défaut, la `v1.4.0` est **100 % silencieuse** : aucun fichier de log n'est 
 *By default, `v1.4.0` writes zero log files during normal gameplay. Only a crash triggers `crash_report.log`. Run `patch_sims2.command` → `[2] Diagnostic & Support GitHub` to toggle optional `debug_boot.log` or generate an anonymized (`~`) `github_support_report.md` copied straight to your clipboard for GitHub Issues.*
 
 ### Cas fréquents / Common Cases
-* **Gatekeeper bloque le script :** Clic droit → **Ouvrir**, ou **Réglages Système → Confidentialité et sécurité → Ouvrir quand même → Ouvrir**.
+* **Gatekeeper bloque le script :** double-cliquez sur `patch_sims2.command` → si macOS affiche *« bloqué pour protéger votre Mac »*, cliquez sur **Terminé**, ouvrez **Réglages Système → Confidentialité et sécurité**, descendez tout en bas et cliquez sur **Ouvrir quand même**.
 * **Mot de passe Terminal invisible :** C'est normal sous macOS (aucun `*` affiché). Vérifiez *Verrouillage Majuscule* et utilisez le mot de passe d'ouverture de session du Mac (avec un compte Administrateur).
 * **Sauvegardes / Finder (`-1743` ou `-5000`) :** Vos données actives sont dans `~/Library/Application Support/Aspyr/The Sims 2/`. Si vos anciens quartiers n'apparaissent pas, vérifiez `~/Library/Application Support/Aspyr/The Sims 2 (Sandbox Backup ...)` et fusionnez `Neighborhoods/` + `Downloads/` (jeu fermé). En cas d'erreur `-1743`, autorisez **Terminal → Finder** dans **Réglages Système → Confidentialité et sécurité → Automatisation**.
 * **Crash après débranchement d'écran externe :** Lancez `clean_sims2_cache.command` → **`[2]`** pour réinitialiser `userProps.xml` sur votre écran actuel en 60 Hz.
