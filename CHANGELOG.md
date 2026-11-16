@@ -4,6 +4,30 @@ All notable changes to **Sims 2 Crash Patch** (*The Sims 2: Super Collection* �
 
 ---
 
+## [1.4.0] - 2026-11-16
+
+### Changed & Cleaned
+- **Socle Trackpad & Affichage Stabilisé (`trackpad_mod/sims2_trackpad.m`):** Retrait complet des hooks expérimentaux de changement de résolution à chaud (`CGLSetParameter`, `CGLEnable`, `CGLDisable`, `glViewport`, `glScissor`, `CGDisplaySetDisplayMode`, `CGDisplayFade`, `CGAcquireDisplayFadeReservation`, `CGReleaseDisplayFadeReservation`, `CGConfigureDisplayFadeEffect`), du watcher `userProps.xml` et du remapping souris. Conservation du socle validé : double verrou 60 Hz (`0xfe6dc` / `0xfe741`), filtrage CoreGraphics des vrais modes matériels macOS à 60 Hz (`CGDisplayCopyAllDisplayModes`, zéro mode synthétique), plein écran dynamique calé sous l'encoche (`NSScreen.visibleFrame` détecté au runtime pour tout MacBook Air/Pro 13"/14"/16" ou écran externe), correctif `Command+Tab` (`focusSomeWindow:` + neutralisation fenêtre `SDLWindow` orpheline) et gestes trackpad (`Control`+clic-glissé, `Option` natif, pincement non inversé, rotation AZERTY/QWERTY via Carbon `UCKeyTranslate`).
+- **Détection dynamique de la résolution native (`patch_sims2.command` & `clean_sims2_cache.command`):** Suppression de toute résolution `1800x1169` codée en dur : détection dynamique de l'écran actif pour initialiser `activeDeviceDisplayMode` (`<Largeur>x<Hauteur>x32x60`) dans `userProps.xml` et `$High` dans `Graphics Rules.sgr` (avec plafond `maxResWidth 2560`, `maxResHeight 1600`, `configParserErrorCode 0`).
+
+### Added
+- **Logs silencieux par défaut, rapport de crash automatique & mode debug à la demande (`sims2_trackpad.m`):** Zéro fichier écrit dans `~/Library/Logs/Sims2-Crash-Patch/` en session normale ; gestionnaire async-signal-safe (`SIGSEGV`, `SIGABRT`, `SIGBUS`, `SIGILL`, `SIGFPE` et `std::set_terminate`) écrivant `crash_report.log` uniquement en cas de crash (`1.4.0`, `hw.model`, version macOS, `frame`, `visibleFrame`, signal/exception, `backtrace_symbols_fd`) ; journal `debug_boot.log` activé uniquement via `SIMS2_DEBUG=1` ou `.debug_enabled`.
+- **Menu & outil Diagnostic & Support GitHub (`patch_sims2.command` + `.github/ISSUE_TEMPLATE/bug_report.md`):** Option `[2]` ajoutée en fin de menu de `patch_sims2.command` (conservant `[1]` Installation par défaut) pour activer/désactiver `.debug_enabled` (avec purge des anciens logs debug) et générer `github_support_report.md` (copié via `pbcopy`, chemins `/Users/<utilisateur>` anonymisés en `~`).
+
+---
+
+## [1.4.0-staging] - Archive R&D (`staging` `93b7141`)
+
+### Added
+- **Étape 3A — Retina & High Graphics Rules (`Graphics Rules.sgr`):** `patch_sims2.command` now creates an atomic `Graphics Rules.sgr.backup`, unlocks resolutions up to `5120x3200`, raises the `textureMemory` fallback from `32` to `1024` MB, and upgrades `# Override defaults (SIM-281,416)` (`EffectsQuality`, `LightingQuality`, `Shadows`, `MaterialDetail`) to `$High` (tolérant les commentaires `#` intermédiaires jusqu'à `#####`/`endif`/`end`); `restore_sims2.command` restores `Graphics Rules.sgr.backup` atomically.
+- **Étape 3B — Native MacBook Trackpad & SDL2 Module (`trackpad_mod/libsims2_trackpad.dylib`):** Bundled and auto-injected into `Sims2XP_Exe` via `LC_LOAD_WEAK_DYLIB` (`@executable_path/libsims2_trackpad.dylib`) with zero Xcode CLT dependency: `Control (^)` + click-drag for 360° free 3D orbit + vertical pitch/tilt, `Option (⌥)` + slide (or click-drag) for 4-way camera pan (`cTSUserToolCameraHandDrag`), 2-finger pinch (`NSEventTypeMagnify`) for zoom `+/-`, 2-finger horizontal swipe / rotation for smooth `,`/`.` camera rotation (AZERTY/QWERTY Carbon `UCKeyTranslate`), SDL2 fullscreen Spaces hints (`SDL_VIDEO_MINIMIZE_ON_FOCUS_LOSS=0` avoiding `Cmd+Tab` bounce), and out-of-focus `mouseMoved:` cursor-warp guard; removed cleanly by `restore_sims2.command`.
+- **Multi-Branch GitHub Actions & macOS Compiler CI:** Added `macos-latest` (`clang -arch x86_64` + `codesign --verify --strict`) and multi-branch triggers (`staging`, `feat/**`, `fix/**`, `audit/**`, `chore/**`) to `.github/workflows/ci-and-release.yml`, plus `trackpad_mod/build_trackpad.sh` inclusion/verification and branch-name sanitization in `scripts/verify_and_package.py`.
+
+### Fixed
+- **Trackpad Camera & Focus Fixes (`sims2_trackpad.m`):** Switched middle-click camera orbit/tilt to `Control (^)` + click-drag (natively matching `cTSUserToolCameraMiddleClick` in `Sims2XP_Exe`), preserved `Option (⌥)` + slide or click-drag as smooth 4-way camera panning by swallowing mouse clicks when `Option` is held without `Control`, set `SDL_VIDEO_MINIMIZE_ON_FOCUS_LOSS=0` to stop `Cmd+Tab` bounce-back on focus recovery, ensured non-inverted zoom on the very first pinch gesture via `resolve_window_listener()` / `gForcedNonInvertedEvent`, tracked scroll suppression by exact `NSEvent` reference (`gSuppressedScrollEvent`), and hardened `runner_out` status parsing in `patch_sims2.command`.
+
+---
+
 ## [1.3.1] - 2026-11-13
 
 ### Changed & Fixed
