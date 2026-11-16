@@ -1680,33 +1680,33 @@ generate_github_support_report() {
 ### Rapport de Diagnostic — Sims 2 Crash Patch v${PATCH_VERSION}
 
 - **Version du patch :** \`v${PATCH_VERSION}\`
-- **Modèle Mac (`hw.model`) :** \`${hw_model}\`
+- **Modèle Mac (\`hw.model\`) :** \`${hw_model}\`
 - **Puce / Architecture :** \`${cpu_brand}\` (\`${arch_name}\`)
 - **macOS :** \`${os_prod} ${os_ver} (${os_build})\`
 - **Résolution logique active détectée :** \`${DISPLAY_CUR:-inconnue}\` (modes viables : \`${DISPLAY_MODES:-inconnus}\`)
 - **Mode Debug :** \`${debug_state}\`
-- **`userProps.xml` (`activeDeviceDisplayMode`) :** \`${userprops_mode}\`
+- **\`userProps.xml\` (\`activeDeviceDisplayMode\`) :** \`${userprops_mode}\`
 
 #### État des patchs binaires & signature
 \`\`\`text
 ${app_status}
 \`\`\`
 
-#### Écrans / Résolutions / ProMotion (`system_profiler SPDisplaysDataType`)
+#### Écrans / Résolutions / ProMotion (\`system_profiler SPDisplaysDataType\`)
 \`\`\`text
 ${displays_info}
 \`\`\`
 EOF
         if [ -f "$crash_log" ]; then
             echo ""
-            echo "#### Dernier rapport de crash (\`crash_report.log\`)"
+            echo '#### Dernier rapport de crash (`crash_report.log`)'
             echo '```text'
             tail -n 150 "$crash_log" 2>/dev/null || true
             echo '```'
         fi
         if [ -f "$debug_log" ]; then
             echo ""
-            echo "#### Journal Debug (\`debug_boot.log\`)"
+            echo '#### Journal Debug (`debug_boot.log`)'
             echo '```text'
             tail -n 150 "$debug_log" 2>/dev/null || true
             echo '```'
@@ -1809,7 +1809,7 @@ run_install_patch() {
     echo ""
 
     # 2. Verify the game is not currently running
-    if pgrep -x "Sims2XP_Exe" >/dev/null 2>&1 || pgrep -x "AppBundleExe" >/dev/null 2>&1; then
+    if [ "${SIMS2_SKIP_RUNNING_CHECK:-0}" != "1" ] && (pgrep -x "Sims2XP_Exe" >/dev/null 2>&1 || pgrep -x "AppBundleExe" >/dev/null 2>&1); then
         echo -e "${YELLOW}[!] Attention / Warning:${NC} Les Sims 2 est actuellement ouvert !"
         echo "    Fermez complètement le jeu (Cmd+Q / vérifiez le Dock) puis relancez ce script."
         echo "    Please quit The Sims 2 completely before running this patch."
