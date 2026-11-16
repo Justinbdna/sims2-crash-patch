@@ -2,6 +2,8 @@
 #import <Carbon/Carbon.h>
 #import <CoreGraphics/CoreGraphics.h>
 #import <dlfcn.h>
+#import <execinfo.h>
+#import <fcntl.h>
 #import <mach-o/dyld.h>
 #import <mach-o/loader.h>
 #import <mach-o/nlist.h>
@@ -9,29 +11,32 @@
 #import <errno.h>
 #import <math.h>
 #import <pthread.h>
+#import <signal.h>
 #import <stdarg.h>
 #import <stdio.h>
 #import <stdlib.h>
 #import <string.h>
 #import <sys/stat.h>
+#import <sys/sysctl.h>
 #import <sys/time.h>
 #import <time.h>
 #import <unistd.h>
 
 /*
- * libsims2_trackpad.dylib
- * Free & open-source Trackpad & macOS SDL2 helper for The Sims 2: Super Collection (macOS).
+ * libsims2_trackpad.dylib (v1.4.1)
+ * Free & open-source Trackpad, Display & Stability helper for The Sims 2: Super Collection (macOS).
  *
- * Adds:
+ * Features:
  *   1. SDL2 macOS Fullscreen Space & Dock fix (SDL_VIDEO_MAC_FULLSCREEN_SPACES, etc.)
- *   2. Out-of-focus cursor grab/warp protection & Command+Tab fullscreen bounce-back suppression
+ *   2. Out-of-focus cursor grab/warp protection & Command+Tab orphan window suppression
  *   3. Two-finger pinch gesture (NSEventTypeMagnify) -> native scrollWheel zoom (layout-independent, non-inverted)
- *   4. Two-finger horizontal slide (scrollWheel X) & twist (NSEventTypeRotate) -> dynamic Carbon AZERTY/QWERTY camera rotation (, / .)
+ *   4. Two-finger horizontal slide (scrollWheel X) & twist (NSEventTypeRotate) -> dynamic Carbon AZERTY/QWERTY rotation (, / .)
  *   5. Control (^) + left or right click-drag -> SDL_BUTTON_MIDDLE emulation (360° orbit & pitch)
- *   6. Native Option (⌥) camera hand-drag left untouched for the base game
- *   7. Axis lock & momentum suppression on horizontal swipes + developer event log (trackpad_events.log)
- *   8. Permanent boot journal (launch_boot.log), including C++ __cxa_throw
- *   9. Fullscreen geometry locked to NSScreen.visibleFrame under the notch, with a 1512x982 Retina fallback
+ *   6. Native Option (⌥) camera hand-drag left 100% untouched for the base game
+ *   7. Genuine CoreGraphics hardware display-mode filter (real modes closest to 60 Hz, zero synthetic modes)
+ *   8. Dynamic fullscreen geometry clamped to NSScreen.visibleFrame under the MacBook notch
+ *   9. Silent by default: zero log files written in normal sessions; automatic crash_report.log on crash,
+ *      and on-demand debug_boot.log when SIMS2_DEBUG=1 or ~/.debug_enabled is present.
  *
  * Env config (optional overrides):
  *   SIMS2_ROTATE_INVERT=0|1      (default 0)
@@ -40,11 +45,11 @@
  *   SIMS2_PINCH_STEP=<float>     (default 0.08 magnification units per zoom step)
  *   SIMS2_CTRL_ORBIT=0|1         (default 1, Control+drag emulates middle mouse button)
  *   SIMS2_OPTION_ORBIT=0|1       (legacy fallback alias if SIMS2_CTRL_ORBIT is unset)
+ *   SIMS2_DEBUG=0|1              (default 0, writes ~/Library/Logs/Sims2-Crash-Patch/debug_boot.log)
  *   SIMS2_TRACKPAD_DEBUG=0|1     (default 0, logs via NSLog)
- *   SIMS2_TRACKPAD_DEVLOG=0|1    (default 1, writes ~/Library/Logs/Sims2-Crash-Patch/trackpad_events.log)
- *
- * launch_boot.log is always written during development (not gated by SIMS2_TRACKPAD_DEVLOG).
  */
+
+#define SIMS2_PATCH_VERSION "1.4.1"
 
 typedef NS_ENUM(NSInteger, Sims2ScrollAxis) {
     Sims2ScrollAxisNone = 0,
@@ -103,38 +108,34 @@ static BOOL gAppIsHiding = NO;
 static BOOL gInFullscreenTransition = NO;
 static CFAbsoluteTime gLastResignTimestamp = 0.0;
 
-static FILE *gDevLogFile = NULL;
-static BOOL gDevLogEnabled = YES;
-static pthread_mutex_t gDevLogMutex = PTHREAD_MUTEX_INITIALIZER;
-static FILE *gBootLogFile = NULL;
-static pthread_mutex_t gBootLogMutex = PTHREAD_MUTEX_INITIALIZER;
+static BOOL gDebugBootEnabled = NO;
+static FILE *gDebugLogFile = NULL;
+static pthread_mutex_t gDebugLogMutex = PTHREAD_MUTEX_INITIALIZER;
+
+static char gLibDir[512] = {0};
+static char gLogsRootDir[512] = {0};
+static char gLogsDir[512] = {0};
+static char gCrashLogPath[600] = {0};
+static char gDebugLogPath[600] = {0};
+static char gDebugPrevLogPath[600] = {0};
+static char gDebugFlagPath[600] = {0};
+
+static char gCachedHwModel[128] = "unknown";
+static char gCachedOsVersion[128] = "unknown";
+static char gCachedFrameStr[128] = "unknown";
+static char gCachedVisibleFrameStr[128] = "unknown";
+static char gLastCxaThrowInfo[384] = "none";
+static volatile int gCrashReportWritten = 0;
+
+static struct sigaction gPrevSigActions[32];
+typedef void (*Sims2TerminateHandler)(void);
+static Sims2TerminateHandler gPrevTerminateHandler = NULL;
+
 static intptr_t gExecSlide = 0;
 static BOOL gNotchFitInProgress = NO;
 static NSRect gNotchTargetFrame = {{0, 0}, {0, 0}};
 static int gNotchClampAttempts = 0;
-static const CGFloat kSims2RetinaFallbackWidth = 1512.0;
-static const CGFloat kSims2RetinaFallbackHeight = 982.0;
-static int gTargetRenderWidth = 0;
-static int gTargetRenderHeight = 0;
-static int gLastAppliedCGLWidth = 0;
-static int gLastAppliedCGLHeight = 0;
-static int gLastSourceViewportW = 0;
-static int gLastSourceViewportH = 0;
-static BOOL gMainViewportActive = NO;
-static time_t gUserPropsMtimeSec = 0;
-static long gUserPropsMtimeNsec = 0;
-static off_t gUserPropsSize = -1;
-static CFAbsoluteTime gLastUserPropsPollTime = 0.0;
-static int gDisplayFadeBypassLogged = 0;
-static int gDisplaySetModeLogged = 0;
-static int gCGLOverrideLogged = 0;
-static int gCGLDisableLogged = 0;
-static int gViewportOverrideLogged = 0;
-static int gScissorOverrideLogged = 0;
-static int gMouseAlignLogged = 0;
-static BOOL gUserPropsInitialized = NO;
-static __thread BOOL tInCGLHook = NO;
-static pthread_mutex_t gRenderTargetMutex = PTHREAD_MUTEX_INITIALIZER;
+
 static CFAbsoluteTime gLastOptionHoverLogTime = 0.0;
 static CFAbsoluteTime gLastScrollLogTime = 0.0;
 static CFAbsoluteTime gLastPinchLogTime = 0.0;
@@ -163,14 +164,11 @@ static void ensure_dir_exists(const char *path) {
     }
 }
 
-static void devlog_write(const char *category, const char *fmt, ...) __attribute__((format(printf, 2, 3)));
-static void bootlog_write(const char *category, const char *fmt, ...) __attribute__((format(printf, 2, 3)));
+static void debuglog_write(const char *category, const char *fmt, ...) __attribute__((format(printf, 2, 3)));
 static BOOL is_sdl_game_window(id winObj);
-static void ensure_target_render_resolution_initialized(void);
-static void get_target_render_resolution(int *outW, int *outH);
 
-static void devlog_write(const char *category, const char *fmt, ...) {
-    if (!gDevLogEnabled || !gDevLogFile || !fmt) {
+static void debuglog_write(const char *category, const char *fmt, ...) {
+    if (!gDebugBootEnabled || !gDebugLogFile || !fmt) {
         return;
     }
     struct timeval tv;
@@ -179,73 +177,289 @@ static void devlog_write(const char *category, const char *fmt, ...) {
     struct tm tm_info;
     localtime_r(&sec, &tm_info);
 
-    char tsBuf[32];
-    snprintf(tsBuf, sizeof(tsBuf), "%02d:%02d:%02d.%03d",
-             tm_info.tm_hour, tm_info.tm_min, tm_info.tm_sec, (int)(tv.tv_usec / 1000));
-
-    char msgBuf[1024];
+    char msgBuf[1536];
     va_list ap;
     va_start(ap, fmt);
     vsnprintf(msgBuf, sizeof(msgBuf), fmt, ap);
     va_end(ap);
 
-    pthread_mutex_lock(&gDevLogMutex);
-    if (gDevLogFile) {
-        fprintf(gDevLogFile, "[%s] [%s] %s\n", tsBuf, category ? category : "LOG", msgBuf);
-        fflush(gDevLogFile);
+    pthread_mutex_lock(&gDebugLogMutex);
+    if (gDebugLogFile) {
+        fprintf(gDebugLogFile, "[%02d:%02d:%02d.%03d] [%s] %s\n",
+                tm_info.tm_hour, tm_info.tm_min, tm_info.tm_sec, (int)(tv.tv_usec / 1000),
+                category ? category : "LOG", msgBuf);
+        fflush(gDebugLogFile);
     }
-    pthread_mutex_unlock(&gDevLogMutex);
+    pthread_mutex_unlock(&gDebugLogMutex);
 }
 
-static void devlog_init(char *outLogPath, size_t outLogPathSize) {
-    if (outLogPath && outLogPathSize > 0) {
-        outLogPath[0] = '\0';
-    }
-    const char *env = getenv("SIMS2_TRACKPAD_DEVLOG");
-    if (env && env[0] == '0') {
-        gDevLogEnabled = NO;
-        return;
-    }
+static void init_log_paths_and_system_info(void) {
     const char *home = getenv("HOME");
     if (!home || home[0] == '\0') {
         NSString *nsHome = NSHomeDirectory();
         home = nsHome ? [nsHome UTF8String] : NULL;
     }
-    if (!home || home[0] == '\0') {
+    if (home && home[0] != '\0') {
+        snprintf(gLibDir, sizeof(gLibDir), "%s/Library", home);
+        snprintf(gLogsRootDir, sizeof(gLogsRootDir), "%s/Library/Logs", home);
+        snprintf(gLogsDir, sizeof(gLogsDir), "%s/Library/Logs/Sims2-Crash-Patch", home);
+        snprintf(gCrashLogPath, sizeof(gCrashLogPath), "%s/crash_report.log", gLogsDir);
+        snprintf(gDebugLogPath, sizeof(gDebugLogPath), "%s/debug_boot.log", gLogsDir);
+        snprintf(gDebugPrevLogPath, sizeof(gDebugPrevLogPath), "%s/debug_boot.previous.log", gLogsDir);
+        snprintf(gDebugFlagPath, sizeof(gDebugFlagPath), "%s/.debug_enabled", gLogsDir);
+    }
+
+    size_t modelLen = sizeof(gCachedHwModel) - 1;
+    if (sysctlbyname("hw.model", gCachedHwModel, &modelLen, NULL, 0) == 0 && modelLen > 0) {
+        gCachedHwModel[modelLen] = '\0';
+    } else {
+        snprintf(gCachedHwModel, sizeof(gCachedHwModel), "unknown");
+    }
+
+    size_t osLen = sizeof(gCachedOsVersion) - 1;
+    if (sysctlbyname("kern.osproductversion", gCachedOsVersion, &osLen, NULL, 0) == 0 && osLen > 0) {
+        gCachedOsVersion[osLen] = '\0';
+    } else {
+        NSOperatingSystemVersion v = [[NSProcessInfo processInfo] operatingSystemVersion];
+        snprintf(gCachedOsVersion, sizeof(gCachedOsVersion), "%ld.%ld.%ld",
+                 (long)v.majorVersion, (long)v.minorVersion, (long)v.patchVersion);
+    }
+
+    CGRect bounds = CGDisplayBounds(CGMainDisplayID());
+    if (bounds.size.width > 0.0 && bounds.size.height > 0.0) {
+        snprintf(gCachedFrameStr, sizeof(gCachedFrameStr), "%.0fx%.0f@(%.0f,%.0f)",
+                 bounds.size.width, bounds.size.height, bounds.origin.x, bounds.origin.y);
+    }
+}
+
+static void update_cached_screen_geometry(NSScreen *scr) {
+    NSScreen *target = scr ?: [NSScreen mainScreen];
+    if (!target) {
+        return;
+    }
+    NSRect sf = target.frame;
+    NSRect vf = target.visibleFrame;
+    snprintf(gCachedFrameStr, sizeof(gCachedFrameStr), "%.0fx%.0f@(%.0f,%.0f) scale=%.1f",
+             sf.size.width, sf.size.height, sf.origin.x, sf.origin.y, target.backingScaleFactor);
+    snprintf(gCachedVisibleFrameStr, sizeof(gCachedVisibleFrameStr), "%.0fx%.0f@(%.0f,%.0f)",
+             vf.size.width, vf.size.height, vf.origin.x, vf.origin.y);
+}
+
+static void debuglog_init_if_enabled(void) {
+    const char *envDbg = getenv("SIMS2_DEBUG");
+    BOOL envEnabled = (envDbg && envDbg[0] == '1');
+    struct stat flagSt;
+    BOOL flagEnabled = (gDebugFlagPath[0] != '\0' && stat(gDebugFlagPath, &flagSt) == 0);
+
+    if (!envEnabled && !flagEnabled) {
+        gDebugBootEnabled = NO;
+        return;
+    }
+    if (gLogsDir[0] == '\0' || gDebugLogPath[0] == '\0') {
         return;
     }
 
-    char libDir[512];
-    char logsRoot[512];
-    char appLogDir[512];
-    char logPath[600];
-    char prevPath[600];
+    ensure_dir_exists(gLibDir);
+    ensure_dir_exists(gLogsRootDir);
+    ensure_dir_exists(gLogsDir);
 
-    snprintf(libDir, sizeof(libDir), "%s/Library", home);
-    snprintf(logsRoot, sizeof(logsRoot), "%s/Library/Logs", home);
-    snprintf(appLogDir, sizeof(appLogDir), "%s/Library/Logs/Sims2-Crash-Patch", home);
-    ensure_dir_exists(libDir);
-    ensure_dir_exists(logsRoot);
-    ensure_dir_exists(appLogDir);
-
-    snprintf(logPath, sizeof(logPath), "%s/trackpad_events.log", appLogDir);
-    snprintf(prevPath, sizeof(prevPath), "%s/trackpad_events.previous.log", appLogDir);
-
-    struct stat st;
-    if (stat(logPath, &st) == 0) {
-        rename(logPath, prevPath);
+    struct stat logSt;
+    if (stat(gDebugLogPath, &logSt) == 0) {
+        rename(gDebugLogPath, gDebugPrevLogPath);
     }
 
-    FILE *fp = fopen(logPath, "w");
+    FILE *fp = fopen(gDebugLogPath, "w");
     if (!fp) {
         return;
     }
-    pthread_mutex_lock(&gDevLogMutex);
-    gDevLogFile = fp;
-    pthread_mutex_unlock(&gDevLogMutex);
+    pthread_mutex_lock(&gDebugLogMutex);
+    gDebugLogFile = fp;
+    gDebugBootEnabled = YES;
+    pthread_mutex_unlock(&gDebugLogMutex);
+}
 
-    if (outLogPath && outLogPathSize > 0) {
-        snprintf(outLogPath, outLogPathSize, "%s", logPath);
+static void write_all_fd(int fd, const char *buf, size_t len) {
+    size_t off = 0;
+    while (off < len) {
+        ssize_t n = write(fd, buf + off, len - off);
+        if (n <= 0) {
+            if (errno == EINTR) {
+                continue;
+            }
+            break;
+        }
+        off += (size_t)n;
+    }
+}
+
+static void write_cstr_fd(int fd, const char *s) {
+    if (!s) {
+        return;
+    }
+    write_all_fd(fd, s, strlen(s));
+}
+
+static void write_int_fd(int fd, long val) {
+    char buf[32];
+    int idx = (int)sizeof(buf);
+    unsigned long uval;
+    BOOL neg = NO;
+    if (val < 0) {
+        neg = YES;
+        uval = (unsigned long)(-(val + 1)) + 1UL;
+    } else {
+        uval = (unsigned long)val;
+    }
+    if (uval == 0) {
+        buf[--idx] = '0';
+    } else {
+        while (uval > 0 && idx > 1) {
+            buf[--idx] = (char)('0' + (uval % 10UL));
+            uval /= 10UL;
+        }
+    }
+    if (neg && idx > 0) {
+        buf[--idx] = '-';
+    }
+    write_all_fd(fd, buf + idx, (size_t)((int)sizeof(buf) - idx));
+}
+
+static void write_hex_fd(int fd, uintptr_t val) {
+    static const char hex[] = "0123456789abcdef";
+    char buf[24];
+    int idx = (int)sizeof(buf);
+    if (val == 0) {
+        buf[--idx] = '0';
+    } else {
+        while (val > 0 && idx > 2) {
+            buf[--idx] = hex[val & 0xFUL];
+            val >>= 4;
+        }
+    }
+    buf[--idx] = 'x';
+    buf[--idx] = '0';
+    write_all_fd(fd, buf + idx, (size_t)((int)sizeof(buf) - idx));
+}
+
+static const char *signal_label(int sig) {
+    switch (sig) {
+        case SIGSEGV: return "SIGSEGV";
+        case SIGABRT: return "SIGABRT";
+        case SIGBUS:  return "SIGBUS";
+        case SIGILL:  return "SIGILL";
+        case SIGFPE:  return "SIGFPE";
+        default:      return "SIGNAL";
+    }
+}
+
+static void write_crash_report_async_safe(const char *reason, int sig, siginfo_t *info) {
+    if (!__sync_bool_compare_and_swap(&gCrashReportWritten, 0, 1)) {
+        return;
+    }
+    if (gCrashLogPath[0] == '\0') {
+        return;
+    }
+    mkdir(gLibDir, 0755);
+    mkdir(gLogsRootDir, 0755);
+    mkdir(gLogsDir, 0755);
+
+    int fd = open(gCrashLogPath, O_WRONLY | O_CREAT | O_TRUNC | O_NOFOLLOW, 0644);
+    if (fd < 0) {
+        return;
+    }
+
+    write_cstr_fd(fd, "=== Sims 2 Crash Patch — Automatic Crash Report ===\n");
+    write_cstr_fd(fd, "Patch Version : " SIMS2_PATCH_VERSION "\n");
+    write_cstr_fd(fd, "PID           : ");
+    write_int_fd(fd, (long)getpid());
+    write_cstr_fd(fd, "\nMac Model     : ");
+    write_cstr_fd(fd, gCachedHwModel);
+    write_cstr_fd(fd, "\nmacOS Version : ");
+    write_cstr_fd(fd, gCachedOsVersion);
+    write_cstr_fd(fd, "\nScreen frame  : ");
+    write_cstr_fd(fd, gCachedFrameStr);
+    write_cstr_fd(fd, "\nvisibleFrame  : ");
+    write_cstr_fd(fd, gCachedVisibleFrameStr);
+    write_cstr_fd(fd, "\nReason        : ");
+    write_cstr_fd(fd, reason ? reason : "unknown");
+    if (sig > 0) {
+        write_cstr_fd(fd, " (");
+        write_cstr_fd(fd, signal_label(sig));
+        write_cstr_fd(fd, " #");
+        write_int_fd(fd, (long)sig);
+        write_cstr_fd(fd, ")");
+    }
+    if (info && info->si_addr != NULL) {
+        write_cstr_fd(fd, "\nFault Address : ");
+        write_hex_fd(fd, (uintptr_t)info->si_addr);
+    }
+    write_cstr_fd(fd, "\nLast C++ Throw: ");
+    write_cstr_fd(fd, gLastCxaThrowInfo);
+    write_cstr_fd(fd, "\n\n--- Backtrace ---\n");
+
+    void *frames[64];
+    int nframes = backtrace(frames, 64);
+    if (nframes > 0) {
+        backtrace_symbols_fd(frames, nframes, fd);
+    } else {
+        write_cstr_fd(fd, "(unavailable)\n");
+    }
+    close(fd);
+}
+
+static void sims2_crash_signal_handler(int sig, siginfo_t *info, void *uap) {
+    (void)uap;
+    write_crash_report_async_safe("Fatal Signal", sig, info);
+    if (sig > 0 && sig < 32) {
+        sigaction(sig, &gPrevSigActions[sig], NULL);
+        raise(sig);
+    }
+    _exit(128 + sig);
+}
+
+static void sims2_terminate_handler(void) {
+    typedef const void *(*CurrentExcTypeFn)(void);
+    CurrentExcTypeFn curExcFn = (CurrentExcTypeFn)dlsym(RTLD_DEFAULT, "__cxa_current_exception_type");
+    const char *excName = NULL;
+    if (curExcFn) {
+        const void *ti = curExcFn();
+        if (ti) {
+            excName = *(const char * const *)((const char *)ti + sizeof(void *));
+        }
+    }
+    char reason[256];
+    if (excName && excName[0] != '\0') {
+        snprintf(reason, sizeof(reason), "C++ std::terminate (exception: %.180s)", excName);
+    } else {
+        snprintf(reason, sizeof(reason), "C++ std::terminate");
+    }
+    write_crash_report_async_safe(reason, 0, NULL);
+
+    if (gPrevTerminateHandler && gPrevTerminateHandler != sims2_terminate_handler) {
+        gPrevTerminateHandler();
+    }
+    abort();
+}
+
+static void install_crash_handlers(void) {
+    static const int kCrashSignals[] = { SIGSEGV, SIGABRT, SIGBUS, SIGILL, SIGFPE };
+    struct sigaction sa;
+    memset(&sa, 0, sizeof(sa));
+    sa.sa_sigaction = sims2_crash_signal_handler;
+    sigemptyset(&sa.sa_mask);
+    sa.sa_flags = SA_SIGINFO;
+
+    for (size_t i = 0; i < sizeof(kCrashSignals) / sizeof(kCrashSignals[0]); i++) {
+        int sig = kCrashSignals[i];
+        if (sig > 0 && sig < 32) {
+            sigaction(sig, &sa, &gPrevSigActions[sig]);
+        }
+    }
+
+    typedef Sims2TerminateHandler (*SetTerminateFn)(Sims2TerminateHandler);
+    SetTerminateFn setTermFn = (SetTerminateFn)dlsym(RTLD_DEFAULT, "_ZSt13set_terminatePFvvE");
+    if (setTermFn) {
+        gPrevTerminateHandler = setTermFn(sims2_terminate_handler);
     }
 }
 
@@ -258,9 +472,6 @@ static void log_msg(NSString *msg) {
 /*
  * Resolve unshifted virtual keycodes for ',' (rotate left) and '.' (rotate right)
  * matching SDL2's Cocoa_UpdateKeymap UCKeyTranslate Pass 1 (modifierKeyState = 0).
- * On ABC-AZERTY, ',' is keyCode 46 (WinVK 0xBC) while '.' requires Shift on keyCode 43
- * (Wait: unshifted 43 is ';', WinVK 0xBA), whereas unshifted keyCode 47 falls through
- * SDL2 Pass 2 (darwin_scancode_table[47] -> SDL_SCANCODE_PERIOD -> WinVK 0xBE).
  */
 static void resolve_camera_rotate_keycodes_from_layout(const UCKeyboardLayout *layout,
                                                        UInt8 kbdType,
@@ -272,7 +483,6 @@ static void resolve_camera_rotate_keycodes_from_layout(const UCKeyboardLayout *l
     BOOL foundRight = NO;
     if (layout && outLeftKey && outRightKey) {
         for (UInt16 kc = 0; kc < 128; kc++) {
-            /* Skip numeric keypad keycodes (e.g. kc=65 KP_DECIMAL -> VK_DECIMAL, not VK_OEM_COMMA/PERIOD) */
             if (kc >= 65 && kc <= 92) {
                 continue;
             }
@@ -485,7 +695,7 @@ static void post_pinch_zoom_scroll(int direction) {
 static void handle_scroll_event(NSEvent *event) {
     gSuppressedScrollEvent = nil;
     if (![event hasPreciseScrollingDeltas]) {
-        return; // External mouse wheel or synthetic pinch line scroll: keep native behavior
+        return;
     }
 
     NSEventPhase phase = [event phase];
@@ -516,7 +726,6 @@ static void handle_scroll_event(NSEvent *event) {
 
     double dx = [event scrollingDeltaX];
     double dy = [event scrollingDeltaY];
-    // Normalize horizontal finger direction so sliding fingers right is positive regardless of Natural Scrolling
     double fingerRightDx = [event isDirectionInvertedFromDevice] ? -dx : dx;
 
     if (gScrollAxis == Sims2ScrollAxisNone) {
@@ -525,10 +734,10 @@ static void handle_scroll_event(NSEvent *event) {
         if (adx > 1.5 || ady > 1.5) {
             if (adx > ady * 1.35) {
                 gScrollAxis = Sims2ScrollAxisRotateX;
-                devlog_write("GESTURE", "SCROLL_LOCK axis=RotateX dx=%.2f dy=%.2f", fingerRightDx, dy);
+                debuglog_write("GESTURE", "SCROLL_LOCK axis=RotateX dx=%.2f dy=%.2f", fingerRightDx, dy);
             } else {
                 gScrollAxis = Sims2ScrollAxisZoomY;
-                devlog_write("GESTURE", "SCROLL_LOCK axis=ZoomY dx=%.2f dy=%.2f", fingerRightDx, dy);
+                debuglog_write("GESTURE", "SCROLL_LOCK axis=ZoomY dx=%.2f dy=%.2f", fingerRightDx, dy);
             }
         }
     }
@@ -558,8 +767,8 @@ static void handle_scroll_event(NSEvent *event) {
             CFAbsoluteTime now = CFAbsoluteTimeGetCurrent();
             if ((now - gLastScrollLogTime) >= 0.25) {
                 gLastScrollLogTime = now;
-                devlog_write("GESTURE", "SCROLL_ROTATE dir=%s steps=%d dx=%.2f",
-                             rotatedRight ? "right" : "left", steps, fingerRightDx);
+                debuglog_write("GESTURE", "SCROLL_ROTATE dir=%s steps=%d dx=%.2f",
+                               rotatedRight ? "right" : "left", steps, fingerRightDx);
             }
         }
     }
@@ -570,18 +779,17 @@ static void handle_rotate_event(NSEvent *event) {
     if (phase == NSEventPhaseBegan || phase == NSEventPhaseMayBegin) {
         gIsTwisting = YES;
         gTwistAccum = 0.0;
-        devlog_write("GESTURE", "TWIST_BEGIN");
+        debuglog_write("GESTURE", "TWIST_BEGIN");
         return;
     }
     if (phase == NSEventPhaseEnded || phase == NSEventPhaseCancelled) {
         gIsTwisting = NO;
         gTwistAccum = 0.0;
-        devlog_write("GESTURE", "TWIST_END");
+        debuglog_write("GESTURE", "TWIST_END");
         return;
     }
 
     gIsTwisting = YES;
-    // In AppKit, clockwise (turning right) has negative rotation degrees
     double clockwiseDeg = -[event rotation];
     if ((gTwistAccum > 0.0 && clockwiseDeg < -0.5) ||
         (gTwistAccum < 0.0 && clockwiseDeg > 0.5)) {
@@ -606,9 +814,9 @@ static void handle_rotate_event(NSEvent *event) {
         CFAbsoluteTime now = CFAbsoluteTimeGetCurrent();
         if ((now - gLastTwistLogTime) >= 0.25) {
             gLastTwistLogTime = now;
-            devlog_write("GESTURE", "TWIST_ROTATE dir=%s steps=%d deg=%.2f keys=(%u,%u)",
-                         rotatedRight ? "right" : "left", steps, clockwiseDeg,
-                         gCachedLeftRotateKey, gCachedRightRotateKey);
+            debuglog_write("GESTURE", "TWIST_ROTATE dir=%s steps=%d deg=%.2f keys=(%u,%u)",
+                           rotatedRight ? "right" : "left", steps, clockwiseDeg,
+                           gCachedLeftRotateKey, gCachedRightRotateKey);
         }
     }
 }
@@ -641,7 +849,7 @@ static void handle_magnify_event(NSEvent *event) {
         CFAbsoluteTime now = CFAbsoluteTimeGetCurrent();
         if ((now - gLastPinchLogTime) >= 0.25) {
             gLastPinchLogTime = now;
-            devlog_write("GESTURE", "PINCH_ZOOM dir=%d steps=%d mag=%.3f", lastDir, steps, mag);
+            debuglog_write("GESTURE", "PINCH_ZOOM dir=%d steps=%d mag=%.3f", lastDir, steps, mag);
         }
     }
 }
@@ -663,7 +871,7 @@ static void release_ctrl_middle_drag(id listener) {
     SEL upSEL = gCtrlDragWasRight ? @selector(rightMouseUp:) : @selector(mouseUp:);
     NSEventType upType = gCtrlDragWasRight ? NSEventTypeRightMouseUp : NSEventTypeLeftMouseUp;
 
-    devlog_write("CAM", "CTRL_ORBIT_END_SYNTH btn=%s", gCtrlDragWasRight ? "right" : "left");
+    debuglog_write("CAM", "CTRL_ORBIT_END_SYNTH btn=%s", gCtrlDragWasRight ? "right" : "left");
 
     if (win && upIMP) {
         NSTimeInterval ts = [[NSProcessInfo processInfo] systemUptime];
@@ -738,38 +946,40 @@ static NSEvent *swizzled_nextEventMatchingMask(id self, SEL _cmd, NSEventMask ma
         } else if (t == NSEventTypeMagnify) {
             handle_magnify_event(ev);
         } else if (t == NSEventTypeKeyDown || t == NSEventTypeKeyUp) {
-            if (![ev isARepeat]) {
+            if (![ev isARepeat] && gDebugBootEnabled) {
                 NSEventModifierFlags rawFlags = raw_event_modifier_flags(ev);
                 BOOL isSynth = ([ev CGEvent] == NULL);
                 char keyLabel[32];
                 format_key_label(ev, keyLabel, sizeof(keyLabel));
-                devlog_write("KEY", "%s keyCode=%u key=%s synth=%d ctrl=%d opt=%d shift=%d cmd=%d",
-                             (t == NSEventTypeKeyDown) ? "keyDown" : "keyUp",
-                             (unsigned int)[ev keyCode],
-                             keyLabel,
-                             isSynth ? 1 : 0,
-                             (rawFlags & NSEventModifierFlagControl) ? 1 : 0,
-                             (rawFlags & NSEventModifierFlagOption) ? 1 : 0,
-                             (rawFlags & NSEventModifierFlagShift) ? 1 : 0,
-                             (rawFlags & NSEventModifierFlagCommand) ? 1 : 0);
+                debuglog_write("KEY", "%s keyCode=%u key=%s synth=%d ctrl=%d opt=%d shift=%d cmd=%d",
+                               (t == NSEventTypeKeyDown) ? "keyDown" : "keyUp",
+                               (unsigned int)[ev keyCode],
+                               keyLabel,
+                               isSynth ? 1 : 0,
+                               (rawFlags & NSEventModifierFlagControl) ? 1 : 0,
+                               (rawFlags & NSEventModifierFlagOption) ? 1 : 0,
+                               (rawFlags & NSEventModifierFlagShift) ? 1 : 0,
+                               (rawFlags & NSEventModifierFlagCommand) ? 1 : 0);
             }
         } else if (t == NSEventTypeFlagsChanged) {
             NSEventModifierFlags rawFlags = raw_event_modifier_flags(ev);
             if (gCtrlMiddleDragActive && ((rawFlags & NSEventModifierFlagControl) == 0)) {
                 release_ctrl_middle_drag(resolve_window_listener());
             }
-            NSUInteger trackedMods = rawFlags & (NSEventModifierFlagControl |
-                                                 NSEventModifierFlagOption |
-                                                 NSEventModifierFlagShift |
-                                                 NSEventModifierFlagCommand);
-            if (trackedMods != gLastLoggedModifierMask) {
-                gLastLoggedModifierMask = trackedMods;
-                devlog_write("MOD", "flags ctrl=%d opt=%d shift=%d cmd=%d (raw=0x%lx)",
-                             (trackedMods & NSEventModifierFlagControl) ? 1 : 0,
-                             (trackedMods & NSEventModifierFlagOption) ? 1 : 0,
-                             (trackedMods & NSEventModifierFlagShift) ? 1 : 0,
-                             (trackedMods & NSEventModifierFlagCommand) ? 1 : 0,
-                             (unsigned long)rawFlags);
+            if (gDebugBootEnabled) {
+                NSUInteger trackedMods = rawFlags & (NSEventModifierFlagControl |
+                                                     NSEventModifierFlagOption |
+                                                     NSEventModifierFlagShift |
+                                                     NSEventModifierFlagCommand);
+                if (trackedMods != gLastLoggedModifierMask) {
+                    gLastLoggedModifierMask = trackedMods;
+                    debuglog_write("MOD", "flags ctrl=%d opt=%d shift=%d cmd=%d (raw=0x%lx)",
+                                   (trackedMods & NSEventModifierFlagControl) ? 1 : 0,
+                                   (trackedMods & NSEventModifierFlagOption) ? 1 : 0,
+                                   (trackedMods & NSEventModifierFlagShift) ? 1 : 0,
+                                   (trackedMods & NSEventModifierFlagCommand) ? 1 : 0,
+                                   (unsigned long)rawFlags);
+                }
             }
         }
     }
@@ -840,18 +1050,6 @@ static void handle_camera_mouse_down(id self, SEL _cmd, NSEvent *event, IMP orig
         ((Fn)origIMP)(self, _cmd, event);
         return;
     }
-    if (event && gMouseAlignLogged < 8) {
-        NSWindow *evWin = [event window];
-        if (evWin && is_sdl_game_window(evWin)) {
-            gMouseAlignLogged++;
-            NSPoint loc = [event locationInWindow];
-            NSRect cb = evWin.contentView ? evWin.contentView.bounds : evWin.frame;
-            int targetW = 0, targetH = 0;
-            get_target_render_resolution(&targetW, &targetH);
-            bootlog_write("MOUSE", "click=(%.1f,%.1f) content=%.0fx%.0f target=%dx%d",
-                          loc.x, loc.y, cb.size.width, cb.size.height, targetW, targetH);
-        }
-    }
     NSEventModifierFlags rawFlags = raw_event_modifier_flags(event);
     BOOL ctrlHeld = (rawFlags & NSEventModifierFlagControl) != 0;
     BOOL cmdHeld = (rawFlags & NSEventModifierFlagCommand) != 0;
@@ -860,8 +1058,8 @@ static void handle_camera_mouse_down(id self, SEL _cmd, NSEvent *event, IMP orig
         gCtrlMiddleDragActive = YES;
         gCtrlDragWasRight = isRight;
         gLastMouseDownWindow = [event window];
-        devlog_write("CAM", "CTRL_ORBIT_START btn=%s win=%p",
-                     isRight ? "right" : "left", (__bridge void *)gLastMouseDownWindow);
+        debuglog_write("CAM", "CTRL_ORBIT_START btn=%s win=%p",
+                       isRight ? "right" : "left", (__bridge void *)gLastMouseDownWindow);
         gSpoofMiddleButton = YES;
         gMaskControlModifier = YES;
         ((Fn)origIMP)(self, _cmd, event);
@@ -874,12 +1072,12 @@ static void handle_camera_mouse_down(id self, SEL _cmd, NSEvent *event, IMP orig
     }
     if (isRight && [event type] == NSEventTypeRightMouseDown) {
         BOOL optHeld = (rawFlags & NSEventModifierFlagOption) != 0;
-        devlog_write("CAM", "NATIVE_RIGHT_CLICK_DOWN opt=%d win=%p",
-                     optHeld ? 1 : 0, (__bridge void *)[event window]);
+        debuglog_write("CAM", "NATIVE_RIGHT_CLICK_DOWN opt=%d win=%p",
+                       optHeld ? 1 : 0, (__bridge void *)[event window]);
     } else if (!isRight && [event type] == NSEventTypeLeftMouseDown &&
                (rawFlags & NSEventModifierFlagOption) != 0) {
-        devlog_write("CAM", "NATIVE_OPTION_LEFT_CLICK_DOWN win=%p",
-                     (__bridge void *)[event window]);
+        debuglog_write("CAM", "NATIVE_OPTION_LEFT_CLICK_DOWN win=%p",
+                       (__bridge void *)[event window]);
     }
     ((Fn)origIMP)(self, _cmd, event);
 }
@@ -920,7 +1118,7 @@ static void handle_camera_mouse_up(id self, SEL _cmd, NSEvent *event, IMP origIM
     }
     if (gCtrlMiddleDragActive) {
         if (isRight == gCtrlDragWasRight) {
-            devlog_write("CAM", "CTRL_ORBIT_END btn=%s", isRight ? "right" : "left");
+            debuglog_write("CAM", "CTRL_ORBIT_END btn=%s", isRight ? "right" : "left");
             gCtrlMiddleDragActive = NO;
             gCtrlDragWasRight = NO;
             gLastMouseDownWindow = nil;
@@ -933,7 +1131,7 @@ static void handle_camera_mouse_up(id self, SEL _cmd, NSEvent *event, IMP origIM
         return;
     }
     if (isRight && [event type] == NSEventTypeRightMouseUp) {
-        devlog_write("CAM", "NATIVE_RIGHT_CLICK_UP win=%p", (__bridge void *)[event window]);
+        debuglog_write("CAM", "NATIVE_RIGHT_CLICK_UP win=%p", (__bridge void *)[event window]);
     }
     ((Fn)origIMP)(self, _cmd, event);
 }
@@ -972,15 +1170,15 @@ static void swizzled_mouseMoved(id self, SEL _cmd, NSEvent *event) {
     if (!gAppIsActive || ![NSApp isActive] || !win || ![win isKeyWindow]) {
         return;
     }
-    if (event && [event type] == NSEventTypeMouseMoved) {
+    if (gDebugBootEnabled && event && [event type] == NSEventTypeMouseMoved) {
         NSEventModifierFlags rawFlags = raw_event_modifier_flags(event);
         if ((rawFlags & NSEventModifierFlagOption) != 0) {
             CFAbsoluteTime now = CFAbsoluteTimeGetCurrent();
             if ((now - gLastOptionHoverLogTime) >= 0.5) {
                 gLastOptionHoverLogTime = now;
                 NSPoint pt = [event locationInWindow];
-                devlog_write("CAM", "NATIVE_OPTION_HOVER_MOVE loc=(%.1f,%.1f) delta=(%.1f,%.1f)",
-                             pt.x, pt.y, [event deltaX], [event deltaY]);
+                debuglog_write("CAM", "NATIVE_OPTION_HOVER_MOVE loc=(%.1f,%.1f) delta=(%.1f,%.1f)",
+                               pt.x, pt.y, [event deltaX], [event deltaY]);
             }
         }
     }
@@ -1069,8 +1267,8 @@ static void neutralize_single_orphan_window(NSWindow *win) {
                 ((void (*)(id, SEL))resumeIMP)(delegate, resumeSel);
             }
         }
-        devlog_write("WIN", "Neutralized secondary orphan SDLWindow win=%p (primary=%p)",
-                     (__bridge void *)win, (__bridge void *)gPrimaryFullscreenWindow);
+        debuglog_write("WIN", "Neutralized secondary orphan SDLWindow win=%p (primary=%p)",
+                       (__bridge void *)win, (__bridge void *)gPrimaryFullscreenWindow);
     }
 }
 
@@ -1099,8 +1297,8 @@ static void swizzled_windowDidBecomeKey(id self, SEL _cmd, NSNotification *notif
         neutralize_secondary_orphan_windows((NSWindow *)obj);
     } else if (is_secondary_orphan_game_window(obj)) {
         neutralize_single_orphan_window((NSWindow *)obj);
-        devlog_write("WIN", "SUPPRESSED orphan windowDidBecomeKey win=%p -> restoring primary=%p",
-                     (__bridge void *)obj, (__bridge void *)gPrimaryFullscreenWindow);
+        debuglog_write("WIN", "SUPPRESSED orphan windowDidBecomeKey win=%p -> restoring primary=%p",
+                       (__bridge void *)obj, (__bridge void *)gPrimaryFullscreenWindow);
         if (gAppIsActive && (!NSApp || [NSApp isActive]) &&
             gPrimaryFullscreenWindow && gOrigMakeKeyAndOrderFrontIMP) {
             typedef void (*OrderFn)(id, SEL, id);
@@ -1116,9 +1314,9 @@ static void swizzled_windowDidBecomeKey(id self, SEL _cmd, NSNotification *notif
         gAppIsActive = YES;
         gLastResignTimestamp = 0.0;
     }
-    devlog_write("WIN", "windowDidBecomeKey win=%p active=%d fs=%d frame=%.0fx%.0f",
-                 (__bridge void *)obj, (NSApp && [NSApp isActive]) ? 1 : 0, isFS ? 1 : 0,
-                 frame.size.width, frame.size.height);
+    debuglog_write("WIN", "windowDidBecomeKey win=%p active=%d fs=%d frame=%.0fx%.0f",
+                   (__bridge void *)obj, (NSApp && [NSApp isActive]) ? 1 : 0, isFS ? 1 : 0,
+                   frame.size.width, frame.size.height);
 
     if (gOrigWindowDidBecomeKeyIMP) {
         typedef void (*BecomeFn)(id, SEL, NSNotification *);
@@ -1129,7 +1327,7 @@ static void swizzled_windowDidBecomeKey(id self, SEL _cmd, NSNotification *notif
 static void swizzled_windowDidResignKey(id self, SEL _cmd, NSNotification *notification) {
     id obj = [notification object];
     if (is_secondary_orphan_game_window(obj)) {
-        devlog_write("WIN", "IGNORED orphan windowDidResignKey win=%p", (__bridge void *)obj);
+        debuglog_write("WIN", "IGNORED orphan windowDidResignKey win=%p", (__bridge void *)obj);
         return;
     }
     gWindowListener = self;
@@ -1137,8 +1335,8 @@ static void swizzled_windowDidResignKey(id self, SEL _cmd, NSNotification *notif
     reset_gesture_and_key_state(self);
     CGAssociateMouseAndMouseCursorPosition(true);
     CGDisplayShowCursor(kCGDirectMainDisplay);
-    devlog_write("WIN", "windowDidResignKey win=%p active=%d",
-                 (__bridge void *)obj, (NSApp && [NSApp isActive]) ? 1 : 0);
+    debuglog_write("WIN", "windowDidResignKey win=%p active=%d",
+                   (__bridge void *)obj, (NSApp && [NSApp isActive]) ? 1 : 0);
 
     if (gOrigWindowDidResignKeyIMP) {
         typedef void (*ResignFn)(id, SEL, NSNotification *);
@@ -1153,7 +1351,7 @@ static void swizzled_windowWillEnterFullScreen(id self, SEL _cmd, NSNotification
     if ([obj isKindOfClass:[NSWindow class]]) {
         neutralize_secondary_orphan_windows((NSWindow *)obj);
     }
-    devlog_write("WIN", "windowWillEnterFullScreen win=%p", (__bridge void *)obj);
+    debuglog_write("WIN", "windowWillEnterFullScreen win=%p", (__bridge void *)obj);
 
     if (gOrigWindowWillEnterFullScreenIMP) {
         typedef void (*EnterFSFn)(id, SEL, NSNotification *);
@@ -1168,7 +1366,7 @@ static void swizzled_windowDidEnterFullScreen(id self, SEL _cmd, NSNotification 
     if ([obj isKindOfClass:[NSWindow class]]) {
         neutralize_secondary_orphan_windows((NSWindow *)obj);
     }
-    devlog_write("WIN", "windowDidEnterFullScreen win=%p", (__bridge void *)obj);
+    debuglog_write("WIN", "windowDidEnterFullScreen win=%p", (__bridge void *)obj);
 
     if (gOrigWindowDidEnterFullScreenIMP) {
         typedef void (*DidEnterFSFn)(id, SEL, NSNotification *);
@@ -1180,8 +1378,8 @@ static void swizzled_windowWillExitFullScreen(id self, SEL _cmd, NSNotification 
     gWindowListener = self;
     gInFullscreenTransition = YES;
     reset_gesture_and_key_state(self);
-    devlog_write("WIN", "windowWillExitFullScreen win=%p active=%d",
-                 (__bridge void *)[notification object], (NSApp && [NSApp isActive]) ? 1 : 0);
+    debuglog_write("WIN", "windowWillExitFullScreen win=%p active=%d",
+                   (__bridge void *)[notification object], (NSApp && [NSApp isActive]) ? 1 : 0);
 
     if (gOrigWindowWillExitFullScreenIMP) {
         typedef void (*ExitFSFn)(id, SEL, NSNotification *);
@@ -1195,8 +1393,8 @@ static void swizzled_windowDidExitFullScreen(id self, SEL _cmd, NSNotification *
     if ([notification object] == gPrimaryFullscreenWindow) {
         gPrimaryFullscreenWindow = nil;
     }
-    devlog_write("WIN", "windowDidExitFullScreen win=%p active=%d",
-                 (__bridge void *)[notification object], (NSApp && [NSApp isActive]) ? 1 : 0);
+    debuglog_write("WIN", "windowDidExitFullScreen win=%p active=%d",
+                   (__bridge void *)[notification object], (NSApp && [NSApp isActive]) ? 1 : 0);
 
     if (gOrigWindowDidExitFullScreenIMP) {
         typedef void (*DidExitFSFn)(id, SEL, NSNotification *);
@@ -1209,12 +1407,12 @@ static BOOL swizzled_setFullscreenSpace(id self, SEL _cmd, BOOL state) {
     if (!state && !gAppIsHiding && !(NSApp && [NSApp isHidden]) &&
         should_suppress_focus_steal_or_fullscreen_exit()) {
         CFAbsoluteTime dt = (gLastResignTimestamp > 0.0) ? (CFAbsoluteTimeGetCurrent() - gLastResignTimestamp) : -1.0;
-        devlog_write("WIN", "SUPPRESSED setFullscreenSpace:NO (active=%d nsActive=%d dt=%.3fs)",
-                     gAppIsActive ? 1 : 0, (NSApp && [NSApp isActive]) ? 1 : 0, dt);
+        debuglog_write("WIN", "SUPPRESSED setFullscreenSpace:NO (active=%d nsActive=%d dt=%.3fs)",
+                       gAppIsActive ? 1 : 0, (NSApp && [NSApp isActive]) ? 1 : 0, dt);
         return YES;
     }
-    devlog_write("WIN", "setFullscreenSpace:%d (active=%d hiding=%d)",
-                 state ? 1 : 0, gAppIsActive ? 1 : 0, gAppIsHiding ? 1 : 0);
+    debuglog_write("WIN", "setFullscreenSpace:%d (active=%d hiding=%d)",
+                   state ? 1 : 0, gAppIsActive ? 1 : 0, gAppIsHiding ? 1 : 0);
     if (gOrigSetFullscreenSpaceIMP) {
         typedef BOOL (*Fn)(id, SEL, BOOL);
         return ((Fn)gOrigSetFullscreenSpaceIMP)(self, _cmd, state);
@@ -1227,14 +1425,14 @@ static void swizzled_miniaturize(id self, SEL _cmd, id sender) {
         NSWindow *win = (NSWindow *)self;
         BOOL isFullscreen = (([win styleMask] & NSWindowStyleMaskFullScreen) != 0);
         if (isFullscreen || gInFullscreenTransition || should_suppress_focus_steal_or_fullscreen_exit()) {
-            devlog_write("WIN", "SUPPRESSED miniaturize: (fs=%d trans=%d active=%d) win=%p",
-                         isFullscreen ? 1 : 0, gInFullscreenTransition ? 1 : 0,
-                         gAppIsActive ? 1 : 0, (__bridge void *)win);
+            debuglog_write("WIN", "SUPPRESSED miniaturize: (fs=%d trans=%d active=%d) win=%p",
+                           isFullscreen ? 1 : 0, gInFullscreenTransition ? 1 : 0,
+                           gAppIsActive ? 1 : 0, (__bridge void *)win);
             return;
         }
     }
     if (is_sdl_game_window(self)) {
-        devlog_write("WIN", "miniaturize: sender=%p win=%p", (__bridge void *)sender, (__bridge void *)self);
+        debuglog_write("WIN", "miniaturize: sender=%p win=%p", (__bridge void *)sender, (__bridge void *)self);
     }
     if (gOrigMiniaturizeIMP) {
         typedef void (*Fn)(id, SEL, id);
@@ -1245,8 +1443,8 @@ static void swizzled_miniaturize(id self, SEL _cmd, id sender) {
 static void swizzled_makeKeyAndOrderFront(id self, SEL _cmd, id sender) {
     if (is_secondary_orphan_game_window(self)) {
         neutralize_single_orphan_window((NSWindow *)self);
-        devlog_write("WIN", "SUPPRESSED orphan makeKeyAndOrderFront: win=%p -> primary=%p",
-                     (__bridge void *)self, (__bridge void *)gPrimaryFullscreenWindow);
+        debuglog_write("WIN", "SUPPRESSED orphan makeKeyAndOrderFront: win=%p -> primary=%p",
+                       (__bridge void *)self, (__bridge void *)gPrimaryFullscreenWindow);
         if (gAppIsActive && (!NSApp || [NSApp isActive]) &&
             gPrimaryFullscreenWindow && ![gPrimaryFullscreenWindow isKeyWindow] &&
             gOrigMakeKeyAndOrderFrontIMP) {
@@ -1256,8 +1454,8 @@ static void swizzled_makeKeyAndOrderFront(id self, SEL _cmd, id sender) {
         return;
     }
     if (is_sdl_game_window(self) && should_suppress_focus_steal_or_fullscreen_exit()) {
-        devlog_write("WIN", "SUPPRESSED makeKeyAndOrderFront: (active=%d nsActive=%d) win=%p",
-                     gAppIsActive ? 1 : 0, (NSApp && [NSApp isActive]) ? 1 : 0, (__bridge void *)self);
+        debuglog_write("WIN", "SUPPRESSED makeKeyAndOrderFront: (active=%d nsActive=%d) win=%p",
+                       gAppIsActive ? 1 : 0, (NSApp && [NSApp isActive]) ? 1 : 0, (__bridge void *)self);
         return;
     }
     if (gOrigMakeKeyAndOrderFrontIMP) {
@@ -1269,12 +1467,12 @@ static void swizzled_makeKeyAndOrderFront(id self, SEL _cmd, id sender) {
 static void swizzled_orderFrontRegardless(id self, SEL _cmd) {
     if (is_secondary_orphan_game_window(self)) {
         neutralize_single_orphan_window((NSWindow *)self);
-        devlog_write("WIN", "SUPPRESSED orphan orderFrontRegardless win=%p", (__bridge void *)self);
+        debuglog_write("WIN", "SUPPRESSED orphan orderFrontRegardless win=%p", (__bridge void *)self);
         return;
     }
     if (is_sdl_game_window(self) && should_suppress_focus_steal_or_fullscreen_exit()) {
-        devlog_write("WIN", "SUPPRESSED orderFrontRegardless (active=%d nsActive=%d) win=%p",
-                     gAppIsActive ? 1 : 0, (NSApp && [NSApp isActive]) ? 1 : 0, (__bridge void *)self);
+        debuglog_write("WIN", "SUPPRESSED orderFrontRegardless (active=%d nsActive=%d) win=%p",
+                       gAppIsActive ? 1 : 0, (NSApp && [NSApp isActive]) ? 1 : 0, (__bridge void *)self);
         return;
     }
     if (gOrigOrderFrontRegardlessIMP) {
@@ -1308,9 +1506,9 @@ static BOOL swizzled_canBecomeMainWindow(id self, SEL _cmd) {
 static void swizzled_focusSomeWindow(id self, SEL _cmd, NSNotification *notification) {
     if (gPrimaryFullscreenWindow) {
         neutralize_secondary_orphan_windows(gPrimaryFullscreenWindow);
-        devlog_write("WIN", "focusSomeWindow: redirected to primary fullscreen win=%p (isKey=%d)",
-                     (__bridge void *)gPrimaryFullscreenWindow,
-                     [gPrimaryFullscreenWindow isKeyWindow] ? 1 : 0);
+        debuglog_write("WIN", "focusSomeWindow: redirected to primary fullscreen win=%p (isKey=%d)",
+                       (__bridge void *)gPrimaryFullscreenWindow,
+                       [gPrimaryFullscreenWindow isKeyWindow] ? 1 : 0);
         if (![gPrimaryFullscreenWindow isKeyWindow] && gOrigMakeKeyAndOrderFrontIMP) {
             typedef void (*Fn)(id, SEL, id);
             ((Fn)gOrigMakeKeyAndOrderFrontIMP)(gPrimaryFullscreenWindow,
@@ -1329,8 +1527,8 @@ static void swizzled_activateIgnoringOtherApps(id self, SEL _cmd, BOOL flag) {
     if (flag && gAppHasActivatedOnce &&
         (!gAppIsActive || (gLastResignTimestamp > 0.0 && (CFAbsoluteTimeGetCurrent() - gLastResignTimestamp) < 2.0))) {
         CFAbsoluteTime dt = (gLastResignTimestamp > 0.0) ? (CFAbsoluteTimeGetCurrent() - gLastResignTimestamp) : -1.0;
-        devlog_write("WIN", "SUPPRESSED activateIgnoringOtherApps:YES (active=%d dt=%.3fs)",
-                     gAppIsActive ? 1 : 0, dt);
+        debuglog_write("WIN", "SUPPRESSED activateIgnoringOtherApps:YES (active=%d dt=%.3fs)",
+                       gAppIsActive ? 1 : 0, dt);
         return;
     }
     if (gOrigActivateIgnoringOtherAppsIMP) {
@@ -1351,243 +1549,19 @@ static IMP swizzle_instance_method(Class cls, SEL sel, IMP newIMP) {
 }
 
 /*
- * Real hardware display-mode filter, NSWindow visibleFrame alignment & permanent
- * boot diagnostics (launch_boot.log).
- *
- * The previous synthetic CGDisplayModeRef catalog crashed cDeviceEnumDX at boot
- * (uncaught N11nGZGraphic46cErrorE thrown at 0x10081cfc1). This block keeps ONLY
- * genuine CoreGraphics hardware modes (zero fake objects), filtered to a
- * readable whitelist (<= 2560x1600, no 3K/4K), always preserving the desktop
- * mode (e.g. 1800x1169) and exposing the 1512x982 Retina fallback cleanly.
+ * Real hardware display-mode filter (CGDisplayCopyAllDisplayModes) + dynamic
+ * NSScreen.visibleFrame fullscreen clamping (no synthetic modes).
  */
-
-static void bootlog_write(const char *category, const char *fmt, ...) __attribute__((format(printf, 2, 3)));
-
-static void bootlog_write(const char *category, const char *fmt, ...) {
-    if (!gBootLogFile || !fmt) {
-        return;
-    }
-    struct timeval tv;
-    gettimeofday(&tv, NULL);
-    time_t sec = tv.tv_sec;
-    struct tm tm_info;
-    localtime_r(&sec, &tm_info);
-
-    char msgBuf[1536];
-    va_list ap;
-    va_start(ap, fmt);
-    vsnprintf(msgBuf, sizeof(msgBuf), fmt, ap);
-    va_end(ap);
-
-    pthread_mutex_lock(&gBootLogMutex);
-    if (gBootLogFile) {
-        fprintf(gBootLogFile, "[%02d:%02d:%02d.%03d] [%s] %s\n",
-                tm_info.tm_hour, tm_info.tm_min, tm_info.tm_sec, (int)(tv.tv_usec / 1000),
-                category ? category : "LOG", msgBuf);
-        fflush(gBootLogFile);
-    }
-    pthread_mutex_unlock(&gBootLogMutex);
-}
-
-static void bootlog_init(void) {
-    const char *home = getenv("HOME");
-    if (!home || home[0] == '\0') {
-        NSString *nsHome = NSHomeDirectory();
-        home = nsHome ? [nsHome UTF8String] : NULL;
-    }
-    if (!home || home[0] == '\0') {
-        return;
-    }
-    char dir[512];
-    char logPath[600];
-    char prevPath[600];
-    snprintf(dir, sizeof(dir), "%s/Library", home);
-    ensure_dir_exists(dir);
-    snprintf(dir, sizeof(dir), "%s/Library/Logs", home);
-    ensure_dir_exists(dir);
-    snprintf(dir, sizeof(dir), "%s/Library/Logs/Sims2-Crash-Patch", home);
-    ensure_dir_exists(dir);
-    snprintf(logPath, sizeof(logPath), "%s/launch_boot.log", dir);
-    snprintf(prevPath, sizeof(prevPath), "%s/launch_boot.previous.log", dir);
-
-    struct stat st;
-    if (stat(logPath, &st) == 0) {
-        rename(logPath, prevPath);
-    }
-    FILE *fp = fopen(logPath, "w");
-    if (!fp) {
-        return;
-    }
-    pthread_mutex_lock(&gBootLogMutex);
-    gBootLogFile = fp;
-    pthread_mutex_unlock(&gBootLogMutex);
-}
-
-static BOOL is_valid_render_resolution(int w, int h) {
-    return (w >= 800 && h >= 600 && w <= 4096 && h <= 4096 && w > h);
-}
-
-static BOOL is_whitelisted_target_resolution(int w, int h) {
-    if (!is_valid_render_resolution(w, h)) {
-        return NO;
-    }
-    static const struct { int w; int h; } kExtraUiResolutions[] = {
-        { 1024,  768 }, { 1280,  720 }, { 1280,  800 }, { 1344,  756 },
-        { 1440,  900 }, { 1512,  982 }, { 1680, 1050 }, { 1728, 1080 },
-        { 1800, 1169 }, { 1920, 1080 }, { 1920, 1200 }, { 2048, 1280 },
-        { 2560, 1440 }, { 2560, 1600 },
-    };
-    const size_t count = sizeof(kExtraUiResolutions) / sizeof(kExtraUiResolutions[0]);
-    for (size_t i = 0; i < count; i++) {
-        if (kExtraUiResolutions[i].w == w && kExtraUiResolutions[i].h == h) {
-            return YES;
-        }
-    }
-    return NO;
-}
-
-static void set_target_render_resolution(int w, int h, const char *source) {
-    if (!is_valid_render_resolution(w, h)) {
-        return;
-    }
-    BOOL changed = NO;
-    pthread_mutex_lock(&gRenderTargetMutex);
-    if (gTargetRenderWidth != w || gTargetRenderHeight != h) {
-        gTargetRenderWidth = w;
-        gTargetRenderHeight = h;
-        gLastAppliedCGLWidth = 0;
-        gLastAppliedCGLHeight = 0;
-        changed = YES;
-    }
-    pthread_mutex_unlock(&gRenderTargetMutex);
-    if (changed) {
-        bootlog_write("RES", "target=%dx%d source=%s", w, h, source ? source : "unknown");
-        devlog_write("RES", "target=%dx%d source=%s", w, h, source ? source : "unknown");
-    }
-}
-
-static void get_target_render_resolution(int *outW, int *outH) {
-    ensure_target_render_resolution_initialized();
-    pthread_mutex_lock(&gRenderTargetMutex);
-    if (outW) *outW = gTargetRenderWidth;
-    if (outH) *outH = gTargetRenderHeight;
-    pthread_mutex_unlock(&gRenderTargetMutex);
-}
-
-static void refresh_userprops_target_resolution(BOOL forceLog) {
-    pthread_mutex_lock(&gRenderTargetMutex);
-    gUserPropsInitialized = YES;
-    pthread_mutex_unlock(&gRenderTargetMutex);
-
-    NSString *path = [NSHomeDirectory() stringByAppendingPathComponent:
-                      @"Library/Application Support/Aspyr/The Sims 2/Config/userProps.xml"];
-    const char *cpath = [path UTF8String];
-    struct stat st;
-    if (!cpath || stat(cpath, &st) != 0) {
-        if (forceLog && cpath) {
-            bootlog_write("USERPROPS", "absent or unreadable: %s", cpath);
-        }
-        return;
-    }
-#if defined(_DARWIN_FEATURE_64_BIT_INODE) || defined(__APPLE__)
-    long nsec = st.st_mtimespec.tv_nsec;
-    time_t sec = st.st_mtimespec.tv_sec;
-#else
-    long nsec = 0;
-    time_t sec = st.st_mtime;
-#endif
-    if (!forceLog &&
-        sec == gUserPropsMtimeSec &&
-        nsec == gUserPropsMtimeNsec &&
-        st.st_size == gUserPropsSize) {
-        return;
-    }
-    gUserPropsMtimeSec = sec;
-    gUserPropsMtimeNsec = nsec;
-    gUserPropsSize = st.st_size;
-
-    NSString *xml = [NSString stringWithContentsOfFile:path encoding:NSUTF8StringEncoding error:NULL];
-    if (!xml) {
-        if (forceLog) {
-            bootlog_write("USERPROPS", "absent or unreadable: %s", cpath);
-        }
-        return;
-    }
-    NSRange keyRange = [xml rangeOfString:@"key=\"activeDeviceDisplayMode\""];
-    if (keyRange.location == NSNotFound) {
-        if (forceLog) {
-            bootlog_write("USERPROPS", "activeDeviceDisplayMode key missing (auto-detect)");
-        }
-        return;
-    }
-    NSRange searchRange = NSMakeRange(keyRange.location, xml.length - keyRange.location);
-    NSRange gt = [xml rangeOfString:@">" options:0 range:searchRange];
-    NSRange lt = (gt.location != NSNotFound)
-        ? [xml rangeOfString:@"<" options:0 range:NSMakeRange(gt.location, xml.length - gt.location)]
-        : NSMakeRange(NSNotFound, 0);
-    if (gt.location == NSNotFound || lt.location == NSNotFound || lt.location <= gt.location) {
-        if (forceLog) {
-            bootlog_write("USERPROPS", "activeDeviceDisplayMode unparsable");
-        }
-        return;
-    }
-    NSString *val = [xml substringWithRange:NSMakeRange(gt.location + 1, lt.location - gt.location - 1)];
-    const char *valStr = [val UTF8String];
-    if (forceLog) {
-        bootlog_write("USERPROPS", "activeDeviceDisplayMode=%s", valStr);
-    }
-    int parsedW = 0, parsedH = 0;
-    if (valStr && sscanf(valStr, "%dx%d", &parsedW, &parsedH) == 2 &&
-        is_valid_render_resolution(parsedW, parsedH)) {
-        set_target_render_resolution(parsedW, parsedH, forceLog ? "userProps-boot" : "userProps-watch");
-    }
-}
-
-static void ensure_target_render_resolution_initialized(void) {
-    int w = 0, h = 0;
-    BOOL initialized = NO;
-    pthread_mutex_lock(&gRenderTargetMutex);
-    w = gTargetRenderWidth;
-    h = gTargetRenderHeight;
-    initialized = gUserPropsInitialized;
-    pthread_mutex_unlock(&gRenderTargetMutex);
-
-    if (!initialized) {
-        refresh_userprops_target_resolution(YES);
-        pthread_mutex_lock(&gRenderTargetMutex);
-        w = gTargetRenderWidth;
-        h = gTargetRenderHeight;
-        pthread_mutex_unlock(&gRenderTargetMutex);
-    }
-    if (!is_valid_render_resolution(w, h)) {
-        set_target_render_resolution(1800, 1169, "fallback-1800x1169");
-    }
-}
-
-static void maybe_poll_userprops(void) {
-    CFAbsoluteTime now = CFAbsoluteTimeGetCurrent();
-    if ((now - gLastUserPropsPollTime) < 0.2) {
-        return;
-    }
-    gLastUserPropsPollTime = now;
-    refresh_userprops_target_resolution(NO);
-}
-
-static void bootlog_userprops(void) {
-    gLastUserPropsPollTime = CFAbsoluteTimeGetCurrent();
-    refresh_userprops_target_resolution(YES);
-    ensure_target_render_resolution_initialized();
-}
-
 typedef struct {
     size_t width;
     size_t height;
 } Sims2CatalogResolution;
 
 static const Sims2CatalogResolution kSims2ResolutionWhitelist[] = {
-    { 1280,  800 }, { 1440,  900 }, { 1512,  982 }, { 1680, 1050 },
-    { 1800, 1169 }, { 2048, 1280 }, { 2560, 1600 },
-    { 1728, 1080 }, { 1920, 1080 }, { 1920, 1200 }, { 2560, 1440 },
+    { 1280,  800 }, { 1440,  900 }, { 1470,  956 }, { 1512,  982 },
+    { 1680, 1050 }, { 1728, 1080 }, { 1728, 1117 }, { 1800, 1169 },
+    { 1920, 1080 }, { 1920, 1200 }, { 2048, 1280 }, { 2056, 1329 },
+    { 2560, 1440 }, { 2560, 1600 },
 };
 static const size_t kSims2WhitelistCount =
     sizeof(kSims2ResolutionWhitelist) / sizeof(kSims2ResolutionWhitelist[0]);
@@ -1613,8 +1587,7 @@ static BOOL is_whitelisted_or_desktop(size_t w, size_t h, size_t curW, size_t cu
     if (w < 800 || h < 600 || w <= h || w > 2560 || h > 1600) {
         return NO;
     }
-    if ((w == curW && h == curH) ||
-        (w == (size_t)kSims2RetinaFallbackWidth && h == (size_t)kSims2RetinaFallbackHeight)) {
+    if (w == curW && h == curH) {
         return YES;
     }
     for (size_t i = 0; i < kSims2WhitelistCount; i++) {
@@ -1629,7 +1602,7 @@ static CFArrayRef hook_CGDisplayCopyAllDisplayModes(CGDirectDisplayID display,
                                                     CFDictionaryRef options) {
     CFArrayRef realModes = CGDisplayCopyAllDisplayModes(display, options);
     if (!realModes) {
-        bootlog_write("DISPLAY", "CGDisplayCopyAllDisplayModes(display=%u) -> NULL", (unsigned)display);
+        debuglog_write("DISPLAY", "CGDisplayCopyAllDisplayModes(display=%u) -> NULL", (unsigned)display);
         return NULL;
     }
 
@@ -1687,27 +1660,27 @@ static CFArrayRef hook_CGDisplayCopyAllDisplayModes(CGDirectDisplayID display,
     CFIndex keptCount = CFArrayGetCount(result);
     if (keptCount == 0) {
         CFRelease(result);
-        bootlog_write("DISPLAY", "filter kept 0/%ld modes -> returning unfiltered macOS list", (long)realCount);
+        debuglog_write("DISPLAY", "filter kept 0/%ld modes -> returning unfiltered macOS list", (long)realCount);
         return realModes;
     }
 
-    static int sLoggedEnum = 0;
-    if (sLoggedEnum < 4) {
-        sLoggedEnum++;
-        char listBuf[1024];
-        size_t off = 0;
-        listBuf[0] = '\0';
-        for (CFIndex r = 0; r < keptCount && off < sizeof(listBuf) - 32; r++) {
-            CGDisplayModeRef e = (CGDisplayModeRef)CFArrayGetValueAtIndex(result, r);
-            off += (size_t)snprintf(listBuf + off, sizeof(listBuf) - off, "%s%zux%zu@%.0f",
-                                    r ? "," : "",
-                                    CGDisplayModeGetWidth(e), CGDisplayModeGetHeight(e),
-                                    CGDisplayModeGetRefreshRate(e));
+    if (gDebugBootEnabled) {
+        static int sLoggedEnum = 0;
+        if (sLoggedEnum < 4) {
+            sLoggedEnum++;
+            char listBuf[1024];
+            size_t off = 0;
+            listBuf[0] = '\0';
+            for (CFIndex r = 0; r < keptCount && off < sizeof(listBuf) - 32; r++) {
+                CGDisplayModeRef e = (CGDisplayModeRef)CFArrayGetValueAtIndex(result, r);
+                off += (size_t)snprintf(listBuf + off, sizeof(listBuf) - off, "%s%zux%zu@%.0f",
+                                        r ? "," : "",
+                                        CGDisplayModeGetWidth(e), CGDisplayModeGetHeight(e),
+                                        CGDisplayModeGetRefreshRate(e));
+            }
+            debuglog_write("DISPLAY", "CGDisplayCopyAllDisplayModes(display=%u) real=%ld kept=%ld desktop=%zux%zu modes=[%s]",
+                           (unsigned)display, (long)realCount, (long)keptCount, curW, curH, listBuf);
         }
-        bootlog_write("DISPLAY", "CGDisplayCopyAllDisplayModes(display=%u) real=%ld kept=%ld desktop=%zux%zu modes=[%s]",
-                      (unsigned)display, (long)realCount, (long)keptCount, curW, curH, listBuf);
-        devlog_write("DISPLAY", "CGDisplayCopyAllDisplayModes(display=%u): real=%ld kept=%ld (real HW only)",
-                     (unsigned)display, (long)realCount, (long)keptCount);
     }
 
     CFRelease(realModes);
@@ -1720,24 +1693,28 @@ static int gCxaThrowLogged = 0;
 
 __attribute__((noreturn))
 static void hook_cxa_throw(void *thrownException, void *tinfo, void (*dest)(void *)) {
-    if (gCxaThrowLogged < 200) {
-        gCxaThrowLogged++;
-        const char *typeName = "?";
-        if (tinfo) {
-            const char *n = *(const char * const *)((const char *)tinfo + sizeof(void *));
-            if (n) {
-                typeName = n;
-            }
+    const char *typeName = "?";
+    if (tinfo) {
+        const char *n = *(const char * const *)((const char *)tinfo + sizeof(void *));
+        if (n) {
+            typeName = n;
         }
-        uintptr_t caller = (uintptr_t)__builtin_return_address(0);
-        uintptr_t unslid = caller - (uintptr_t)gExecSlide;
-        bootlog_write("CXX_THROW", "#%d type=%s caller=0x%lx (exe 0x%lx) obj=%p",
-                      gCxaThrowLogged, typeName, (unsigned long)caller, (unsigned long)unslid, thrownException);
+    }
+    uintptr_t caller = (uintptr_t)__builtin_return_address(0);
+    uintptr_t unslid = caller - (uintptr_t)gExecSlide;
+    snprintf(gLastCxaThrowInfo, sizeof(gLastCxaThrowInfo),
+             "type=%.180s caller=0x%lx (exe 0x%lx)",
+             typeName, (unsigned long)caller, (unsigned long)unslid);
+
+    if (gDebugBootEnabled && gCxaThrowLogged < 200) {
+        gCxaThrowLogged++;
+        debuglog_write("CXX_THROW", "#%d type=%s caller=0x%lx (exe 0x%lx) obj=%p",
+                       gCxaThrowLogged, typeName, (unsigned long)caller, (unsigned long)unslid, thrownException);
         if (thrownException && typeName && strstr(typeName, "basic_string")) {
             const unsigned char *s = (const unsigned char *)thrownException;
             const char *text = (s[0] & 1) ? *(const char * const *)(s + 16) : (const char *)(s + 1);
             if (text) {
-                bootlog_write("CXX_THROW", "  what=\"%.300s\"", text);
+                debuglog_write("CXX_THROW", "  what=\"%.300s\"", text);
             }
         }
     }
@@ -1748,376 +1725,8 @@ static void hook_cxa_throw(void *thrownException, void *tinfo, void (*dest)(void
     __builtin_unreachable();
 }
 
-typedef void (*Sims2GlViewportFn)(int, int, int, int);
-typedef void (*Sims2GlScissorFn)(int, int, int, int);
-typedef void *(*Sims2CGLGetCurrentContextFn)(void);
-typedef int (*Sims2CGLGetParameterFn)(void *, int, int *);
-typedef int (*Sims2CGLSetParameterFn)(void *, int, const int *);
-typedef int (*Sims2CGLEnableFn)(void *, int);
-typedef int (*Sims2CGLDisableFn)(void *, int);
-typedef int (*Sims2CGLGetSurfaceFn)(void *, unsigned int *, unsigned int *, unsigned int *);
-static Sims2GlViewportFn gRealGlViewport = NULL;
-static Sims2GlScissorFn gRealGlScissor = NULL;
-static Sims2CGLGetCurrentContextFn gRealCGLGetCurrentContext = NULL;
-static Sims2CGLGetParameterFn gRealCGLGetParameter = NULL;
-static Sims2CGLSetParameterFn gRealCGLSetParameter = NULL;
-static Sims2CGLEnableFn gRealCGLEnable = NULL;
-static Sims2CGLDisableFn gRealCGLDisable = NULL;
-static Sims2CGLGetSurfaceFn gRealCGLGetSurface = NULL;
-static int gLastViewport[4] = { -1, -1, -1, -1 };
-static int gViewportLogged = 0;
-static int gCGLBackingLogged = 0;
-
-static BOOL cgl_context_has_attached_drawable(void *ctx) {
-    if (!ctx) {
-        return NO;
-    }
-    if (!gRealCGLGetSurface) {
-        gRealCGLGetSurface = (Sims2CGLGetSurfaceFn)dlsym(RTLD_DEFAULT, "CGLGetSurface");
-    }
-    if (gRealCGLGetSurface) {
-        unsigned int cid = 0, wid = 0, sid = 0;
-        if (gRealCGLGetSurface(ctx, &cid, &wid, &sid) == 0 && wid != 0 && sid != 0) {
-            return YES;
-        }
-    }
-    if ([NSThread isMainThread]) {
-#pragma clang diagnostic push
-#pragma clang diagnostic ignored "-Wdeprecated-declarations"
-        NSOpenGLContext *curCtx = [NSOpenGLContext currentContext];
-        if (curCtx && (void *)[curCtx CGLContextObj] == ctx && [curCtx view] != nil) {
-            return YES;
-        }
-#pragma clang diagnostic pop
-    }
-    return NO;
-}
-
-static void ensure_cgl_target_backing_size(void *ctx, int targetW, int targetH, const char *reason) {
-    if (tInCGLHook || !ctx || !is_valid_render_resolution(targetW, targetH)) {
-        return;
-    }
-    if (!cgl_context_has_attached_drawable(ctx)) {
-        return;
-    }
-    if (!gRealCGLSetParameter) {
-        gRealCGLSetParameter = (Sims2CGLSetParameterFn)dlsym(RTLD_DEFAULT, "CGLSetParameter");
-    }
-    if (!gRealCGLEnable) {
-        gRealCGLEnable = (Sims2CGLEnableFn)dlsym(RTLD_DEFAULT, "CGLEnable");
-    }
-    tInCGLHook = YES;
-    int errSet = 0;
-    if (gRealCGLSetParameter) {
-        int params[2] = { targetW, targetH };
-        errSet = gRealCGLSetParameter(ctx, 304, params); /* kCGLCPSurfaceBackingSize */
-    }
-    int errEnable = 0;
-    if (errSet == 0 && gRealCGLEnable) {
-        errEnable = gRealCGLEnable(ctx, 305); /* kCGLCESurfaceBackingSize */
-    }
-    tInCGLHook = NO;
-    if (errSet == 0 && errEnable == 0) {
-        pthread_mutex_lock(&gRenderTargetMutex);
-        gLastAppliedCGLWidth = targetW;
-        gLastAppliedCGLHeight = targetH;
-        pthread_mutex_unlock(&gRenderTargetMutex);
-    }
-    if (gCGLOverrideLogged < 64) {
-        gCGLOverrideLogged++;
-        bootlog_write("CGL", "sync(%s) kCGLCPSurfaceBackingSize=%dx%d ctx=%p setErr=%d enableErr=%d",
-                      reason ? reason : "auto", targetW, targetH, ctx, errSet, errEnable);
-    }
-}
-
-static CGError hook_CGAcquireDisplayFadeReservation(CGDisplayReservationInterval maxCacheTime,
-                                                    CGDisplayFadeReservationToken *newToken) {
-    if (newToken) {
-        *newToken = 1;
-    }
-    if (gDisplayFadeBypassLogged < 64) {
-        gDisplayFadeBypassLogged++;
-        bootlog_write("DISPLAY", "CGAcquireDisplayFadeReservation(max=%.2f) bypassed", (double)maxCacheTime);
-    }
-    return kCGErrorSuccess;
-}
-
-static CGError hook_CGDisplayFade(CGDisplayFadeReservationToken token,
-                                  CGDisplayFadeInterval duration,
-                                  CGDisplayBlendFraction startBlend,
-                                  CGDisplayBlendFraction endBlend,
-                                  float redBlend,
-                                  float greenBlend,
-                                  float blueBlend,
-                                  boolean_t synchronous) {
-    (void)token;
-    (void)startBlend;
-    if (gDisplayFadeBypassLogged < 64) {
-        gDisplayFadeBypassLogged++;
-        bootlog_write("DISPLAY", "CGDisplayFade(dur=%.2f end=%.2f rgb=(%.2f,%.2f,%.2f) sync=%d) bypassed -> kCGErrorSuccess",
-                      (double)duration, (double)endBlend, redBlend, greenBlend, blueBlend, (int)synchronous);
-    }
-    return kCGErrorSuccess;
-}
-
-static CGError hook_CGReleaseDisplayFadeReservation(CGDisplayFadeReservationToken token) {
-    (void)token;
-    return kCGErrorSuccess;
-}
-
-static CGError hook_CGConfigureDisplayFadeEffect(CGDisplayConfigRef config,
-                                                 CGDisplayFadeInterval fadeOutSeconds,
-                                                 CGDisplayFadeInterval fadeInSeconds,
-                                                 float fadeRed,
-                                                 float fadeGreen,
-                                                 float fadeBlue) {
-    (void)config;
-    (void)fadeOutSeconds;
-    (void)fadeInSeconds;
-    (void)fadeRed;
-    (void)fadeGreen;
-    (void)fadeBlue;
-    return kCGErrorSuccess;
-}
-
-static CGError hook_CGDisplaySetDisplayMode(CGDirectDisplayID display,
-                                            CGDisplayModeRef mode,
-                                            CFDictionaryRef options) {
-    (void)options;
-    size_t w = mode ? CGDisplayModeGetWidth(mode) : 0;
-    size_t h = mode ? CGDisplayModeGetHeight(mode) : 0;
-    double hz = mode ? CGDisplayModeGetRefreshRate(mode) : 0.0;
-    if (is_valid_render_resolution((int)w, (int)h)) {
-        set_target_render_resolution((int)w, (int)h, "CGDisplaySetDisplayMode");
-    }
-    if (gDisplaySetModeLogged < 64) {
-        gDisplaySetModeLogged++;
-        bootlog_write("DISPLAY", "CGDisplaySetDisplayMode(display=%u, %zux%zu@%.0f) virtualized -> kCGErrorSuccess",
-                      (unsigned)display, w, h, hz);
-    }
-    return kCGErrorSuccess;
-}
-
-static void hook_glViewport(int x, int y, int w, int h) {
-    if (!gRealGlViewport) {
-        gRealGlViewport = (Sims2GlViewportFn)dlsym(RTLD_DEFAULT, "glViewport");
-    }
-    maybe_poll_userprops();
-
-    int targetW = 0, targetH = 0, appliedW = 0, appliedH = 0;
-    get_target_render_resolution(&targetW, &targetH);
-    pthread_mutex_lock(&gRenderTargetMutex);
-    appliedW = gLastAppliedCGLWidth;
-    appliedH = gLastAppliedCGLHeight;
-    pthread_mutex_unlock(&gRenderTargetMutex);
-
-    int outX = x, outY = y, outW = w, outH = h;
-    BOOL isFullscreenPass = (x == 0 && y == 0 && w >= 640 && h >= 400 && w > h);
-    if (isFullscreenPass) {
-        gMainViewportActive = YES;
-        gLastSourceViewportW = w;
-        gLastSourceViewportH = h;
-        if (is_valid_render_resolution(targetW, targetH)) {
-            if (appliedW != targetW || appliedH != targetH) {
-                if (!gRealCGLGetCurrentContext) {
-                    gRealCGLGetCurrentContext = (Sims2CGLGetCurrentContextFn)dlsym(RTLD_DEFAULT, "CGLGetCurrentContext");
-                }
-                void *ctx = gRealCGLGetCurrentContext ? gRealCGLGetCurrentContext() : NULL;
-                if (ctx) {
-                    ensure_cgl_target_backing_size(ctx, targetW, targetH, "glViewport-sync");
-                }
-            }
-            if (w != targetW || h != targetH) {
-                outX = 0;
-                outY = 0;
-                outW = targetW;
-                outH = targetH;
-                if ((w != gLastViewport[2] || h != gLastViewport[3] || outW != targetW || gViewportOverrideLogged < 16) &&
-                    gViewportOverrideLogged < 128) {
-                    gViewportOverrideLogged++;
-                    bootlog_write("GL", "glViewport override req=(%d,%d,%d,%d) -> target=(0,0,%d,%d)",
-                                  x, y, w, h, outW, outH);
-                }
-            }
-        }
-    } else {
-        gMainViewportActive = NO;
-    }
-
-    /* Ignore small UI thumbnail / FBO passes so actual resolution switches remain visible in logs. */
-    if (w >= 300 && h >= 200 &&
-        (outX != gLastViewport[0] || outY != gLastViewport[1] || outW != gLastViewport[2] || outH != gLastViewport[3]) &&
-        gViewportLogged < 200) {
-        gViewportLogged++;
-        gLastViewport[0] = outX;
-        gLastViewport[1] = outY;
-        gLastViewport[2] = outW;
-        gLastViewport[3] = outH;
-        bootlog_write("GL", "glViewport(%d,%d,%d,%d) [req=%d,%d,%d,%d]", outX, outY, outW, outH, x, y, w, h);
-    } else if (isFullscreenPass) {
-        gLastViewport[0] = outX;
-        gLastViewport[1] = outY;
-        gLastViewport[2] = outW;
-        gLastViewport[3] = outH;
-    }
-
-    if (gRealGlViewport) {
-        gRealGlViewport(outX, outY, outW, outH);
-    }
-}
-
-static void hook_glScissor(int x, int y, int w, int h) {
-    if (!gRealGlScissor) {
-        gRealGlScissor = (Sims2GlScissorFn)dlsym(RTLD_DEFAULT, "glScissor");
-    }
-    int outX = x, outY = y, outW = w, outH = h;
-    int targetW = 0, targetH = 0;
-    get_target_render_resolution(&targetW, &targetH);
-    if (gMainViewportActive && gLastSourceViewportW >= 640 && gLastSourceViewportH >= 400 &&
-        is_valid_render_resolution(targetW, targetH) &&
-        (gLastSourceViewportW != targetW || gLastSourceViewportH != targetH)) {
-        if (x == 0 && y == 0 && w == gLastSourceViewportW && h == gLastSourceViewportH) {
-            outW = targetW;
-            outH = targetH;
-        } else if (w > 0 && h > 0 && w <= gLastSourceViewportW && h <= gLastSourceViewportH) {
-            double sx = (double)targetW / (double)gLastSourceViewportW;
-            double sy = (double)targetH / (double)gLastSourceViewportH;
-            outX = (int)llround((double)x * sx);
-            outY = (int)llround((double)y * sy);
-            outW = (int)llround((double)w * sx);
-            outH = (int)llround((double)h * sy);
-            if (outW < 1) outW = 1;
-            if (outH < 1) outH = 1;
-        }
-        if ((outW != w || outH != h) && gScissorOverrideLogged < 32) {
-            gScissorOverrideLogged++;
-            bootlog_write("GL", "glScissor override req=(%d,%d,%d,%d) -> scaled=(%d,%d,%d,%d)",
-                          x, y, w, h, outX, outY, outW, outH);
-        }
-    }
-    if (gRealGlScissor) {
-        gRealGlScissor(outX, outY, outW, outH);
-    }
-}
-
-static int hook_CGLSetParameter(void *ctx, int pname, const int *params) {
-    if (!gRealCGLSetParameter) {
-        gRealCGLSetParameter = (Sims2CGLSetParameterFn)dlsym(RTLD_DEFAULT, "CGLSetParameter");
-    }
-    if (tInCGLHook) {
-        return gRealCGLSetParameter ? gRealCGLSetParameter(ctx, pname, params) : 0;
-    }
-    if (pname == 304 && params) {
-        maybe_poll_userprops();
-        int reqW = params[0];
-        int reqH = params[1];
-        int targetW = 0, targetH = 0;
-        get_target_render_resolution(&targetW, &targetH);
-        BOOL hasDrawable = cgl_context_has_attached_drawable(ctx);
-        /* Never invoke CGLEnable from CGLSetParameter before drawable attach; only substitute validated backing sizes. */
-        if (ctx && reqW >= 640 && reqH >= 400 && reqW <= 4096 && reqH <= 4096 &&
-            is_valid_render_resolution(targetW, targetH)) {
-            int overrideParams[2] = { targetW, targetH };
-            tInCGLHook = YES;
-            int err = gRealCGLSetParameter ? gRealCGLSetParameter(ctx, pname, overrideParams) : 0;
-            tInCGLHook = NO;
-            if (gCGLBackingLogged < 64) {
-                gCGLBackingLogged++;
-                bootlog_write("CGL", "CGLSetParameter(kCGLCPSurfaceBackingSize, req=%dx%d -> applied=%dx%d) ctx=%p drawable=%d err=%d",
-                              reqW, reqH, targetW, targetH, ctx, hasDrawable, err);
-            }
-            return err;
-        }
-        tInCGLHook = YES;
-        int err = gRealCGLSetParameter ? gRealCGLSetParameter(ctx, pname, params) : 0;
-        tInCGLHook = NO;
-        if (gCGLBackingLogged < 64) {
-            gCGLBackingLogged++;
-            bootlog_write("CGL", "CGLSetParameter(kCGLCPSurfaceBackingSize, req=%dx%d -> passthrough=%dx%d target=%dx%d) ctx=%p drawable=%d err=%d",
-                          reqW, reqH, reqW, reqH, targetW, targetH, ctx, hasDrawable, err);
-        }
-        return err;
-    }
-    tInCGLHook = YES;
-    int err = gRealCGLSetParameter ? gRealCGLSetParameter(ctx, pname, params) : 0;
-    tInCGLHook = NO;
-    if (pname == 304 && gCGLBackingLogged < 64) {
-        gCGLBackingLogged++;
-        bootlog_write("CGL", "CGLSetParameter(kCGLCPSurfaceBackingSize, %dx%d) ctx=%p err=%d",
-                      params ? params[0] : -1, params ? params[1] : -1, ctx, err);
-    }
-    return err;
-}
-
-static int hook_CGLEnable(void *ctx, int pname) {
-    if (!gRealCGLEnable) {
-        gRealCGLEnable = (Sims2CGLEnableFn)dlsym(RTLD_DEFAULT, "CGLEnable");
-    }
-    if (tInCGLHook) {
-        return gRealCGLEnable ? gRealCGLEnable(ctx, pname) : 0;
-    }
-    BOOL hasDrawable = (pname == 305 && ctx) ? cgl_context_has_attached_drawable(ctx) : NO;
-    if (pname == 305 && ctx && hasDrawable) {
-        if (!gRealCGLGetParameter) {
-            gRealCGLGetParameter = (Sims2CGLGetParameterFn)dlsym(RTLD_DEFAULT, "CGLGetParameter");
-        }
-        if (!gRealCGLSetParameter) {
-            gRealCGLSetParameter = (Sims2CGLSetParameterFn)dlsym(RTLD_DEFAULT, "CGLSetParameter");
-        }
-        int curParams[2] = { 0, 0 };
-        if (gRealCGLGetParameter && gRealCGLGetParameter(ctx, 304, curParams) == 0 &&
-            !is_valid_render_resolution(curParams[0], curParams[1])) {
-            int targetW = 0, targetH = 0;
-            get_target_render_resolution(&targetW, &targetH);
-            if (is_valid_render_resolution(targetW, targetH) && gRealCGLSetParameter) {
-                int overrideParams[2] = { targetW, targetH };
-                tInCGLHook = YES;
-                gRealCGLSetParameter(ctx, 304, overrideParams);
-                tInCGLHook = NO;
-                if (gCGLBackingLogged < 64) {
-                    gCGLBackingLogged++;
-                    bootlog_write("CGL", "CGLEnable(305) pre-seeded backing size %dx%d -> %dx%d ctx=%p",
-                                  curParams[0], curParams[1], targetW, targetH, ctx);
-                }
-            }
-        }
-    }
-    tInCGLHook = YES;
-    int err = gRealCGLEnable ? gRealCGLEnable(ctx, pname) : 0;
-    tInCGLHook = NO;
-    if (pname == 305 && gCGLBackingLogged < 64) {
-        gCGLBackingLogged++;
-        bootlog_write("CGL", "CGLEnable(kCGLCESurfaceBackingSize) ctx=%p drawable=%d err=%d",
-                      ctx, hasDrawable, err);
-    }
-    return err;
-}
-
-static int hook_CGLDisable(void *ctx, int pname) {
-    if (!gRealCGLDisable) {
-        gRealCGLDisable = (Sims2CGLDisableFn)dlsym(RTLD_DEFAULT, "CGLDisable");
-    }
-    if (tInCGLHook) {
-        return gRealCGLDisable ? gRealCGLDisable(ctx, pname) : 0;
-    }
-    int targetW = 0, targetH = 0;
-    get_target_render_resolution(&targetW, &targetH);
-    if (pname == 305 && ctx && is_valid_render_resolution(targetW, targetH)) {
-        if (gCGLDisableLogged < 32) {
-            gCGLDisableLogged++;
-            bootlog_write("CGL", "CGLDisable(kCGLCESurfaceBackingSize) blocked to keep target %dx%d ctx=%p",
-                          targetW, targetH, ctx);
-        }
-        return 0;
-    }
-    tInCGLHook = YES;
-    int err = gRealCGLDisable ? gRealCGLDisable(ctx, pname) : 0;
-    tInCGLHook = NO;
-    return err;
-}
-
-static void bootlog_window_geometry(const char *reason, NSWindow *win) {
-    if (!win) {
+static void debuglog_window_geometry(const char *reason, NSWindow *win) {
+    if (!gDebugBootEnabled || !win) {
         return;
     }
     NSScreen *scr = win.screen ?: [NSScreen mainScreen];
@@ -2126,14 +1735,14 @@ static void bootlog_window_geometry(const char *reason, NSWindow *win) {
     NSRect sf = scr ? scr.frame : NSZeroRect;
     NSRect vf = scr ? scr.visibleFrame : NSZeroRect;
     BOOL fs = (win.styleMask & NSWindowStyleMaskFullScreen) != 0;
-    bootlog_write("WIN", "%s win=%p class=%s fs=%d frame=%.0fx%.0f@(%.0f,%.0f) content=%.0fx%.0f "
-                  "screen=%.0fx%.0f visible=%.0fx%.0f@(%.0f,%.0f) scale=%.1f",
-                  reason, (__bridge void *)win, object_getClassName(win), fs,
-                  f.size.width, f.size.height, f.origin.x, f.origin.y,
-                  cb.size.width, cb.size.height,
-                  sf.size.width, sf.size.height,
-                  vf.size.width, vf.size.height, vf.origin.x, vf.origin.y,
-                  scr ? scr.backingScaleFactor : 0.0);
+    debuglog_write("WIN", "%s win=%p class=%s fs=%d frame=%.0fx%.0f@(%.0f,%.0f) content=%.0fx%.0f "
+                   "screen=%.0fx%.0f visible=%.0fx%.0f@(%.0f,%.0f) scale=%.1f",
+                   reason, (__bridge void *)win, object_getClassName(win), fs,
+                   f.size.width, f.size.height, f.origin.x, f.origin.y,
+                   cb.size.width, cb.size.height,
+                   sf.size.width, sf.size.height,
+                   vf.size.width, vf.size.height, vf.origin.x, vf.origin.y,
+                   scr ? scr.backingScaleFactor : 0.0);
 }
 
 static void clamp_fullscreen_window_to_visible_frame(NSWindow *win) {
@@ -2145,6 +1754,7 @@ static void clamp_fullscreen_window_to_visible_frame(NSWindow *win) {
     if (!scr) {
         return;
     }
+    update_cached_screen_geometry(scr);
     NSRect vf = scr.visibleFrame;
     NSRect f = win.frame;
     if (vf.size.width < 640.0 || vf.size.height < 480.0) {
@@ -2165,10 +1775,10 @@ static void clamp_fullscreen_window_to_visible_frame(NSWindow *win) {
     }
     gNotchClampAttempts++;
     gNotchFitInProgress = YES;
-    bootlog_write("WIN", "clamp fs #%d %.0fx%.0f@(%.0f,%.0f) -> visibleFrame %.0fx%.0f@(%.0f,%.0f)",
-                  gNotchClampAttempts,
-                  f.size.width, f.size.height, f.origin.x, f.origin.y,
-                  vf.size.width, vf.size.height, vf.origin.x, vf.origin.y);
+    debuglog_write("WIN", "clamp fs #%d %.0fx%.0f@(%.0f,%.0f) -> visibleFrame %.0fx%.0f@(%.0f,%.0f)",
+                   gNotchClampAttempts,
+                   f.size.width, f.size.height, f.origin.x, f.origin.y,
+                   vf.size.width, vf.size.height, vf.origin.x, vf.origin.y);
     [win setFrame:vf display:YES];
     if (win.contentView) {
         NSRect bounds = NSMakeRect(0.0, 0.0, vf.size.width, vf.size.height);
@@ -2176,62 +1786,57 @@ static void clamp_fullscreen_window_to_visible_frame(NSWindow *win) {
             [win.contentView setFrame:bounds];
         }
     }
-    pthread_mutex_lock(&gRenderTargetMutex);
-    gLastAppliedCGLWidth = 0;
-    gLastAppliedCGLHeight = 0;
-    pthread_mutex_unlock(&gRenderTargetMutex);
     gNotchFitInProgress = NO;
-    bootlog_window_geometry("after-clamp", win);
+    debuglog_window_geometry("after-clamp", win);
 }
 
-static void register_boot_window_observers(void) {
+static void register_window_geometry_observers(void) {
     NSNotificationCenter *nc = [NSNotificationCenter defaultCenter];
     [nc addObserverForName:NSApplicationDidFinishLaunchingNotification object:nil queue:nil
                 usingBlock:^(NSNotification *note) {
         (void)note;
         NSScreen *scr = [NSScreen mainScreen];
+        update_cached_screen_geometry(scr);
         if (scr) {
             NSRect sf = scr.frame;
             NSRect vf = scr.visibleFrame;
-            bootlog_write("SCREEN", "main frame=%.0fx%.0f visibleFrame=%.0fx%.0f@(%.0f,%.0f) scale=%.1f",
-                          sf.size.width, sf.size.height, vf.size.width, vf.size.height,
-                          vf.origin.x, vf.origin.y, scr.backingScaleFactor);
+            debuglog_write("SCREEN", "main frame=%.0fx%.0f visibleFrame=%.0fx%.0f@(%.0f,%.0f) scale=%.1f",
+                           sf.size.width, sf.size.height, vf.size.width, vf.size.height,
+                           vf.origin.x, vf.origin.y, scr.backingScaleFactor);
         }
-        bootlog_write("APP", "DidFinishLaunching");
+        debuglog_write("APP", "DidFinishLaunching");
     }];
     [nc addObserverForName:NSWindowDidBecomeKeyNotification object:nil queue:nil
                 usingBlock:^(NSNotification *note) {
         NSWindow *win = (NSWindow *)note.object;
-        bootlog_window_geometry("DidBecomeKey", win);
+        if (win && [win isKindOfClass:[NSWindow class]]) {
+            update_cached_screen_geometry(win.screen ?: [NSScreen mainScreen]);
+        }
+        debuglog_window_geometry("DidBecomeKey", win);
         clamp_fullscreen_window_to_visible_frame(win);
-        maybe_poll_userprops();
     }];
     [nc addObserverForName:NSWindowDidResizeNotification object:nil queue:nil
                 usingBlock:^(NSNotification *note) {
         NSWindow *win = (NSWindow *)note.object;
-        if (win && !gNotchFitInProgress && is_sdl_game_window(win) &&
-            !(win.styleMask & NSWindowStyleMaskFullScreen)) {
-            NSRect cb = win.contentView ? win.contentView.bounds : win.frame;
-            int rw = (int)llround(cb.size.width);
-            int rh = (int)llround(cb.size.height);
-            if (is_whitelisted_target_resolution(rw, rh)) {
-                set_target_render_resolution(rw, rh, "SDLWindow-DidResize");
-            }
+        if (win && [win isKindOfClass:[NSWindow class]]) {
+            update_cached_screen_geometry(win.screen ?: [NSScreen mainScreen]);
         }
-        bootlog_window_geometry("DidResize", win);
+        debuglog_window_geometry("DidResize", win);
         clamp_fullscreen_window_to_visible_frame(win);
     }];
     [nc addObserverForName:NSWindowDidEnterFullScreenNotification object:nil queue:nil
                 usingBlock:^(NSNotification *note) {
         NSWindow *win = (NSWindow *)note.object;
-        bootlog_window_geometry("DidEnterFullScreen", win);
+        if (win && [win isKindOfClass:[NSWindow class]]) {
+            update_cached_screen_geometry(win.screen ?: [NSScreen mainScreen]);
+        }
+        debuglog_window_geometry("DidEnterFullScreen", win);
         clamp_fullscreen_window_to_visible_frame(win);
-        maybe_poll_userprops();
     }];
     [nc addObserverForName:NSWindowDidExitFullScreenNotification object:nil queue:nil
                 usingBlock:^(NSNotification *note) {
         gNotchClampAttempts = 0;
-        bootlog_window_geometry("DidExitFullScreen", (NSWindow *)note.object);
+        debuglog_window_geometry("DidExitFullScreen", (NSWindow *)note.object);
     }];
 }
 
@@ -2241,18 +1846,8 @@ typedef struct {
 } Sims2SymbolHookEntry;
 
 static const Sims2SymbolHookEntry kSims2CoreGraphicsHooks[] = {
-    { "_CGDisplayCopyAllDisplayModes",       (void *)hook_CGDisplayCopyAllDisplayModes },
-    { "_CGAcquireDisplayFadeReservation",    (void *)hook_CGAcquireDisplayFadeReservation },
-    { "_CGDisplayFade",                      (void *)hook_CGDisplayFade },
-    { "_CGReleaseDisplayFadeReservation",    (void *)hook_CGReleaseDisplayFadeReservation },
-    { "_CGConfigureDisplayFadeEffect",       (void *)hook_CGConfigureDisplayFadeEffect },
-    { "_CGDisplaySetDisplayMode",            (void *)hook_CGDisplaySetDisplayMode },
-    { "___cxa_throw",                        (void *)hook_cxa_throw },
-    { "_glViewport",                         (void *)hook_glViewport },
-    { "_glScissor",                          (void *)hook_glScissor },
-    { "_CGLSetParameter",                    (void *)hook_CGLSetParameter },
-    { "_CGLEnable",                          (void *)hook_CGLEnable },
-    { "_CGLDisable",                         (void *)hook_CGLDisable },
+    { "_CGDisplayCopyAllDisplayModes", (void *)hook_CGDisplayCopyAllDisplayModes },
+    { "___cxa_throw",                  (void *)hook_cxa_throw },
 };
 
 static size_t hook_coregraphics_la_symbol_ptrs(void) {
@@ -2351,7 +1946,7 @@ static size_t hook_coregraphics_la_symbol_ptrs(void) {
                 if (strcmp(symName, kSims2CoreGraphicsHooks[h].symbolName) == 0) {
                     ptrs[j] = kSims2CoreGraphicsHooks[h].replacement;
                     hookedCount++;
-                    bootlog_write("HOOK", "rebound %s in %s", symName, sect->sectname);
+                    debuglog_write("HOOK", "rebound %s in %s", symName, sect->sectname);
                     break;
                 }
             }
@@ -2363,12 +1958,12 @@ static size_t hook_coregraphics_la_symbol_ptrs(void) {
 
 __attribute__((constructor))
 static void sims2_trackpad_init(void) {
-    bootlog_init();
-    bootlog_write("BOOT", "libsims2_trackpad loaded pid=%d", getpid());
-    bootlog_userprops();
+    init_log_paths_and_system_info();
+    install_crash_handlers();
+    debuglog_init_if_enabled();
 
-    char devLogPath[600];
-    devlog_init(devLogPath, sizeof(devLogPath));
+    debuglog_write("BOOT", "libsims2_trackpad v%s loaded pid=%d model=%s macOS=%s frame=%s",
+                   SIMS2_PATCH_VERSION, getpid(), gCachedHwModel, gCachedOsVersion, gCachedFrameStr);
 
     /*
      * Override Aspyr's hardcoded SDL_SetHint(..., "0") priority-1 hints via environment
@@ -2483,7 +2078,7 @@ static void sims2_trackpad_init(void) {
         reset_gesture_and_key_state(resolve_window_listener());
         CGAssociateMouseAndMouseCursorPosition(true);
         CGDisplayShowCursor(kCGDirectMainDisplay);
-        devlog_write("APP", "WillResignActive");
+        debuglog_write("APP", "WillResignActive");
     }];
     [nc addObserverForName:NSApplicationDidResignActiveNotification
                     object:nil
@@ -2494,7 +2089,7 @@ static void sims2_trackpad_init(void) {
         if (gLastResignTimestamp == 0.0) {
             gLastResignTimestamp = CFAbsoluteTimeGetCurrent();
         }
-        devlog_write("APP", "DidResignActive");
+        debuglog_write("APP", "DidResignActive");
     }];
     [nc addObserverForName:NSApplicationWillBecomeActiveNotification
                     object:nil
@@ -2506,7 +2101,7 @@ static void sims2_trackpad_init(void) {
         gAppIsHiding = NO;
         gLastResignTimestamp = 0.0;
         neutralize_secondary_orphan_windows(gPrimaryFullscreenWindow);
-        devlog_write("APP", "WillBecomeActive");
+        debuglog_write("APP", "WillBecomeActive");
     }];
     [nc addObserverForName:NSApplicationDidBecomeActiveNotification
                     object:nil
@@ -2518,7 +2113,7 @@ static void sims2_trackpad_init(void) {
         gAppIsHiding = NO;
         gLastResignTimestamp = 0.0;
         neutralize_secondary_orphan_windows(gPrimaryFullscreenWindow);
-        devlog_write("APP", "DidBecomeActive");
+        debuglog_write("APP", "DidBecomeActive");
     }];
     [nc addObserverForName:NSApplicationWillHideNotification
                     object:nil
@@ -2526,7 +2121,7 @@ static void sims2_trackpad_init(void) {
                 usingBlock:^(NSNotification *note) {
         (void)note;
         gAppIsHiding = YES;
-        devlog_write("APP", "WillHide");
+        debuglog_write("APP", "WillHide");
     }];
     [nc addObserverForName:NSApplicationDidUnhideNotification
                     object:nil
@@ -2534,43 +2129,43 @@ static void sims2_trackpad_init(void) {
                 usingBlock:^(NSNotification *note) {
         (void)note;
         gAppIsHiding = NO;
-        devlog_write("APP", "DidUnhide");
+        debuglog_write("APP", "DidUnhide");
     }];
 
     uint16_t initLeft = 43, initRight = 47;
     resolve_camera_rotate_keycodes(&initLeft, &initRight);
-    register_boot_window_observers();
+    register_window_geometry_observers();
     size_t cgHooks = hook_coregraphics_la_symbol_ptrs();
 
     NSString *bundleStr = [[NSBundle mainBundle] bundleIdentifier];
     const char *bundleId = bundleStr ? [bundleStr UTF8String] : "unknown";
-    bootlog_write("INIT", "bundle=%s execSlide=0x%lx cgHooks=%zu fsSpaceHook=%d focusHook=%d",
-                  bundleId ? bundleId : "unknown", (unsigned long)gExecSlide, cgHooks,
-                  gOrigSetFullscreenSpaceIMP != NULL, gOrigFocusSomeWindowIMP != NULL);
-    devlog_write("INIT",
-                 "pid=%d bundle=%s appHook=%d focusHook=%d keyWinHook=%d scrollHook=%d btnHook=%d modHook=%d mouseMoved=%d "
-                 "fsSpaceHook=%d miniHook=%d activateHook=%d cgHooks=%zu rotKeys=(%u,%u) invert=%d ctrlOrbit=%d log=%s",
-                 getpid(),
-                 bundleId ? bundleId : "unknown",
-                 gOrigNextEventIMP != NULL,
-                 gOrigFocusSomeWindowIMP != NULL,
-                 gOrigCanBecomeKeyWindowIMP != NULL,
-                 gOrigScrollWheelIMP != NULL,
-                 gOrigButtonNumberIMP != NULL,
-                 gOrigEventModifierFlagsIMP != NULL,
-                 gOrigMouseMovedIMP != NULL,
-                 gOrigSetFullscreenSpaceIMP != NULL,
-                 gOrigMiniaturizeIMP != NULL,
-                 gOrigActivateIgnoringOtherAppsIMP != NULL,
-                 cgHooks,
-                 initLeft,
-                 initRight,
-                 gInvertRotation,
-                 gEnableOptionOrbit,
-                 devLogPath[0] ? devLogPath : "disabled");
+    debuglog_write("INIT",
+                   "pid=%d bundle=%s execSlide=0x%lx appHook=%d focusHook=%d keyWinHook=%d scrollHook=%d btnHook=%d "
+                   "modHook=%d mouseMoved=%d fsSpaceHook=%d miniHook=%d activateHook=%d cgHooks=%zu "
+                   "rotKeys=(%u,%u) invert=%d ctrlOrbit=%d log=%s",
+                   getpid(),
+                   bundleId ? bundleId : "unknown",
+                   (unsigned long)gExecSlide,
+                   gOrigNextEventIMP != NULL,
+                   gOrigFocusSomeWindowIMP != NULL,
+                   gOrigCanBecomeKeyWindowIMP != NULL,
+                   gOrigScrollWheelIMP != NULL,
+                   gOrigButtonNumberIMP != NULL,
+                   gOrigEventModifierFlagsIMP != NULL,
+                   gOrigMouseMovedIMP != NULL,
+                   gOrigSetFullscreenSpaceIMP != NULL,
+                   gOrigMiniaturizeIMP != NULL,
+                   gOrigActivateIgnoringOtherAppsIMP != NULL,
+                   cgHooks,
+                   initLeft,
+                   initRight,
+                   gInvertRotation,
+                   gEnableOptionOrbit,
+                   gDebugLogPath[0] ? gDebugLogPath : "disabled");
 
     log_msg([NSString stringWithFormat:
-             @"Loaded: appHook=%d focusHook=%d keyWinHook=%d scrollHook=%d btnHook=%d modHook=%d mouseMoved=%d fsSpaceHook=%d miniHook=%d activateHook=%d cgHooks=%zu rotKeys=(%u,%u) invert=%d ctrlOrbit=%d",
+             @"Loaded v%s: appHook=%d focusHook=%d keyWinHook=%d scrollHook=%d btnHook=%d modHook=%d mouseMoved=%d fsSpaceHook=%d miniHook=%d activateHook=%d cgHooks=%zu rotKeys=(%u,%u) invert=%d ctrlOrbit=%d",
+             SIMS2_PATCH_VERSION,
              gOrigNextEventIMP != NULL,
              gOrigFocusSomeWindowIMP != NULL,
              gOrigCanBecomeKeyWindowIMP != NULL,

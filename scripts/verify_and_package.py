@@ -201,7 +201,7 @@ def package_releases(version: str, out_dir: Path) -> tuple[Path, Path]:
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Verify repo & build release archives")
     parser.add_argument("--package", action="store_true", help="Build Mac & Windows release ZIPs in dist/")
-    parser.add_argument("--version", default="v1.4.0", help="Release version tag (default: v1.4.0)")
+    parser.add_argument("--version", default="v1.4.1", help="Release version tag (default: v1.4.1)")
     parser.add_argument("--out-dir", type=Path, default=ROOT_DIR / "dist")
     args = parser.parse_args(argv)
 
