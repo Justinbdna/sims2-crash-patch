@@ -4,19 +4,19 @@ All notable changes to **Sims 2 Crash Patch** (*The Sims 2: Super Collection* �
 
 ---
 
-## [1.4.1] - 2026-11-16
+## [1.4.0] - 2026-11-16
 
 ### Changed & Cleaned
 - **Socle Trackpad & Affichage Stabilisé (`trackpad_mod/sims2_trackpad.m`):** Retrait complet des hooks expérimentaux de changement de résolution à chaud (`CGLSetParameter`, `CGLEnable`, `CGLDisable`, `glViewport`, `glScissor`, `CGDisplaySetDisplayMode`, `CGDisplayFade`, `CGAcquireDisplayFadeReservation`, `CGReleaseDisplayFadeReservation`, `CGConfigureDisplayFadeEffect`), du watcher `userProps.xml` et du remapping souris. Conservation du socle validé : double verrou 60 Hz (`0xfe6dc` / `0xfe741`), filtrage CoreGraphics des vrais modes matériels macOS à 60 Hz (`CGDisplayCopyAllDisplayModes`, zéro mode synthétique), plein écran dynamique calé sous l'encoche (`NSScreen.visibleFrame` détecté au runtime pour tout MacBook Air/Pro 13"/14"/16" ou écran externe), correctif `Command+Tab` (`focusSomeWindow:` + neutralisation fenêtre `SDLWindow` orpheline) et gestes trackpad (`Control`+clic-glissé, `Option` natif, pincement non inversé, rotation AZERTY/QWERTY via Carbon `UCKeyTranslate`).
 - **Détection dynamique de la résolution native (`patch_sims2.command` & `clean_sims2_cache.command`):** Suppression de toute résolution `1800x1169` codée en dur : détection dynamique de l'écran actif pour initialiser `activeDeviceDisplayMode` (`<Largeur>x<Hauteur>x32x60`) dans `userProps.xml` et `$High` dans `Graphics Rules.sgr` (avec plafond `maxResWidth 2560`, `maxResHeight 1600`, `configParserErrorCode 0`).
 
 ### Added
-- **Logs silencieux par défaut, rapport de crash automatique & mode debug à la demande (`sims2_trackpad.m`):** Zéro fichier écrit dans `~/Library/Logs/Sims2-Crash-Patch/` en session normale ; gestionnaire async-signal-safe (`SIGSEGV`, `SIGABRT`, `SIGBUS`, `SIGILL`, `SIGFPE` et `std::set_terminate`) écrivant `crash_report.log` uniquement en cas de crash (`1.4.1`, `hw.model`, version macOS, `frame`, `visibleFrame`, signal/exception, `backtrace_symbols_fd`) ; journal `debug_boot.log` activé uniquement via `SIMS2_DEBUG=1` ou `.debug_enabled`.
+- **Logs silencieux par défaut, rapport de crash automatique & mode debug à la demande (`sims2_trackpad.m`):** Zéro fichier écrit dans `~/Library/Logs/Sims2-Crash-Patch/` en session normale ; gestionnaire async-signal-safe (`SIGSEGV`, `SIGABRT`, `SIGBUS`, `SIGILL`, `SIGFPE` et `std::set_terminate`) écrivant `crash_report.log` uniquement en cas de crash (`1.4.0`, `hw.model`, version macOS, `frame`, `visibleFrame`, signal/exception, `backtrace_symbols_fd`) ; journal `debug_boot.log` activé uniquement via `SIMS2_DEBUG=1` ou `.debug_enabled`.
 - **Menu & outil Diagnostic & Support GitHub (`patch_sims2.command` + `.github/ISSUE_TEMPLATE/bug_report.md`):** Option `[2]` ajoutée en fin de menu de `patch_sims2.command` (conservant `[1]` Installation par défaut) pour activer/désactiver `.debug_enabled` (avec purge des anciens logs debug) et générer `github_support_report.md` (copié via `pbcopy`, chemins `/Users/<utilisateur>` anonymisés en `~`).
 
 ---
 
-## [1.4.0] - Unreleased (Tests Mac en attente — Archive R&D `staging`)
+## [1.4.0-staging] - Archive R&D (`staging` `93b7141`)
 
 ### Added
 - **Étape 3A — Retina & High Graphics Rules (`Graphics Rules.sgr`):** `patch_sims2.command` now creates an atomic `Graphics Rules.sgr.backup`, unlocks resolutions up to `5120x3200`, raises the `textureMemory` fallback from `32` to `1024` MB, and upgrades `# Override defaults (SIM-281,416)` (`EffectsQuality`, `LightingQuality`, `Shadows`, `MaterialDetail`) to `$High` (tolérant les commentaires `#` intermédiaires jusqu'à `#####`/`endif`/`end`); `restore_sims2.command` restores `Graphics Rules.sgr.backup` atomically.

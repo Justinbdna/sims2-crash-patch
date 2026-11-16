@@ -1,7 +1,7 @@
 # Méga Audit Technique & Feuille de Route — `sims2-crash-patch` (v1.2.1 ➔ v1.3.0+)
 
 > [!NOTE]
-> **Archive historique (`v1.2.1`) :** Tous les correctifs `A1`–`A7`, `userProps.xml`, `maxfiles`, `Graphics Rules.sgr` et Trackpad natif SDL2 listés ci-dessous ont depuis été implémentés entre `v1.3.0` (`main`) et `v1.4.1` (`release/v1.4.1`). Pour l'état actuel et la checklist des tests en cours, consultez [`docs/HANDOFF_MAC.md`](HANDOFF_MAC.md).
+> **Archive historique (`v1.2.1`) :** Tous les correctifs `A1`–`A7`, `userProps.xml`, `maxfiles`, `Graphics Rules.sgr` et Trackpad natif SDL2 listés ci-dessous ont depuis été implémentés entre `v1.3.0` (`main`) et `v1.4.0` (`release/v1.4.0`). Pour l'état actuel et la checklist des tests en cours, consultez [`docs/HANDOFF_MAC.md`](HANDOFF_MAC.md).
 
 **Date de l'audit :** `2026-11-13`  
 **Base auditée :** Commit `da8242d` (`v1.2.1`, branche `main`)  

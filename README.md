@@ -1,8 +1,8 @@
-# 💎 Sims 2 Crash Patch — ProMotion 120 Hz & Stability Fix (`v1.4.1`)
+# 💎 Sims 2 Crash Patch — ProMotion 120 Hz & Stability Fix (`v1.4.0`)
 
 [![macOS](https://img.shields.io/badge/macOS-Apple%20Silicon-black.svg?style=flat&logo=apple)](https://apple.com)
 [![Tested on](https://img.shields.io/badge/Tested%20on-M1%20Pro%20%7C%20120Hz%20%7C%20macOS%2027.0-success)](https://apple.com)
-[![Version](https://img.shields.io/badge/Release-v1.4.1-blue.svg)](https://github.com/Justinbdna/sims2-crash-patch/releases)
+[![Version](https://img.shields.io/badge/Release-v1.4.0-blue.svg)](https://github.com/Justinbdna/sims2-crash-patch/releases)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
 > **FR :** Correctif 60 FPS au démarrage, migration de sauvegardes sans écrasement, protection d'affichage (`userProps.xml`), diagnostic Mods/CC (`maxfiles`) et menu de maintenance pour *The Sims 2: Super Collection* (Mac App Store, Aspyr) sur Mac Apple Silicon ProMotion 120 Hz.  
@@ -24,15 +24,15 @@
 3. **Crash au chargement d'un quartier (caches corrompus) ou saturation Mods/CC :**
    Les fermetures brutales corrompent `Groups.cache`, `Accessory.cache` et `cAstGroupCache.package`. De plus, `Sims2XP_Exe` relève au lancement sa limite de fichiers ouverts à `10 240` (`setrlimit(RLIMIT_NOFILE, min(rlim_max, 10240))`) : une archive `.zip`/`.rar` oubliée ou une limite système basse peut perturber le jeu.
 
-### Ce que fait cette suite d'outils (`v1.4.1`)
+### Ce que fait cette suite d'outils (`v1.4.0`)
 * ✅ **Votre écran Mac reste à 120 Hz ProMotion** tout en verrouillant le jeu sur **60 Hz** via un patch binaire atomique (`Sims2XP_Exe.backup` vérifié intègre avant modification) + filtrage CoreGraphics des vrais modes matériels macOS à 60 Hz.
-* ✅ **Plein écran calé sous l'encoche & résolution native dynamique (`v1.4.1`) :** Détection automatique de la résolution native de votre Mac (MacBook Air/Pro 13", 14", 16" ou écran externe) et calage dynamique de la fenêtre sur `NSScreen.visibleFrame` sans bandes noires latérales.
+* ✅ **Plein écran calé sous l'encoche & résolution native dynamique (`v1.4.0`) :** Détection automatique de la résolution native de votre Mac (MacBook Air/Pro 13", 14", 16" ou écran externe) et calage dynamique de la fenêtre sur `NSScreen.visibleFrame` sans bandes noires latérales.
 * ✅ **Zéro dépendance externe :** Utilise exclusivement `/usr/bin/perl`, `/usr/bin/codesign`, `/usr/sbin/dseditgroup` et `/usr/bin/osascript` (AppleScript + JXA) natifs — ne déclenche jamais l'installation Xcode de 1 Go (`libxcselect`).
 * ✅ **Migration des sauvegardes garantie sans écrasement :** Copie vos sauvegardes Sandbox via la **permission Automatisation Finder** vers `~/Library/Application Support/Aspyr/The Sims 2/` (ou vers `The Sims 2 (Sandbox Backup YYYY-MM-DD)` si des données actives existent déjà).
 * ✅ **Protection automatique `userProps.xml` :** Inspecte `activeDeviceDisplayMode`, crée une sauvegarde de retour (`Config/userProps.xml.backup`) avant toute retouche, et ne corrige que les modes invalides, absents de CoreGraphics/NSScreen ou ≠ 60 Hz / 32 bpp.
 * ✅ **Règles graphiques Retina / Apple Silicon (`Graphics Rules.sgr`) :** Sauvegarde l'original (`Graphics Rules.sgr.backup`), débloque les résolutions jusqu'à `2560x1600`, initialise le profil `$High` sur votre résolution native, et relève le fallback VRAM (`textureMemory`) à `1024 Mo`.
 * ✅ **Module Trackpad natif MacBook (`libsims2_trackpad.dylib`) :** Auto-chargé dans `Sims2XP_Exe` via `LC_LOAD_WEAK_DYLIB` sans Xcode : **`Control (^)` + clic-glissé** = incliner / tourner l'angle de la caméra (orbite 3D & pitch), **`Option (⌥)` + glisser (ou clic-glissé)** = se déplacer sur la carte (curseur 4 flèches), **pincement à 2 doigts** = zoom `+/-`, **swipe horizontal ou rotation à 2 doigts** = rotation caméra `,`/`.`, et `Command+Tab` sans rebond vers le Bureau.
-* ✅ **Logs silencieux + rapport de crash & outil Support GitHub (`v1.4.1`) :** Zéro écriture disque en session normale ; capture automatique de `crash_report.log` si un crash survient ; mode debug à la demande (`debug_boot.log`) et générateur de rapport prêt à coller (`github_support_report.md` anonymisé + copie presse-papier) via `patch_sims2.command` ➔ `[2]` Diagnostic & Support GitHub.
+* ✅ **Logs silencieux + rapport de crash & outil Support GitHub (`v1.4.0`) :** Zéro écriture disque en session normale ; capture automatique de `crash_report.log` si un crash survient ; mode debug à la demande (`debug_boot.log`) et générateur de rapport prêt à coller (`github_support_report.md` anonymisé + copie presse-papier) via `patch_sims2.command` ➔ `[2]` Diagnostic & Support GitHub.
 * ✅ **Diagnostic Mods/CC & `maxfiles` :** Compte vos `.package` dans `Downloads/`, alerte si des `.zip`/`.rar`/`.7z` s'y trouvent ou si vous approchez du plafond de `10 240`, et propose `[o/N]` l'installation d'un `LaunchDaemon` géré uniquement si `launchctl limit maxfiles` hard < `10 240`.
 * ✅ **Utilitaire de maintenance à menu interactif (`clean_sims2_cache.command`) :** `[1]` Purger les caches *(Entrée par défaut)*, `[2]` Réinitialiser l'affichage `userProps.xml`, `[3]` Diagnostiquer les Mods & `maxfiles`, `[4]` Quitter.
 
@@ -56,7 +56,7 @@
 > 2. **Le mot de passe dans le Terminal est 100 % INVISIBLE :** Quand le Terminal demande `Password:`, tapez votre mot de passe session Mac puis appuyez sur **Entrée**. **Aucun caractère (`*`, point ou espace) ne s'affichera pendant la frappe** : ce n'est pas un bug et votre clavier n'est pas bloqué, c'est la sécurité normale de macOS.
 > 3. **Pop-up « Terminal souhaite contrôler Finder » :** Cliquez impérativement sur **Autoriser** pour copier vos sauvegardes hors du conteneur protégé du Mac App Store.
 
-1. Téléchargez **`sims2-crash-patch-v1.4.1.zip`** depuis la page [Releases](https://github.com/Justinbdna/sims2-crash-patch/releases) et **décompressez-le** complètement (par exemple dans *Téléchargements* ou sur le *Bureau*).
+1. Téléchargez **`sims2-crash-patch-v1.4.0.zip`** depuis la page [Releases](https://github.com/Justinbdna/sims2-crash-patch/releases) et **décompressez-le** complètement (par exemple dans *Téléchargements* ou sur le *Bureau*).
 2. **Fermez complètement *Les Sims 2*** (`Cmd + Q`, vérifiez que le point sous l'icône du Dock a disparu) et vérifiez que `The Sims 2.app` est dans `/Applications` (ou `~/Applications`).
 3. Double-cliquez sur **`patch_sims2.command`**.
 4. **Si macOS bloque le script (Gatekeeper sur macOS 15+ / Sequoia / macOS 27) :**
@@ -70,7 +70,7 @@
    - Tapez votre mot de passe administrateur Mac à l'aveugle puis appuyez sur **Entrée**.
 6. Lorsque macOS affiche **« Terminal souhaite contrôler Finder »**, cliquez sur **Autoriser**.
 7. Si le script détecte une limite `hard maxfiles < 10240`, il propose `[o/N]` d'installer `/Library/LaunchDaemons/limit.maxfiles.plist` (`o` pour installer, ou `Entrée` pour ignorer).
-8. Dès que `INSTALLATION TERMINÉE AVEC SUCCÈS / PATCH COMPLETE (v1.4.1) !` apparaît (sauf si un message jaune vous demande de finir l'autorisation Finder d'abord !), lancez *Les Sims 2* normalement depuis le Launchpad ou `/Applications` !
+8. Dès que `INSTALLATION TERMINÉE AVEC SUCCÈS / PATCH COMPLETE (v1.4.0) !` apparaît (sauf si un message jaune vous demande de finir l'autorisation Finder d'abord !), lancez *Les Sims 2* normalement depuis le Launchpad ou `/Applications` !
 
 ---
 
@@ -151,7 +151,7 @@
 * **Two-Finger Horizontal Swipe or Rotate:** Smooth camera rotation (`,`/`.`).
 * **Retina & High Graphics (`Graphics Rules.sgr`):** Unlocks resolutions up to `2560x1600`, dynamically sets `$High` to your Mac's native screen resolution, sets `$High` shadows/lighting/effects/material defaults, raises `textureMemory` fallback to `1024` MB, and preserves `Graphics Rules.sgr.backup`.
 
-## 3. Step-by-Step Installation & Beginner Tips (`v1.4.1`)
+## 3. Step-by-Step Installation & Beginner Tips (`v1.4.0`)
 
 > [!IMPORTANT]
 > **Upfront expectations on macOS:**
@@ -159,7 +159,7 @@
 > * **Terminal password typing is INVISIBLE:** When Terminal prompts `Password:`, type your Mac login password blindly and press **Enter**. **Zero characters (no `*`, no dots)** appear on screen — this is standard macOS security, not a bug.
 > * **"Terminal wants access to control Finder":** Click **Allow** so your App Store Sandbox saves can be safely copied.
 
-1. Download **`sims2-crash-patch-v1.4.1.zip`** from [Releases](https://github.com/Justinbdna/sims2-crash-patch/releases) and fully extract it (e.g. into Downloads or Desktop).
+1. Download **`sims2-crash-patch-v1.4.0.zip`** from [Releases](https://github.com/Justinbdna/sims2-crash-patch/releases) and fully extract it (e.g. into Downloads or Desktop).
 2. Quit *The Sims 2* completely (`Cmd+Q`) and ensure `The Sims 2.app` is in `/Applications` (or `~/Applications`).
 3. Double-click **`patch_sims2.command`**.
 4. **If blocked by Gatekeeper (macOS 15+ / Sequoia / macOS 27):**
@@ -167,7 +167,7 @@
 5. Press **Enter** (or `1` + Enter) to install, read the on-screen pre-`sudo` box, type your Mac Admin password blindly (nothing prints while typing!), and press **Enter**.
 6. Click **Allow** when macOS asks Terminal to control **Finder**.
 7. If `hard maxfiles < 10240` is detected, optionally enter `y` to install the managed `/Library/LaunchDaemons/limit.maxfiles.plist` (or press Enter for No).
-8. Once `INSTALLATION TERMINÉE AVEC SUCCÈS / PATCH COMPLETE (v1.4.1) !` appears (if a yellow Finder warning appears instead, follow it *before* launching!), launch *The Sims 2* from Launchpad or `/Applications`!
+8. Once `INSTALLATION TERMINÉE AVEC SUCCÈS / PATCH COMPLETE (v1.4.0) !` appears (if a yellow Finder warning appears instead, follow it *before* launching!), launch *The Sims 2* from Launchpad or `/Applications`!
 
 ## 4. Practical Troubleshooting Cases
 

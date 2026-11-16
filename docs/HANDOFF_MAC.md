@@ -1,6 +1,6 @@
 # État du Projet, Workflow Git & Checklist Mac — `sims2-crash-patch`
 
-> **Usage :** Ce document reflète l'état réel après la release `v1.3.1` (`main` `acec191`), l'archive R&D sur `staging` (`93b7141`) et la préparation de la release propre **`v1.4.1`** sur `release/v1.4.1`.
+> **Usage :** Ce document reflète l'état réel après la release `v1.3.1` (`main` `acec191`), l'archive R&D sur `staging` (`93b7141`) et la préparation de la release propre **`v1.4.0`** sur `release/v1.4.0`.
 
 ---
 
@@ -8,9 +8,9 @@
 
 | Branche | Rôle | Règle stricte |
 | :--- | :--- | :--- |
-| **`main`** | Production stable & releases (`v1.3.1` ➔ `v1.4.1`) | Ne recevoir des merges que après validation finale et bump de version cohérent. Ne jamais coder directement dessus. |
+| **`main`** | Production stable & releases (`v1.3.1` ➔ `v1.4.0`) | Ne recevoir des merges que après validation finale et bump de version cohérent. Ne jamais coder directement dessus. |
 | **`staging`** | Archive R&D (`93b7141`) | Conservée intacte comme archive R&D pour les expérimentations de résolution à chaud. |
-| **`release/v1.4.1`** | Release propre `v1.4.1` | Socle stable (sans hooks CGL/glViewport expérimentaux), résolution native dynamique, logs silencieux + crash/support GitHub. |
+| **`release/v1.4.0`** | Release propre `v1.4.0` | Socle stable (sans hooks CGL/glViewport expérimentaux), résolution native dynamique, logs silencieux + crash/support GitHub. |
 
 ---
 
@@ -38,9 +38,9 @@
 2. **`Graphics Rules.sgr` (`patch_sims2.command` L17 & L1054) — Vérifié & renforcé :**
    - Vérifié dans `/Applications/The Sims 2.app/Contents/` : 19 copies existent dans les packs `Assets`, mais `config-log.txt` confirme que le binaire macOS Aspyr lit `Contents/Resources/Config/Graphics Rules.sgr`.
    - La regex `# Override defaults (SIM-281,416)` tolère désormais les commentaires `#` intermédiaires et ne s'arrête qu'aux séparateurs `#####`, `endif` ou `end`.
-3. **Préparation `v1.4.1` (sur `release/v1.4.1` depuis `staging` `93b7141`, sans toucher `staging` ni `main`) :**
+3. **Préparation `v1.4.0` (sur `release/v1.4.0` depuis `staging` `93b7141`, sans toucher `staging` ni `main`) :**
    - `staging` (`93b7141`) reste intacte comme archive R&D pour les résolutions à chaud.
-   - Sur `release/v1.4.1`, `sims2_trackpad.m` a été nettoyé pour ne garder que le socle stable (double verrou 60 Hz, filtrage CoreGraphics des vrais modes matériels à 60 Hz, plein écran dynamique `NSScreen.visibleFrame`, correctif `Command+Tab`, gestes trackpad, logs silencieux par défaut + `crash_report.log` sur crash + `debug_boot.log` à la demande).
+   - Sur `release/v1.4.0`, `sims2_trackpad.m` a été nettoyé pour ne garder que le socle stable (double verrou 60 Hz, filtrage CoreGraphics des vrais modes matériels à 60 Hz, plein écran dynamique `NSScreen.visibleFrame`, correctif `Command+Tab`, gestes trackpad, logs silencieux par défaut + `crash_report.log` sur crash + `debug_boot.log` à la demande).
    - `patch_sims2.command` et `clean_sims2_cache.command` détectent dynamiquement la résolution native (zéro `1800x1169` en dur) et `patch_sims2.command` ajoute l'option **Diagnostic & Support GitHub** + `.github/ISSUE_TEMPLATE/bug_report.md`.
 4. **Durcissement CI & Packaging — Intégré sur `staging` :**
    - `.github/workflows/ci-and-release.yml` exécute `verify` sur `ubuntu-latest`, `windows-latest` **et `macos-latest`** (compilation `clang -arch x86_64 -Wall -Wextra` de `sims2_trackpad.m` + `codesign --verify --strict` + tests macOS).
