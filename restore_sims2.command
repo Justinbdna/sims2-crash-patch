@@ -1,7 +1,7 @@
 #!/bin/bash
 # ==============================================================================
 # The Sims 2: Super Collection — Official Binary Restore Utility
-# Version: 1.3.1
+# Version: 1.4.0
 # Verifies pristine fingerprints before atomically restoring Sims2XP_Exe.backup.
 # ==============================================================================
 
@@ -11,6 +11,9 @@ APP_PATH="/Applications/The Sims 2.app"
 EXE_PATH="$APP_PATH/Contents/MacOS/Sims2XP_Exe"
 BACKUP_PATH="$APP_PATH/Contents/MacOS/Sims2XP_Exe.backup"
 ALT_BACKUP_PATH="$APP_PATH/Contents/MacOS/Sims2XP_Exe.backup_original"
+GRULES_PATH="$APP_PATH/Contents/Resources/Config/Graphics Rules.sgr"
+GRULES_BACKUP_PATH="$APP_PATH/Contents/Resources/Config/Graphics Rules.sgr.backup"
+TRACKPAD_DYLIB_DEST="$APP_PATH/Contents/MacOS/libsims2_trackpad.dylib"
 MANAGED_MAXFILES_PLIST="/Library/LaunchDaemons/limit.maxfiles.plist"
 
 # ANSI Colors
@@ -30,7 +33,7 @@ LOG_FILE=""
 LOG_FINALIZED=0
 
 init_diagnostic_log() {
-    local label="${1:-restore_sims2.command v1.3.1}"
+    local label="${1:-restore_sims2.command v1.4.0}"
     [ -z "${REAL_HOME:-}" ] && return 0
     local log_dir="${SIMS2_LOG_DIR:-$REAL_HOME/Library/Logs/Sims2-Crash-Patch}"
     run_as_real_user mkdir -p "$log_dir" >/dev/null 2>&1 || return 0
@@ -168,12 +171,18 @@ locate_app_bundle() {
         EXE_PATH="$APP_PATH/Contents/MacOS/Sims2XP_Exe"
         BACKUP_PATH="$APP_PATH/Contents/MacOS/Sims2XP_Exe.backup"
         ALT_BACKUP_PATH="$APP_PATH/Contents/MacOS/Sims2XP_Exe.backup_original"
+        GRULES_PATH="$APP_PATH/Contents/Resources/Config/Graphics Rules.sgr"
+        GRULES_BACKUP_PATH="$APP_PATH/Contents/Resources/Config/Graphics Rules.sgr.backup"
+        TRACKPAD_DYLIB_DEST="$APP_PATH/Contents/MacOS/libsims2_trackpad.dylib"
         return 1
     fi
 
     EXE_PATH="$APP_PATH/Contents/MacOS/Sims2XP_Exe"
     BACKUP_PATH="$APP_PATH/Contents/MacOS/Sims2XP_Exe.backup"
     ALT_BACKUP_PATH="$APP_PATH/Contents/MacOS/Sims2XP_Exe.backup_original"
+    GRULES_PATH="$APP_PATH/Contents/Resources/Config/Graphics Rules.sgr"
+    GRULES_BACKUP_PATH="$APP_PATH/Contents/Resources/Config/Graphics Rules.sgr.backup"
+    TRACKPAD_DYLIB_DEST="$APP_PATH/Contents/MacOS/libsims2_trackpad.dylib"
     return 0
 }
 
@@ -300,21 +309,72 @@ my $orig1 = pack("H*", "f20f1045d0f2440f2cf84889df");
 my $repl1 = pack("H*", "41bf3c000000909090904889df");
 my $orig2 = pack("H*", "41bf3c000000440f45f8c70300000000");
 my $repl2 = pack("H*", "41bf3c00000090909090c70300000000");
+my $repl_asl     = pack("H*", "39f190904139f89090");
+my $repl_aspect  = pack("H*", "3b45c077063b4dc4764190");
+my $repl_val_p3  = pack("H*", "3d000a0000771581f940060000770deb4b9090909090909090909090");
+my $repl_stretch = pack("H*", "e86277fbff84c0eb108b43183b45f0");
 
 if (count_occurrences($buf, $orig1) == 1 &&
     count_occurrences($buf, $orig2) == 1 &&
     count_occurrences($buf, $repl1) == 0 &&
-    count_occurrences($buf, $repl2) == 0) {
+    count_occurrences($buf, $repl2) == 0 &&
+    index($buf, $repl_asl) == -1 &&
+    index($buf, $repl_aspect) == -1 &&
+    index($buf, $repl_val_p3) == -1 &&
+    index($buf, $repl_stretch) == -1 &&
+    index($buf, "libsims2_trackpad.dylib") == -1) {
     exit 0;
 }
 exit 1;
 PERLEOF
 }
 
+restore_auxiliary_files() {
+    local app_path="${1:-$APP_PATH}"
+    local dylib_path="$app_path/Contents/MacOS/libsims2_trackpad.dylib"
+    local grules_path="$app_path/Contents/Resources/Config/Graphics Rules.sgr"
+    local grules_backup="$app_path/Contents/Resources/Config/Graphics Rules.sgr.backup"
+    local rc=0
+
+    if [ -L "$dylib_path" ]; then
+        echo -e "${RED}[-] Erreur de sécurité : lien symbolique inattendu sur $dylib_path.${NC}"
+        rc=1
+    elif [ -e "$dylib_path" ]; then
+        if run_privileged "$app_path" rm -f "$dylib_path"; then
+            echo -e "${GREEN}[+] Module Trackpad supprimé :${NC} $dylib_path"
+        else
+            echo -e "${RED}[-] Impossible de supprimer $dylib_path.${NC}"
+            rc=1
+        fi
+    fi
+
+    if [ -L "$grules_backup" ] || [ -L "$grules_path" ]; then
+        echo -e "${RED}[-] Erreur de sécurité : lien symbolique inattendu sur Graphics Rules.sgr.${NC}"
+        return 1
+    fi
+
+    if [ -f "$grules_backup" ]; then
+        local tmp_grules="${grules_path}.tmp.$$"
+        run_privileged "$app_path" rm -f "$tmp_grules" 2>/dev/null || true
+        if run_privileged "$app_path" cp -f "$grules_backup" "$tmp_grules" && \
+           run_privileged "$app_path" chmod 644 "$tmp_grules" && \
+           run_privileged "$app_path" mv -f "$tmp_grules" "$grules_path" && \
+           run_privileged "$app_path" chmod 644 "$grules_path"; then
+            echo -e "${GREEN}[+] Graphics Rules.sgr restauré depuis Graphics Rules.sgr.backup.${NC}"
+        else
+            run_privileged "$app_path" rm -f "$tmp_grules" 2>/dev/null || true
+            echo -e "${RED}[-] Échec de la restauration atomique de Graphics Rules.sgr.${NC}"
+            rc=1
+        fi
+    fi
+
+    return "$rc"
+}
+
 main() {
     echo -e "${CYAN}${BOLD}"
     echo "========================================================================"
-    echo "  The Sims 2 — Utilitaire de Restauration / Restore Utility (v1.3.1)    "
+    echo "  The Sims 2 — Utilitaire de Restauration / Restore Utility (v1.4.0)    "
     echo "========================================================================"
     echo -e "${NC}"
 
@@ -322,7 +382,7 @@ main() {
         pause_exit 1
     fi
 
-    init_diagnostic_log "restore_sims2.command v1.3.1"
+    init_diagnostic_log "restore_sims2.command v1.4.0"
 
     # 1. Verify the game is not currently running
     if pgrep -x "Sims2XP_Exe" >/dev/null 2>&1 || pgrep -x "AppBundleExe" >/dev/null 2>&1; then
@@ -414,6 +474,12 @@ main() {
         pause_exit 1
     fi
 
+    if ! restore_auxiliary_files "$APP_PATH"; then
+        RESTORE_STATUS="FAILED (auxiliary restore error)"
+        log_diag "RESTORE AUXILIARY FAILED"
+        pause_exit 1
+    fi
+
     if sign_and_verify_app "$APP_PATH"; then
         RESTORE_STATUS="OK (original binary restored & codesign strict verified)"
         log_diag "RESTORE OK + CODESIGN OK"
@@ -437,7 +503,7 @@ main() {
 
     echo ""
     echo -e "${GREEN}${BOLD}========================================================================${NC}"
-    echo -e "${GREEN}${BOLD}  RESTAURATION TERMINÉE / RESTORATION COMPLETE (v1.3.1)                 ${NC}"
+    echo -e "${GREEN}${BOLD}  RESTAURATION TERMINÉE / RESTORATION COMPLETE (v1.4.0)                 ${NC}"
     echo -e "${GREEN}${BOLD}========================================================================${NC}"
     echo ""
     echo "Le binaire d'origine (vérifié intègre) a été restauré. Note : pour rétablir"

@@ -67,13 +67,17 @@ class TestMacScriptsIntegrity(unittest.TestCase):
                         "clean_sims2_cache.command",
                         "restore_sims2.command",
                         "README.txt",
+                        "trackpad_mod/libsims2_trackpad.dylib",
+                        "trackpad_mod/sims2_trackpad.m",
+                        "trackpad_mod/build_trackpad.sh",
                     },
                 )
                 for info in zf.infolist():
                     raw = zf.read(info.filename)
-                    self.assertNotIn(b"\r", raw, f"CR found inside {info.filename} in release zip")
+                    if not info.filename.endswith(".dylib"):
+                        self.assertNotIn(b"\r", raw, f"CR found inside {info.filename} in release zip")
                     mode = (info.external_attr >> 16) & 0o777
-                    if info.filename.endswith(".command"):
+                    if info.filename.endswith((".command", ".sh", ".dylib")):
                         self.assertEqual(mode, 0o755, f"{info.filename} must be 0755 in zip")
                     else:
                         self.assertEqual(mode, 0o644)
@@ -563,7 +567,7 @@ class TestMacScriptsIntegrity(unittest.TestCase):
         clt_tools_rx = re.compile(r"(?<![#\w/.-])(python3|swift|git|clang|xcodebuild|objdump|cc)\b")
         for script_name in ("patch_sims2.command", "clean_sims2_cache.command", "restore_sims2.command"):
             text = (ROOT_DIR / script_name).read_text(encoding="utf-8")
-            self.assertIn("Version: 1.3.1", text)
+            self.assertIn("Version: 1.4.0", text)
             non_comment = "\n".join(ln for ln in text.splitlines() if not ln.lstrip().startswith("#"))
             # Remove heredoc text/URLs isn't needed if no CLT tool word appears in code lines
             for line in non_comment.splitlines():
@@ -578,10 +582,12 @@ class TestMacScriptsIntegrity(unittest.TestCase):
         readme_md = (ROOT_DIR / "README.md").read_text(encoding="utf-8")
         changelog = (ROOT_DIR / "CHANGELOG.md").read_text(encoding="utf-8")
         for doc_text in (readme_txt, readme_md):
-            self.assertIn("v1.3.1", doc_text)
+            self.assertIn("v1.4.0", doc_text)
             self.assertIn("Gatekeeper", doc_text)
             self.assertIn("userProps.xml.backup", doc_text)
             self.assertIn("Autoriser", doc_text)
+        self.assertIn("[1.4.0]", changelog)
+        self.assertIn("[1.4.0]", changelog)
         self.assertIn("[1.3.1]", changelog)
         self.assertIn("[1.3.0]", changelog)
 
@@ -591,6 +597,7 @@ class TestMacScriptsIntegrity(unittest.TestCase):
             with tempfile.TemporaryDirectory() as tmp:
                 env = dict(os.environ)
                 env["SIMS2_NONINTERACTIVE"] = "1"
+                env["SIMS2_SKIP_RUNNING_CHECK"] = "1"
                 env["SIMS2_LOG_DIR"] = tmp
                 res_quit = subprocess.run(
                     [bash_bin, "./clean_sims2_cache.command"],
@@ -650,6 +657,748 @@ class TestMacScriptsIntegrity(unittest.TestCase):
                 self.assertTrue(prev.is_file(), f"Missing rotated previous.log for {script}")
                 self.assertIn("STEP_TWO", latest.read_text(encoding="utf-8"))
                 self.assertIn("STEP_ONE", prev.read_text(encoding="utf-8"))
+
+    def test_v14_graphics_rules_sgr_patch_and_restore(self) -> None:
+        if not vp.find_perl():
+            self.skipTest("perl not available on PATH")
+
+        sample_grules = (
+            "# Synthetic Graphics Rules.sgr\n"
+            "seti textureMemory       32\n"
+            "option ScreenModeResolution\n"
+            "   setting $Low\n"
+            "      uintProp maxResWidth      2048\n"
+            "      uintProp maxResHeight     2048\n"
+            "   setting $High\n"
+            "      uintProp maxResWidth      2048\n"
+            "      uintProp maxResHeight     2048\n"
+            "end\n"
+            "# Override defaults (SIM-281,416)\n"
+            "setOption EffectsQuality        $Medium\n"
+            "setOption LightingQuality       $Medium\n"
+            "# inline hardware note\n"
+            "setOption Shadows               $Medium\n"
+            "setOption MaterialDetail        $Medium\n"
+            "endif\n"
+        )
+
+        with tempfile.TemporaryDirectory() as tmp:
+            app_dir = Path(tmp) / "The Sims 2.app"
+            cfg_dir = app_dir / "Contents" / "Resources" / "Config"
+            macos_dir = app_dir / "Contents" / "MacOS"
+            cfg_dir.mkdir(parents=True)
+            macos_dir.mkdir(parents=True)
+
+            grules = cfg_dir / "Graphics Rules.sgr"
+            grules_bak = cfg_dir / "Graphics Rules.sgr.backup"
+            dylib_dest = macos_dir / "libsims2_trackpad.dylib"
+            grules.write_text(sample_grules, encoding="utf-8")
+            dylib_dest.write_bytes(b"dummy-dylib")
+
+            r1 = self._run_bash_lib(
+                "patch_sims2.command",
+                'patch_graphics_rules_sgr "$1" "$2"',
+                grules.as_posix(),
+                grules_bak.as_posix(),
+            )
+            self.assertEqual(r1.returncode, 0, r1.stderr or r1.stdout)
+            self.assertTrue(grules_bak.is_file())
+            self.assertEqual(grules_bak.read_text(encoding="utf-8"), sample_grules)
+
+            patched_text = grules.read_text(encoding="utf-8")
+            self.assertIn("1024", patched_text)
+            self.assertIn("2560", patched_text)
+            self.assertIn("1600", patched_text)
+            self.assertIn("$High", patched_text)
+            self.assertNotIn("seti textureMemory       32", patched_text)
+            self.assertNotIn("2048", patched_text)
+            self.assertNotIn("5120", patched_text)
+            self.assertNotIn("3200", patched_text)
+            self.assertNotIn("$Medium", patched_text)
+
+            # Second call must be strictly idempotent and keep original backup intact
+            r2 = self._run_bash_lib(
+                "patch_sims2.command",
+                'patch_graphics_rules_sgr "$1" "$2"',
+                grules.as_posix(),
+                grules_bak.as_posix(),
+            )
+            self.assertEqual(r2.returncode, 0, r2.stderr or r2.stdout)
+            self.assertEqual(grules.read_text(encoding="utf-8"), patched_text)
+            self.assertEqual(grules_bak.read_text(encoding="utf-8"), sample_grules)
+
+            # Phase 1/2 already-patched 5120x3200 must upgrade cleanly to 2560x1600
+            legacy_phase2 = patched_text.replace("2560", "5120").replace("1600", "3200")
+            grules.write_text(legacy_phase2, encoding="utf-8")
+            r_upgrade = self._run_bash_lib(
+                "patch_sims2.command",
+                'patch_graphics_rules_sgr "$1" "$2"',
+                grules.as_posix(),
+                grules_bak.as_posix(),
+            )
+            self.assertEqual(r_upgrade.returncode, 0, r_upgrade.stderr or r_upgrade.stdout)
+            self.assertEqual(grules.read_text(encoding="utf-8"), patched_text)
+            self.assertEqual(grules_bak.read_text(encoding="utf-8"), sample_grules)
+
+            # Restore via restore_auxiliary_files
+            r_rest = self._run_bash_lib(
+                "restore_sims2.command",
+                'restore_auxiliary_files "$1"',
+                app_dir.as_posix(),
+            )
+            self.assertEqual(r_rest.returncode, 0, r_rest.stderr or r_rest.stdout)
+            self.assertEqual(grules.read_text(encoding="utf-8"), sample_grules)
+            self.assertFalse(dylib_dest.exists())
+
+    def test_v14_macho_weak_dylib_injection_and_binary_zip_integrity(self) -> None:
+        if not vp.find_perl():
+            self.skipTest("perl not available on PATH")
+
+        orig_sizeofcmds = 72 + 80  # 1 LC_SEGMENT_64 (72) + 1 section_64 (80)
+        macho = bytearray(10240)
+        # mach_header_64 (32 bytes): MH_MAGIC_64=0xfeedfacf, CPU_TYPE_X86_64=0x01000007, MH_EXECUTE=2, ncmds=1
+        struct.pack_into("<IIIIIIII", macho, 0, 0xFEEDFACF, 0x01000007, 3, 2, 1, orig_sizeofcmds, 0, 0)
+        # LC_SEGMENT_64 at offset 32
+        struct.pack_into(
+            "<II16sQQQQIIII",
+            macho,
+            32,
+            0x19,
+            orig_sizeofcmds,
+            b"__TEXT",
+            0x100000000,
+            10240,
+            0,
+            10240,
+            7,
+            5,
+            1,
+            0,
+        )
+        # section_64 (__text) at offset 104, file offset 9984
+        struct.pack_into(
+            "<16s16sQQIIIIIIII",
+            macho,
+            104,
+            b"__text",
+            b"__TEXT",
+            0x100000000 + 9984,
+            256,
+            9984,
+            4,
+            0,
+            0,
+            0x80000400,
+            0,
+            0,
+            0,
+        )
+
+        dylib_name = "@executable_path/libsims2_trackpad.dylib"
+        expected_cmdsize = (24 + len(dylib_name.encode("ascii")) + 1 + 7) & ~7
+
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_dir = Path(tmp)
+            exe = tmp_dir / "Sims2XP_Exe"
+            exe.write_bytes(bytes(macho))
+
+            r1 = self._run_bash_lib(
+                "patch_sims2.command",
+                'inject_weak_dylib_macho "$1" "$2"',
+                exe.as_posix(),
+                dylib_name,
+            )
+            self.assertEqual(r1.returncode, 0, r1.stderr or r1.stdout)
+
+            patched = exe.read_bytes()
+            ncmds, sizeofcmds = struct.unpack_from("<II", patched, 16)
+            self.assertEqual(ncmds, 2)
+            self.assertEqual(sizeofcmds, orig_sizeofcmds + expected_cmdsize)
+
+            new_cmd_off = 32 + orig_sizeofcmds
+            cmd, cmdsize, str_off = struct.unpack_from("<III", patched, new_cmd_off)
+            self.assertEqual(cmd, 0x80000018)
+            self.assertEqual(cmdsize, expected_cmdsize)
+            self.assertEqual(str_off, 24)
+            cmd_payload = patched[new_cmd_off + str_off : new_cmd_off + cmdsize]
+            self.assertIn(dylib_name.encode("ascii"), cmd_payload)
+
+            # Second call must report ALREADY_INJECTED without modifying ncmds or bytes
+            r2 = self._run_bash_lib(
+                "patch_sims2.command",
+                'inject_weak_dylib_macho "$1" "$2"',
+                exe.as_posix(),
+                dylib_name,
+            )
+            self.assertEqual(r2.returncode, 0, r2.stderr or r2.stdout)
+            self.assertIn("ALREADY_INJECTED", r2.stdout)
+            self.assertEqual(exe.read_bytes(), patched)
+            ncmds_after, _ = struct.unpack_from("<II", exe.read_bytes(), 16)
+            self.assertEqual(ncmds_after, 2)
+
+            # Verify binary dylib is preserved byte-for-byte in Mac release ZIP with 0755 permissions
+            dylib_src = ROOT_DIR / "trackpad_mod" / "libsims2_trackpad.dylib"
+            self.assertTrue(dylib_src.is_file(), "Missing trackpad_mod/libsims2_trackpad.dylib")
+            expected_dylib = dylib_src.read_bytes()
+            mac_zip, _ = vp.package_releases("v1.4.0-test", tmp_dir)
+            with zipfile.ZipFile(mac_zip, "r") as zf:
+                info = zf.getinfo("trackpad_mod/libsims2_trackpad.dylib")
+                mode = (info.external_attr >> 16) & 0o777
+                self.assertEqual(mode, 0o755)
+                self.assertEqual(zf.read("trackpad_mod/libsims2_trackpad.dylib"), expected_dylib)
+
+            # Branch names with '/' (e.g. feat/v1.4-audit) must sanitize cleanly to flat ZIP paths
+            branch_mac_zip, branch_win_zip = vp.package_releases("feat/test-branch", tmp_dir)
+            self.assertEqual(branch_mac_zip.parent, tmp_dir)
+            self.assertEqual(branch_mac_zip.name, "sims2-crash-patch-feat-test-branch.zip")
+            self.assertEqual(branch_win_zip.name, "sims2-crash-patch-windows-feat-test-branch.zip")
+            self.assertTrue(branch_mac_zip.is_file())
+            self.assertTrue(branch_win_zip.is_file())
+
+    def test_v14_trackpad_dylib_sdl2_azerty_and_orbit_fixes(self) -> None:
+        build_sh = (ROOT_DIR / "trackpad_mod" / "build_trackpad.sh").read_text(encoding="utf-8")
+        src_m = (ROOT_DIR / "trackpad_mod" / "sims2_trackpad.m").read_text(encoding="utf-8")
+        dylib = ROOT_DIR / "trackpad_mod" / "libsims2_trackpad.dylib"
+
+        self.assertIn("-arch x86_64", build_sh)
+        self.assertIn("-framework Carbon", build_sh)
+        self.assertIn("-framework CoreGraphics", build_sh)
+
+        # Brique 2 SDL2 Space/Dock/focus hints & cursor warp protection
+        for hint in (
+            "SDL_VIDEO_MAC_FULLSCREEN_SPACES",
+            "SDL_HINT_ALLOW_FULLSCREEN_NOTIFICATIONS",
+            "SDL_ALLOW_TOPMOST",
+            "SDL_VIDEO_MINIMIZE_ON_FOCUS_LOSS",
+        ):
+            self.assertIn(hint, src_m)
+        self.assertIn('setenv("SDL_VIDEO_MINIMIZE_ON_FOCUS_LOSS", "0", 1);', src_m)
+        self.assertIn("swizzled_mouseMoved", src_m)
+        self.assertIn("![NSApp isActive]", src_m)
+        self.assertIn("![win isKeyWindow]", src_m)
+
+        # Brique 3 layout-independent pinch zoom, Carbon AZERTY/QWERTY rotation, Control-orbit & Cmd+Tab anti-bounce
+        self.assertIn("CGEventCreateScrollWheelEvent", src_m)
+        self.assertIn("gForceScrollNonInverted", src_m)
+        self.assertIn("TISCopyCurrentKeyboardLayoutInputSource", src_m)
+        self.assertIn("UCKeyTranslate", src_m)
+        self.assertIn("kc >= 65 && kc <= 92", src_m)
+        self.assertIn("75 * NSEC_PER_MSEC", src_m)
+        self.assertIn("NSEventTypeFlagsChanged", src_m)
+        self.assertIn("NSEventModifierFlagControl", src_m)
+        self.assertIn("NSEventModifierFlagOption", src_m)
+        self.assertIn("rightMouseDown:", src_m)
+        self.assertIn("rightMouseDragged:", src_m)
+        self.assertIn("mouseDragged:", src_m)
+        self.assertIn("gCtrlMiddleDragActive", src_m)
+        self.assertIn("!gCtrlMiddleDragActive", src_m)
+        self.assertIn("isRight == gCtrlDragWasRight", src_m)
+        self.assertNotIn("gOptionHandPanActive", src_m)
+        self.assertIn("swizzled_setFullscreenSpace", src_m)
+        self.assertIn("swizzled_miniaturize", src_m)
+        self.assertIn("swizzled_activateIgnoringOtherApps", src_m)
+        self.assertIn("swizzled_focusSomeWindow", src_m)
+        self.assertIn("swizzled_canBecomeKeyWindow", src_m)
+        self.assertIn("is_secondary_orphan_game_window", src_m)
+        self.assertIn("neutralize_secondary_orphan_windows", src_m)
+        self.assertIn("NSEventTypeKeyDown", src_m)
+        self.assertIn("is_sdl_game_window", src_m)
+        self.assertIn("raw_event_modifier_flags", src_m)
+        self.assertIn("gSuppressedScrollEvent", src_m)
+        self.assertIn("gForcedNonInvertedEvent", src_m)
+        self.assertIn("resolve_window_listener", src_m)
+
+        # Real hardware CoreGraphics __DATA,__la_symbol_ptr hooks + dynamic visibleFrame clamp (no synthetic modes or experimental hooks)
+        self.assertNotIn("Sims2SyntheticDisplayMode", src_m)
+        self.assertIn("hook_coregraphics_la_symbol_ptrs", src_m)
+        self.assertIn("S_LAZY_SYMBOL_POINTERS", src_m)
+        self.assertIn("--------RRRRRRRRGGGGGGGGBBBBBBBB", src_m)
+        self.assertIn("clamp_fullscreen_window_to_visible_frame", src_m)
+        self.assertIn("update_cached_screen_geometry", src_m)
+        self.assertIn("SIMS2_PATCH_VERSION \"1.4.0\"", src_m)
+        self.assertIn("_CGDisplayCopyAllDisplayModes", src_m)
+        self.assertIn("___cxa_throw", src_m)
+
+        # Experimental hot-resolution hooks, userProps watcher & mouse remapping must be completely removed
+        for removed_sym in (
+            "_CGAcquireDisplayFadeReservation",
+            "_CGDisplayFade",
+            "_CGReleaseDisplayFadeReservation",
+            "_CGConfigureDisplayFadeEffect",
+            "_CGDisplaySetDisplayMode",
+            "_glViewport",
+            "_glScissor",
+            "_CGLSetParameter",
+            "_CGLEnable",
+            "_CGLDisable",
+            "refresh_userprops_target_resolution",
+            "gTargetRenderWidth",
+            "gTargetRenderHeight",
+            "launch_boot.log",
+            "trackpad_events.log",
+            "fallback-1800x1169",
+            "1800x1130",
+        ):
+            self.assertNotIn(removed_sym, src_m)
+
+        # Silent default logging + automatic crash_report.log + on-demand debug_boot.log
+        for crash_tok in (
+            "crash_report.log",
+            "debug_boot.log",
+            ".debug_enabled",
+            "SIMS2_DEBUG",
+            "SIGSEGV",
+            "SIGABRT",
+            "SIGBUS",
+            "SIGILL",
+            "SIGFPE",
+            "_ZSt13set_terminatePFvvE",
+            "backtrace_symbols_fd",
+            "hw.model",
+        ):
+            self.assertIn(crash_tok, src_m)
+
+        for cat_pair in (
+            "{ 1280,  800 }",
+            "{ 1440,  900 }",
+            "{ 1512,  982 }",
+            "{ 1680, 1050 }",
+            "{ 1800, 1169 }",
+            "{ 2048, 1280 }",
+            "{ 2560, 1600 }",
+            "{ 1728, 1080 }",
+            "{ 1920, 1080 }",
+            "{ 1920, 1200 }",
+            "{ 2560, 1440 }",
+        ):
+            self.assertIn(cat_pair, src_m)
+
+        # Compiled dylib header check (Mach-O 64-bit x86_64 MH_DYLIB)
+        raw = dylib.read_bytes()
+        magic, cputype, _, filetype = struct.unpack_from("<IIII", raw, 0)
+        self.assertEqual(magic, 0xFEEDFACF)
+        self.assertEqual(cputype, 0x01000007)
+        self.assertEqual(filetype, 6)
+        for cg_sym in (
+            b"CGDisplayCopyAllDisplayModes",
+            b"CGDisplayModeCopyPixelEncoding",
+            b"CGDisplayModeGetWidth",
+            b"CGDisplayModeGetHeight",
+            b"CGDisplayModeGetPixelWidth",
+            b"CGDisplayModeGetPixelHeight",
+            b"CGDisplayModeGetRefreshRate",
+            b"__cxa_throw",
+            b"backtrace_symbols_fd",
+            b"crash_report.log",
+            b"debug_boot.log",
+        ):
+            self.assertIn(cg_sym, raw)
+        for absent_bin_sym in (
+            b"Sims2SyntheticDisplayMode",
+            b"CGDisplayFade",
+            b"CGAcquireDisplayFadeReservation",
+            b"CGDisplaySetDisplayMode",
+            b"CGLSetParameter",
+            b"CGLDisable",
+            b"glScissor",
+            b"glViewport",
+            b"launch_boot.log",
+            b"trackpad_events.log",
+        ):
+            self.assertNotIn(absent_bin_sym, raw)
+        if sys.platform == "darwin":
+            cs = subprocess.run(["codesign", "--verify", "--strict", dylib.as_posix()], capture_output=True, text=True)
+            self.assertEqual(cs.returncode, 0, cs.stderr)
+
+    def test_v140_silent_logs_crash_capture_dynamic_res_and_github_support(self) -> None:
+        patch_text = (ROOT_DIR / "patch_sims2.command").read_text(encoding="utf-8")
+        self.assertNotIn('grules_w="1800"', patch_text)
+        self.assertNotIn('grules_h="1169"', patch_text)
+        self.assertNotIn("affichage natif 1800x1169", patch_text)
+        self.assertIn("Diagnostic & Support GitHub", patch_text)
+        self.assertIn("github_support_report.md", patch_text)
+
+        bug_tpl = ROOT_DIR / ".github" / "ISSUE_TEMPLATE" / "bug_report.md"
+        self.assertTrue(bug_tpl.is_file(), "Missing .github/ISSUE_TEMPLATE/bug_report.md")
+        bug_tpl_text = bug_tpl.read_text(encoding="utf-8")
+        self.assertIn("patch_sims2.command", bug_tpl_text)
+        self.assertIn("Diagnostic & Support GitHub", bug_tpl_text)
+        self.assertIn("github_support_report.md", bug_tpl_text)
+
+        if sys.platform == "darwin":
+            bash_bin = vp.find_bash()
+            self.assertIsNotNone(bash_bin)
+
+            # Interactive menu of patch_sims2.command shows [1]..[3] and exits cleanly on 3
+            res_quit = subprocess.run(
+                [bash_bin, "./patch_sims2.command"],
+                cwd=str(ROOT_DIR),
+                input="3\n",
+                capture_output=True,
+                text=True,
+            )
+            self.assertEqual(res_quit.returncode, 0, res_quit.stderr or res_quit.stdout)
+            self.assertIn("[1]", res_quit.stdout)
+            self.assertIn("Diagnostic & Support GitHub", res_quit.stdout)
+            self.assertIn("[3]", res_quit.stdout)
+
+            # Debug toggle + GitHub support report generation + /Users/<user> anonymization
+            with tempfile.TemporaryDirectory() as tmp:
+                base = Path(tmp)
+                fake_home = base / "Users" / "alice_secret"
+                log_dir = fake_home / "Library" / "Logs" / "Sims2-Crash-Patch"
+                cfg_dir = fake_home / "Library" / "Application Support" / "Aspyr" / "The Sims 2" / "Config"
+                cfg_dir.mkdir(parents=True)
+                userprops = cfg_dir / "userProps.xml"
+                userprops.write_text(
+                    '<?xml version="1.0"?><cGZPersistDBSegment>'
+                    '<AnyString key="activeDeviceDisplayMode" type="0x0b8bea18">1440x900x32x60</AnyString>'
+                    '</cGZPersistDBSegment>\n',
+                    encoding="utf-8",
+                )
+
+                r_dbg_on = self._run_bash_lib(
+                    "patch_sims2.command",
+                    'REAL_HOME="$1"; SIMS2_LOG_DIR="$2"; toggle_debug_mode enable',
+                    fake_home.as_posix(),
+                    log_dir.as_posix(),
+                )
+                self.assertEqual(r_dbg_on.returncode, 0, r_dbg_on.stderr or r_dbg_on.stdout)
+                self.assertTrue((log_dir / ".debug_enabled").is_file())
+
+                crash_file = log_dir / "crash_report.log"
+                crash_file.write_text(
+                    f"Patch Version : 1.4.0\nPath: /Users/alice_secret/Library/Application Support/test\n",
+                    encoding="utf-8",
+                )
+                dbg_file = log_dir / "debug_boot.log"
+                dbg_file.write_text("BOOT pid=1234 path=/Users/alice_secret/Desktop\n", encoding="utf-8")
+                (log_dir / "debug_boot.previous.log").write_text("OLD\n", encoding="utf-8")
+
+                env = dict(os.environ)
+                env["SIMS2_LIB_ONLY"] = "1"
+                env["SIMS2_SKIP_PBCOPY"] = "1"
+                env["SIMS2_SKIP_SYSTEM_PROFILER"] = "1"
+                env["SIMS2_LOG_DIR"] = log_dir.as_posix()
+                env["SIMS2_USERPROPS_OVERRIDE"] = userprops.as_posix()
+                r_rep = subprocess.run(
+                    [
+                        bash_bin,
+                        "-c",
+                        'set -u; source "./patch_sims2.command"; REAL_HOME="$1"; REAL_USER="alice_secret"; generate_github_support_report',
+                        "_",
+                        fake_home.as_posix(),
+                    ],
+                    cwd=str(ROOT_DIR),
+                    env=env,
+                    capture_output=True,
+                    text=True,
+                )
+                self.assertEqual(r_rep.returncode, 0, r_rep.stderr or r_rep.stdout)
+                self.assertNotIn("command not found", r_rep.stderr)
+                self.assertNotIn("hw.model", r_rep.stderr)
+                report_path = log_dir / "github_support_report.md"
+                self.assertTrue(report_path.is_file())
+                rep_text = report_path.read_text(encoding="utf-8")
+                self.assertIn("v1.4.0", rep_text)
+                self.assertIn("1440x900x32x60", rep_text)
+                self.assertIn("crash_report.log", rep_text)
+                self.assertIn("debug_boot.log", rep_text)
+                self.assertNotIn("alice_secret", rep_text)
+                self.assertIn("~/Library/Application Support/test", rep_text)
+
+                r_dbg_off = self._run_bash_lib(
+                    "patch_sims2.command",
+                    'REAL_HOME="$1"; SIMS2_LOG_DIR="$2"; toggle_debug_mode disable',
+                    fake_home.as_posix(),
+                    log_dir.as_posix(),
+                )
+                self.assertEqual(r_dbg_off.returncode, 0, r_dbg_off.stderr or r_dbg_off.stdout)
+                self.assertFalse((log_dir / ".debug_enabled").exists())
+                self.assertFalse(dbg_file.exists())
+                self.assertFalse((log_dir / "debug_boot.previous.log").exists())
+                self.assertTrue(crash_file.is_file())
+
+            # Runtime test of compiled x86_64 dylib (silent normal mode, debug_boot.log, crash_report.log)
+            clangxx = vp.find_unix_tool("clang++", ())
+            if clangxx:
+                cpp_src = (
+                    "#include <csignal>\n"
+                    "#include <stdexcept>\n"
+                    "#include <string>\n"
+                    "int main(int argc, char **argv) {\n"
+                    "  if (argc > 1 && std::string(argv[1]) == \"terminate\") throw std::runtime_error(\"boom\");\n"
+                    "  if (argc > 1 && std::string(argv[1]) == \"segv\") std::raise(SIGSEGV);\n"
+                    "  return 0;\n"
+                    "}\n"
+                )
+                with tempfile.TemporaryDirectory() as tmp:
+                    tmp_p = Path(tmp)
+                    src = tmp_p / "host.cpp"
+                    exe = tmp_p / "host"
+                    src.write_text(cpp_src, encoding="utf-8")
+                    subprocess.run([clangxx, "-arch", "x86_64", str(src), "-o", str(exe)], check=True)
+                    dylib_path = (ROOT_DIR / "trackpad_mod" / "libsims2_trackpad.dylib").as_posix()
+
+                    h_norm = tmp_p / "h_norm"
+                    h_norm.mkdir()
+                    rn = subprocess.run([str(exe)], env={**os.environ, "HOME": str(h_norm), "DYLD_INSERT_LIBRARIES": dylib_path})
+                    self.assertEqual(rn.returncode, 0)
+                    self.assertFalse((h_norm / "Library" / "Logs" / "Sims2-Crash-Patch").exists())
+
+                    h_dbg = tmp_p / "h_dbg"
+                    h_dbg.mkdir()
+                    rd = subprocess.run([str(exe)], env={**os.environ, "HOME": str(h_dbg), "SIMS2_DEBUG": "1", "DYLD_INSERT_LIBRARIES": dylib_path})
+                    self.assertEqual(rd.returncode, 0)
+                    self.assertTrue((h_dbg / "Library" / "Logs" / "Sims2-Crash-Patch" / "debug_boot.log").is_file())
+
+                    h_segv = tmp_p / "h_segv"
+                    h_segv.mkdir()
+                    rs = subprocess.run([str(exe), "segv"], env={**os.environ, "HOME": str(h_segv), "DYLD_INSERT_LIBRARIES": dylib_path})
+                    self.assertNotEqual(rs.returncode, 0)
+                    cr_segv = h_segv / "Library" / "Logs" / "Sims2-Crash-Patch" / "crash_report.log"
+                    self.assertTrue(cr_segv.is_file())
+                    cr_txt = cr_segv.read_text(encoding="utf-8")
+                    self.assertIn("Patch Version : 1.4.0", cr_txt)
+                    self.assertIn("SIGSEGV", cr_txt)
+                    self.assertIn("Backtrace", cr_txt)
+
+    def test_v14_option_a_userprops_and_graphics_rules_1800x1125(self) -> None:
+        if not vp.find_perl():
+            self.skipTest("perl not available on PATH")
+
+        sample_tmpl = (
+            '<?xml version="1.0" encoding="utf-8"?>\n'
+            "<cGZPersistDBSegment>\n"
+            '  <AnyString key="activeDeviceDisplayMode" type="0x0b8bea18">{mode}</AnyString>\n'
+            '  <AnyBoolean key="usePixelAspectRatio" type="0xcba908e1">true</AnyBoolean>\n'
+            "</cGZPersistDBSegment>\n"
+        )
+
+        for script in ("patch_sims2.command", "clean_sims2_cache.command"):
+            with tempfile.TemporaryDirectory() as tmp:
+                base = Path(tmp)
+                xml = base / "userProps.xml"
+                orig_text = sample_tmpl.format(mode="1800x1169x32x60")
+                xml.write_text(orig_text, encoding="utf-8")
+
+                # 1. Native hardware 1800x1169 is preserved so cDeviceEnumDX validates without exception
+                r1 = self._run_bash_lib(
+                    script,
+                    'repair_userprops_xml "$1" "1800x1169" "1800x1169,1512x982,1280x800" 0',
+                    xml.as_posix(),
+                )
+                self.assertEqual(r1.returncode, 0, r1.stderr or r1.stdout)
+                updated_text = xml.read_text(encoding="utf-8")
+                self.assertIn(">1800x1169x32x60<", updated_text)
+                self.assertIn(">true<", updated_text)
+
+                # 2. Unsupported notched 1800x1125 upgrades cleanly to native 1800x1169 when supported
+                xml.write_text(sample_tmpl.format(mode="1800x1125x32x60"), encoding="utf-8")
+                r2 = self._run_bash_lib(
+                    script,
+                    'repair_userprops_xml "$1" "1800x1169" "1800x1169,1512x982,1280x800" 0',
+                    xml.as_posix(),
+                )
+                self.assertEqual(r2.returncode, 0, r2.stderr or r2.stdout)
+                self.assertIn(">1800x1169x32x60<", xml.read_text(encoding="utf-8"))
+                bak = Path(str(xml) + ".backup")
+                self.assertEqual(bak.read_text(encoding="utf-8"), sample_tmpl.format(mode="1800x1125x32x60"))
+
+                # 3. Custom supported resolution (1512x982) preserved when force_reset=0, resets to 1800x1169 on force_reset=1
+                xml.write_text(sample_tmpl.format(mode="1512x982x32x60"), encoding="utf-8")
+                r_keep = self._run_bash_lib(
+                    script,
+                    'repair_userprops_xml "$1" "1800x1169" "1800x1169,1512x982,2560x1440,1280x800" 0',
+                    xml.as_posix(),
+                )
+                self.assertEqual(r_keep.returncode, 0)
+                self.assertIn(">1512x982x32x60<", xml.read_text(encoding="utf-8"))
+
+                # 3K/4K resolution must be rejected back to 1800x1169
+                xml.write_text(sample_tmpl.format(mode="3024x1964x32x60"), encoding="utf-8")
+                r_cap = self._run_bash_lib(
+                    script,
+                    'repair_userprops_xml "$1" "1800x1169" "1800x1169,1512x982,2560x1440,1280x800" 0',
+                    xml.as_posix(),
+                )
+                self.assertEqual(r_cap.returncode, 0)
+                self.assertIn(">1800x1169x32x60<", xml.read_text(encoding="utf-8"))
+
+                r_reset = self._run_bash_lib(
+                    script,
+                    'repair_userprops_xml "$1" "1800x1169" "1800x1169,1512x982,2560x1440,1280x800" 1',
+                    xml.as_posix(),
+                )
+                self.assertEqual(r_reset.returncode, 0)
+                self.assertIn(">1800x1169x32x60<", xml.read_text(encoding="utf-8"))
+
+        real_like_grules = (
+            "seti textureMemory       32\n"
+            "option ScreenModeResolution\n"
+            "   setting $Low\n"
+            "      uintProp maxResWidth      2048\n"
+            "      uintProp maxResHeight     2048\n"
+            "      uintProp defaultResWidth  800\n"
+            "      uintProp defaultResHeight 600\n"
+            "   setting $Medium\n"
+            "      uintProp maxResWidth      2048\n"
+            "      uintProp maxResHeight     2048\n"
+            "      uintProp defaultResWidth  1024\n"
+            "      uintProp defaultResHeight 768\n"
+            "   setting $High\n"
+            "      uintProp maxResWidth      2048\n"
+            "      uintProp maxResHeight     2048\n"
+            "      uintProp defaultResWidth  1024\n"
+            "      uintProp defaultResHeight 768\n"
+            "end\n"
+            "# Override defaults (SIM-281,416)\n"
+            "setOption EffectsQuality        $Medium\n"
+            "intProp configParserErrorCode 0\n"
+        )
+
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp)
+            grules = base / "Graphics Rules.sgr"
+            grules_bak = base / "Graphics Rules.sgr.backup"
+            grules.write_text(real_like_grules, encoding="utf-8")
+
+            r_gr1 = self._run_bash_lib(
+                "patch_sims2.command",
+                'patch_graphics_rules_sgr "$1" "$2" 1800 1169',
+                grules.as_posix(),
+                grules_bak.as_posix(),
+            )
+            self.assertEqual(r_gr1.returncode, 0, r_gr1.stderr or r_gr1.stdout)
+            patched_gr = grules.read_text(encoding="utf-8")
+            self.assertIn("uintProp defaultResWidth  1800", patched_gr)
+            self.assertIn("uintProp defaultResHeight 1169", patched_gr)
+            self.assertIn("uintProp defaultResWidth  800", patched_gr)
+            # $Medium keeps its original 1024x768 default while $High shifts to 1800x1169 and maxRes is capped at 2560x1600
+            self.assertIn("setting $Medium\n      uintProp maxResWidth      2560\n      uintProp maxResHeight     1600\n      uintProp defaultResWidth  1024", patched_gr)
+            self.assertIn("intProp configParserErrorCode 0", patched_gr)
+            self.assertEqual(grules_bak.read_text(encoding="utf-8"), real_like_grules)
+
+            # Second run must be strictly idempotent
+            r_gr2 = self._run_bash_lib(
+                "patch_sims2.command",
+                'patch_graphics_rules_sgr "$1" "$2" 1800 1169',
+                grules.as_posix(),
+                grules_bak.as_posix(),
+            )
+            self.assertEqual(r_gr2.returncode, 0, r_gr2.stderr or r_gr2.stdout)
+            self.assertEqual(grules.read_text(encoding="utf-8"), patched_gr)
+            self.assertIn("OK:already_patched", r_gr2.stdout + r_gr2.stderr)
+
+            # Phase 1/2 5120x3200 file upgrades cleanly to 2560x1600 while preserving default 1800x1169
+            grules.write_text(patched_gr.replace("2560", "5120").replace("1600", "3200"), encoding="utf-8")
+            r_gr3 = self._run_bash_lib(
+                "patch_sims2.command",
+                'patch_graphics_rules_sgr "$1" "$2" 1800 1169',
+                grules.as_posix(),
+                grules_bak.as_posix(),
+            )
+            self.assertEqual(r_gr3.returncode, 0, r_gr3.stderr or r_gr3.stdout)
+            self.assertEqual(grules.read_text(encoding="utf-8"), patched_gr)
+
+    def test_v14_option_a_binary_display_patch_and_restore_guard(self) -> None:
+        perl_bin = vp.find_perl()
+        if not perl_bin:
+            self.skipTest("perl not available on PATH")
+
+        orig_asl = bytes.fromhex("39f17fd04139f87fcb")
+        repl_asl = bytes.fromhex("39f190904139f89090")
+        orig_val_p0 = bytes.fromhex("0f57c9f3480f2ac9f3480f2ad0f30f5eca0f2ec10f8538ffffff7b40")
+        orig_val_p2 = bytes.fromhex("0f57c9f3480f2ac9f3480f2ad0f30f5eca3b45c077063b4dc4764190")
+        repl_val_p3 = bytes.fromhex("3d000a0000771581f940060000770deb4b9090909090909090909090")
+        orig_stretch = bytes.fromhex("e86277fbff84c074108b43183b45f0")
+        repl_stretch = bytes.fromhex("e86277fbff84c0eb108b43183b45f0")
+
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_dir = Path(tmp)
+            exe = tmp_dir / "Sims2XP_Exe"
+            pristine = (
+                b"\x00" * 32
+                + ORIG1
+                + b"\x90" * 16
+                + ORIG2
+                + b"\x90" * 16
+                + orig_asl
+                + b"\x90" * 16
+                + orig_stretch
+                + b"\x90" * 16
+                + orig_val_p0
+                + b"\xff" * 32
+            )
+            exe.write_bytes(pristine)
+
+            r1 = self._run_bash_lib(
+                "patch_sims2.command",
+                'patch_option_a_display_binary "$1"',
+                exe.as_posix(),
+            )
+            self.assertEqual(r1.returncode, 0, r1.stderr or r1.stdout)
+            patched = exe.read_bytes()
+            self.assertIn(repl_asl, patched)
+            self.assertIn(repl_val_p3, patched)
+            self.assertIn(repl_stretch, patched)
+            self.assertNotIn(orig_asl, patched)
+            self.assertNotIn(orig_val_p0, patched)
+            self.assertNotIn(orig_stretch, patched)
+            # 60Hz bytes remain completely untouched
+            self.assertIn(ORIG1, patched)
+            self.assertIn(ORIG2, patched)
+
+            # Second run must be idempotent
+            r2 = self._run_bash_lib(
+                "patch_sims2.command",
+                'patch_option_a_display_binary "$1"',
+                exe.as_posix(),
+            )
+            self.assertEqual(r2.returncode, 0, r2.stderr or r2.stdout)
+            self.assertEqual(exe.read_bytes(), patched)
+
+            # Phase 2 -> Phase 3 upgrade path must preserve Option A stretch & 60Hz bytes
+            exe_p2 = tmp_dir / "Sims2XP_Exe_p2"
+            phase2_bin = (
+                b"\x00" * 32
+                + ORIG1
+                + b"\x90" * 16
+                + ORIG2
+                + b"\x90" * 16
+                + orig_asl
+                + b"\x90" * 16
+                + repl_stretch
+                + b"\x90" * 16
+                + orig_val_p2
+                + b"\xff" * 32
+            )
+            exe_p2.write_bytes(phase2_bin)
+            r_p2 = self._run_bash_lib(
+                "patch_sims2.command",
+                'patch_option_a_display_binary "$1"',
+                exe_p2.as_posix(),
+            )
+            self.assertEqual(r_p2.returncode, 0, r_p2.stderr or r_p2.stdout)
+            self.assertEqual(exe_p2.read_bytes(), patched)
+
+            # restore_sims2.command is_pristine_binary must reject binaries containing Phase 2 or Phase 3 patches
+            restore_blocks = vp.extract_perl_blocks((ROOT_DIR / "restore_sims2.command").read_text(encoding="utf-8"))
+            restore_pl = tmp_dir / "check_pristine.pl"
+            restore_pl.write_text(restore_blocks[0], encoding="utf-8")
+            self.assertEqual(subprocess.run([perl_bin, str(restore_pl), str(exe)]).returncode, 1)
+            exe_p2.write_bytes(phase2_bin)
+            self.assertEqual(subprocess.run([perl_bin, str(restore_pl), str(exe_p2)]).returncode, 1)
+
+            bad_exe = tmp_dir / "BadExe"
+            bad_exe.write_bytes(b"\xcc" * 128)
+            r_bad = self._run_bash_lib(
+                "patch_sims2.command",
+                'patch_option_a_display_binary "$1"',
+                bad_exe.as_posix(),
+            )
+            self.assertNotEqual(r_bad.returncode, 0)
+            self.assertEqual(bad_exe.read_bytes(), b"\xcc" * 128)
 
 
 

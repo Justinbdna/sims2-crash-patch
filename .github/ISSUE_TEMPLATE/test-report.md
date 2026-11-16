@@ -12,17 +12,19 @@ assignees: ""
 - **Apple Silicon Chip / Puce :** (e.g., M1 Pro / M1 Max / M2 Pro / M3 Pro / M4 Pro / Base M1-M4)
 - **Display Refresh Rate / Écran :** (e.g., Built-in Liquid Retina XDR 120 Hz ProMotion / External 120 Hz+ Monitor)
 - **macOS Version :** (e.g., macOS Sequoia 15.x / macOS 27.0)
-- **Patch Version :** `v1.2.1`
+- **Keyboard Layout / Clavier :** (e.g., French AZERTY / US QWERTY / Other)
+- **Patch Version :** `v1.4.0` (or `v1.3.1`)
 
 ---
 
 ## ✅ Test Results / Résultats du Test
 
-- [ ] **1. Installation (`patch_sims2.command`) :** Succeeded without error / Réussie sans erreur
+- [ ] **1. Installation (`patch_sims2.command`) :** Succeeded without error (`codesign --verify --deep --strict`) / Réussie sans erreur
 - [ ] **2. Game Startup (120 Hz enabled) :** Game launches into the main neighborhood menu without crashing / Le jeu démarre jusqu'au menu des quartiers sans planter
-- [ ] **3. Save Migration (`~/Library/Application Support/Aspyr/The Sims 2/`) :** Existing neighborhoods & saves were preserved/migrated / Sauvegardes existantes conservées ou migrées
-- [ ] **4. 3D Neighborhood Loading :** Enters Pleasantview/Montsimpa (or custom neighborhood) and plays smoothly at 60 FPS / Chargement d'un quartier 3D fluide à 60 FPS
-- [ ] **5. Cache Cleaner (`clean_sims2_cache.command`) :** Tested and working / Testé et fonctionnel
+- [ ] **3. Save Migration (`~/Library/Application Support/Aspyr/The Sims 2/`) :** Existing neighborhoods & saves preserved without overwrite / Sauvegardes existantes conservées sans écrasement
+- [ ] **4. 3D Neighborhood & Graphics (`Graphics Rules.sgr`):** Plays smoothly at 60 FPS, Retina resolutions & `$High` graphics work / Quartier 3D fluide à 60 FPS, résolutions Retina et profil `$High` OK
+- [ ] **5. Native Trackpad & SDL2 (`libsims2_trackpad.dylib`):** `Option`+drag 3D orbit, 2-finger pinch zoom, 2-finger swipe/rotate (`,`/`.`), and Fullscreen Space / Dock hiding work properly
+- [ ] **6. Maintenance & Restore (`clean_sims2_cache.command` & `restore_sims2.command`):** Cache purge / `userProps.xml` reset / full restore verified / Nettoyage, `userProps.xml` et restauration OK
 
 ---
 

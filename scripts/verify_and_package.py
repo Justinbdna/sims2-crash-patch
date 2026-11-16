@@ -30,6 +30,7 @@ MAC_UNIX_SCRIPTS = (
     Path("patch_sims2.command"),
     Path("clean_sims2_cache.command"),
     Path("restore_sims2.command"),
+    Path("trackpad_mod/build_trackpad.sh"),
     Path("legacy/patch_sims2.sh"),
 )
 
@@ -38,6 +39,9 @@ MAC_RELEASE_FILES = (
     Path("clean_sims2_cache.command"),
     Path("restore_sims2.command"),
     Path("README.txt"),
+    Path("trackpad_mod/libsims2_trackpad.dylib"),
+    Path("trackpad_mod/sims2_trackpad.m"),
+    Path("trackpad_mod/build_trackpad.sh"),
 )
 
 WINDOWS_RELEASE_DIR = Path("windows")
@@ -101,8 +105,8 @@ def verify_mac_scripts() -> list[str]:
         raw = full_path.read_bytes()
         if b"\r" in raw:
             errors.append(f"CRLF/CR detected in {rel} (macOS requires pure LF)")
-        if not raw.startswith(b"#!/bin/bash\n"):
-            errors.append(f"Missing #!/bin/bash LF shebang in {rel}")
+        if not (raw.startswith(b"#!/bin/bash\n") or raw.startswith(b"#!/usr/bin/env bash\n")):
+            errors.append(f"Missing #!/bin/bash or #!/usr/bin/env bash LF shebang in {rel}")
 
         if bash_bin:
             res = subprocess.run([bash_bin, "-n", str(full_path)], capture_output=True, text=True)
@@ -164,14 +168,17 @@ def _zip_write_bytes(
 def package_releases(version: str, out_dir: Path) -> tuple[Path, Path]:
     """Build clean separated macOS and Windows release ZIP archives."""
     out_dir.mkdir(parents=True, exist_ok=True)
-    clean_ver = f"v{version}" if version and version[0].isdigit() else version
+    safe_ver = re.sub(r'[\\/:*?"<>|\s]+', "-", version).strip("-") or "dev"
+    clean_ver = f"v{safe_ver}" if safe_ver[0].isdigit() else safe_ver
 
     mac_zip = out_dir / f"sims2-crash-patch-{clean_ver}.zip"
     with zipfile.ZipFile(mac_zip, "w", compression=zipfile.ZIP_DEFLATED) as zf:
         for rel in MAC_RELEASE_FILES:
             src = ROOT_DIR / rel
-            data = src.read_bytes().replace(b"\r\n", b"\n")
-            mode = 0o755 if rel.suffix in (".command", ".sh") else 0o644
+            data = src.read_bytes()
+            if rel.suffix not in (".dylib", ".so", ".dll", ".exe"):
+                data = data.replace(b"\r\n", b"\n")
+            mode = 0o755 if rel.suffix in (".command", ".sh", ".dylib") else 0o644
             _zip_write_bytes(zf, rel.as_posix(), data, mode)
 
     win_zip = out_dir / f"sims2-crash-patch-windows-{clean_ver}.zip"
@@ -194,7 +201,7 @@ def package_releases(version: str, out_dir: Path) -> tuple[Path, Path]:
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Verify repo & build release archives")
     parser.add_argument("--package", action="store_true", help="Build Mac & Windows release ZIPs in dist/")
-    parser.add_argument("--version", default="v1.3.1", help="Release version tag (default: v1.3.1)")
+    parser.add_argument("--version", default="v1.4.0", help="Release version tag (default: v1.4.0)")
     parser.add_argument("--out-dir", type=Path, default=ROOT_DIR / "dist")
     args = parser.parse_args(argv)
 

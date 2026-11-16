@@ -1,17 +1,24 @@
 #!/bin/bash
 # ==============================================================================
 # The Sims 2: Super Collection — ProMotion 120Hz Patch, Save Migration & Fixes
-# Version: 1.3.1 (Option A — Non-Sandbox Architecture)
+# Version: 1.4.0 (Option A — Non-Sandbox Architecture)
 # Target:  /Applications/The Sims 2.app/Contents/MacOS/Sims2XP_Exe
 # Zero Xcode / Python dependency: native /usr/bin/perl, codesign & osascript.
 # ==============================================================================
 
 set -u
 
+PATCH_VERSION="1.4.0"
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
 APP_PATH="/Applications/The Sims 2.app"
 EXE_PATH="$APP_PATH/Contents/MacOS/Sims2XP_Exe"
 BACKUP_PATH="$APP_PATH/Contents/MacOS/Sims2XP_Exe.backup"
 ALT_BACKUP_PATH="$APP_PATH/Contents/MacOS/Sims2XP_Exe.backup_original"
+GRULES_PATH="$APP_PATH/Contents/Resources/Config/Graphics Rules.sgr"
+GRULES_BACKUP_PATH="$APP_PATH/Contents/Resources/Config/Graphics Rules.sgr.backup"
+TRACKPAD_DYLIB_DEST="$APP_PATH/Contents/MacOS/libsims2_trackpad.dylib"
 MANAGED_MAXFILES_PLIST="/Library/LaunchDaemons/limit.maxfiles.plist"
 
 # ANSI Colors
@@ -30,6 +37,8 @@ MIGRATION_STATUS=""
 MIGRATION_FAILED=0
 MIGRATION_ERROR_KIND=""
 PATCH_STATUS=""
+GRULES_STATUS=""
+TRACKPAD_STATUS=""
 CACHE_STATUS=""
 USERPROPS_STATUS=""
 CC_MAXFILES_STATUS=""
@@ -41,7 +50,7 @@ LOG_FILE=""
 LOG_FINALIZED=0
 
 init_diagnostic_log() {
-    local label="${1:-patch_sims2.command v1.3.1}"
+    local label="${1:-patch_sims2.command v1.4.0}"
     [ -z "${REAL_HOME:-}" ] && return 0
     local log_dir="${SIMS2_LOG_DIR:-$REAL_HOME/Library/Logs/Sims2-Crash-Patch}"
     run_as_real_user mkdir -p "$log_dir" >/dev/null 2>&1 || return 0
@@ -75,6 +84,8 @@ finish_diagnostic_log() {
     LOG_FINALIZED=1
     log_diag "EXIT code=$code"
     [ -n "${PATCH_STATUS:-}" ] && log_diag "SUMMARY patch=$PATCH_STATUS"
+    [ -n "${GRULES_STATUS:-}" ] && log_diag "SUMMARY grules=$GRULES_STATUS"
+    [ -n "${TRACKPAD_STATUS:-}" ] && log_diag "SUMMARY trackpad=$TRACKPAD_STATUS"
     [ -n "${MIGRATION_STATUS:-}" ] && log_diag "SUMMARY migration=$MIGRATION_STATUS (failed=$MIGRATION_FAILED kind=${MIGRATION_ERROR_KIND:-none})"
     [ -n "${CACHE_STATUS:-}" ] && log_diag "SUMMARY caches=$CACHE_STATUS"
     [ -n "${USERPROPS_STATUS:-}" ] && log_diag "SUMMARY userProps=$USERPROPS_STATUS"
@@ -184,12 +195,18 @@ locate_app_bundle() {
         EXE_PATH="$APP_PATH/Contents/MacOS/Sims2XP_Exe"
         BACKUP_PATH="$APP_PATH/Contents/MacOS/Sims2XP_Exe.backup"
         ALT_BACKUP_PATH="$APP_PATH/Contents/MacOS/Sims2XP_Exe.backup_original"
+        GRULES_PATH="$APP_PATH/Contents/Resources/Config/Graphics Rules.sgr"
+        GRULES_BACKUP_PATH="$APP_PATH/Contents/Resources/Config/Graphics Rules.sgr.backup"
+        TRACKPAD_DYLIB_DEST="$APP_PATH/Contents/MacOS/libsims2_trackpad.dylib"
         return 1
     fi
 
     EXE_PATH="$APP_PATH/Contents/MacOS/Sims2XP_Exe"
     BACKUP_PATH="$APP_PATH/Contents/MacOS/Sims2XP_Exe.backup"
     ALT_BACKUP_PATH="$APP_PATH/Contents/MacOS/Sims2XP_Exe.backup_original"
+    GRULES_PATH="$APP_PATH/Contents/Resources/Config/Graphics Rules.sgr"
+    GRULES_BACKUP_PATH="$APP_PATH/Contents/Resources/Config/Graphics Rules.sgr.backup"
+    TRACKPAD_DYLIB_DEST="$APP_PATH/Contents/MacOS/libsims2_trackpad.dylib"
     return 0
 }
 
@@ -592,19 +609,30 @@ var did = $.CGMainDisplayID();
 var cur = $.CGDisplayCopyDisplayMode(did);
 var curW = Math.round($.CGDisplayModeGetWidth(cur));
 var curH = Math.round($.CGDisplayModeGetHeight(cur));
+// Real macOS hardware modes only (no synthetic catalog): whitelist + current desktop mode.
+var whitelist = {
+    "1280x800": 1, "1440x900": 1, "1470x956": 1, "1512x982": 1, "1680x1050": 1,
+    "1728x1117": 1, "1800x1169": 1, "2048x1280": 1, "2056x1329": 1, "2560x1600": 1,
+    "1728x1080": 1, "1920x1080": 1, "1920x1200": 1, "2560x1440": 1
+};
+var notchedMap = {};
+function isAllowedNonNotched(w, h) {
+    if (w < 800 || h < 600 || w <= h || w > 2560 || h > 1600) return false;
+    if (w === curW && h === curH) return true;
+    return whitelist[w + "x" + h] === 1;
+}
 var seen = {};
-if (curW > 0 && curH > 0) seen[curW + "x" + curH] = 1;
-var arr = ObjC.castRefToObject($.CGDisplayCopyAllDisplayModes(did, $()));
+if (isAllowedNonNotched(curW, curH)) seen[curW + "x" + curH] = 1;
+var optsDict = $.CFDictionaryCreateMutable($(), 1, $.kCFTypeDictionaryKeyCallBacks, $.kCFTypeDictionaryValueCallBacks);
+$.CFDictionarySetValue(optsDict, $.kCGDisplayShowDuplicateLowResolutionModes, $.kCFBooleanTrue);
+var arr = ObjC.castRefToObject($.CGDisplayCopyAllDisplayModes(did, optsDict) || $.CGDisplayCopyAllDisplayModes(did, $()));
 if (arr && arr.count) {
     for (var i = 0; i < arr.count; i++) {
         var m = arr.objectAtIndex(i);
         var w = Math.round($.CGDisplayModeGetWidth(m));
         var h = Math.round($.CGDisplayModeGetHeight(m));
-        if (w > 0 && h > 0) {
+        if (isAllowedNonNotched(w, h)) {
             seen[w + "x" + h] = 1;
-            if (w >= 1920 && (w % 2 === 0) && (h % 2 === 0)) {
-                seen[(w / 2) + "x" + (h / 2)] = 1;
-            }
         }
     }
 }
@@ -614,14 +642,36 @@ if (screens && screens.count) {
         var f = screens.objectAtIndex(j).frame;
         var sw = Math.round(f.size.width);
         var sh = Math.round(f.size.height);
-        if (sw > 0 && sh > 0) {
+        if (isAllowedNonNotched(sw, sh)) {
             seen[sw + "x" + sh] = 1;
-            if (curW === 0 || curH === 0) {
-                curW = sw;
-                curH = sh;
-            }
+        }
+        if ((curW === 0 || curH === 0) && sw > 0 && sh > 0) {
+            curW = sw;
+            curH = sh;
         }
     }
+}
+var curKey = curW + "x" + curH;
+if (notchedMap[curKey]) {
+    var mapped = notchedMap[curKey].split("x");
+    curW = parseInt(mapped[0], 10);
+    curH = parseInt(mapped[1], 10);
+}
+if (curW > 2560 || curH > 1600) {
+    var bestW = 1280, bestH = 800, bestArea = 0;
+    var keys = Object.keys(seen);
+    for (var k = 0; k < keys.length; k++) {
+        var parts = keys[k].split("x");
+        var kw = parseInt(parts[0], 10);
+        var kh = parseInt(parts[1], 10);
+        if (kw <= 2560 && kh <= 1600 && (kw * kh) > bestArea) {
+            bestArea = kw * kh;
+            bestW = kw;
+            bestH = kh;
+        }
+    }
+    curW = bestW;
+    curH = bestH;
 }
 if (curW > 0 && curH > 0) {
     "CUR=" + curW + "x" + curH + "\nMODES=" + Object.keys(seen).join(",");
@@ -725,7 +775,17 @@ if (defined $modes_csv && $modes_csv ne "") {
     }
 }
 
+# Native notched modes (1800x1169, 1512x982...) are kept as-is: the engine's
+# cDeviceEnumDX only accepts modes really exposed by macOS.
+my %notched_map = ();
+
 my $fallback_res = ($cur_res && $cur_res =~ /^\d+x\d+$/) ? $cur_res : "1280x800";
+if (exists $notched_map{$fallback_res} && $supported{$notched_map{$fallback_res}}) {
+    $fallback_res = $notched_map{$fallback_res};
+}
+if ($fallback_res =~ /^(\d+)x(\d+)$/ && ($1 > 2560 || $2 > 1600)) {
+    $fallback_res = "1280x800";
+}
 my $target_mode = "";
 my $need_fix = 0;
 
@@ -734,7 +794,9 @@ if ($old_mode =~ /^(\d+)x(\d+)x(\d+)x(\d+)$/) {
     my $res_key = "${w}x${h}";
     my $res_known_ok = 1;
 
-    if ($w < 800 || $h < 600) {
+    if ($w < 800 || $h < 600 || $w > 2560 || $h > 1600) {
+        $res_known_ok = 0;
+    } elsif (exists $notched_map{$res_key} && $supported{$notched_map{$res_key}}) {
         $res_known_ok = 0;
     } elsif (%supported && !$supported{$res_key} && $res_key ne "800x600") {
         $res_known_ok = 0;
@@ -931,20 +993,805 @@ count_cc_and_check_maxfiles() {
     fi
 }
 
-main() {
-    echo -e "${CYAN}${BOLD}"
-    echo "========================================================================"
-    echo "  The Sims 2: Super Collection — ProMotion 120Hz & Stability Patch v1.3.1"
-    echo "========================================================================"
-    echo -e "${NC}"
+# Step 3A — Optimize Graphics Rules.sgr (Catalog cap 2560x1600, dynamic native resolution, $High profile, 1024 MB VRAM)
+patch_graphics_rules_sgr() {
+    local grules_path="${1:-$GRULES_PATH}"
+    local backup_path="${2:-$GRULES_BACKUP_PATH}"
+    local target_w="${3:-1280}"
+    local target_h="${4:-800}"
 
-    if ! resolve_real_user; then
-        pause_exit 1
+    case "$target_w" in ''|*[!0-9]*) target_w="1280" ;; esac
+    case "$target_h" in ''|*[!0-9]*) target_h="800" ;; esac
+    if [ "$target_w" -gt 2560 ] || [ "$target_h" -gt 1600 ] || [ "$target_w" -lt 800 ] || [ "$target_h" -lt 600 ]; then
+        target_w="1280"
+        target_h="800"
     fi
 
+    if [ -L "$grules_path" ] || [ -L "$backup_path" ]; then
+        GRULES_STATUS="ERREUR (lien symbolique refusé)"
+        echo -e "${RED}[-] Erreur de sécurité : lien symbolique refusé sur Graphics Rules.sgr.${NC}"
+        return 1
+    fi
+
+    if [ ! -f "$grules_path" ]; then
+        GRULES_STATUS="Absent (Graphics Rules.sgr introuvable)"
+        echo -e "${CYAN}[i] Graphics Rules.sgr :${NC} Fichier introuvable ($grules_path) — étape ignorée."
+        return 0
+    fi
+
+    local perl_script runner_out runner_rc
+    { IFS= read -r -d '' perl_script || true; } <<'GRULES_PERL'
+use strict;
+use warnings;
+
+my ($grules_path, $backup_path, $target_w, $target_h) = @ARGV;
+$target_w = 1280 if !defined $target_w || $target_w !~ /^\d+$/ || $target_w < 800;
+$target_h = 800 if !defined $target_h || $target_h !~ /^\d+$/ || $target_h < 600;
+
+my $active_tmp;
+END {
+    unlink($active_tmp) if defined $active_tmp && -e $active_tmp;
+}
+
+sub read_raw {
+    my ($p) = @_;
+    open(my $fh, "<:raw", $p) or die "Cannot read $p: $!\n";
+    local $/;
+    my $buf = <$fh>;
+    close($fh);
+    return $buf;
+}
+
+sub write_atomic {
+    my ($p, $buf, $mode) = @_;
+    die "Refusing to write through symlink: $p\n" if -l $p;
+    my $tmp = "$p.tmp.$$";
+    unlink($tmp) if -e $tmp || -l $tmp;
+    $active_tmp = $tmp;
+    open(my $out, ">:raw", $tmp) or do {
+        $active_tmp = undef;
+        die "Cannot create $tmp: $!\n";
+    };
+    if (!print {$out} $buf) {
+        my $err = $!;
+        close($out);
+        unlink($tmp);
+        $active_tmp = undef;
+        die "Write failed: $err\n";
+    }
+    if (!close($out)) {
+        my $err = $!;
+        unlink($tmp);
+        $active_tmp = undef;
+        die "Close failed: $err\n";
+    }
+    if (!chmod($mode, $tmp)) {
+        my $err = $!;
+        unlink($tmp);
+        $active_tmp = undef;
+        die "chmod failed: $err\n";
+    }
+    if (!rename($tmp, $p)) {
+        my $err = $!;
+        unlink($tmp);
+        $active_tmp = undef;
+        die "rename failed: $err\n";
+    }
+    $active_tmp = undef;
+}
+
+die "Refusing symlink: $grules_path\n" if -l $grules_path;
+die "Refusing symlink: $backup_path\n" if -l $backup_path;
+
+my $raw = read_raw($grules_path);
+my $marker = "# Patched by sims2-crash-patch";
+my $is_already_patched = (index($raw, $marker) != -1);
+
+if (!-e $backup_path) {
+    if (!$is_already_patched) {
+        write_atomic($backup_path, $raw, 0644);
+    }
+} elsif (!$is_already_patched) {
+    my $bak_raw = read_raw($backup_path);
+    if (index($bak_raw, $marker) != -1) {
+        write_atomic($backup_path, $raw, 0644);
+    }
+}
+
+my $changed = 0;
+
+if (!$is_already_patched) {
+    $raw =~ s/\b(seti[ \t]+textureMemory[ \t]+)32\b/${1}1024/g;
+
+    my $override_hdr = "# Override defaults (SIM-281,416)";
+    my $banner = "# Patched by sims2-crash-patch (Apple Silicon & Retina Rules)\n";
+    my $found_override = ($raw =~ s{([ \t]*\Q$override_hdr\E\r?\n(?:(?!\r?\n[ \t]*(?:#{5,}|endif\b|end\b)).)*)}{
+        my $blk = $1;
+        $blk =~ s/\b(setOption[ \t]+(?:EffectsQuality|LightingQuality|Shadows|MaterialDetail)[ \t]+)\$Medium\b/${1}\$High/g;
+        my ($indent) = ($blk =~ /^([ \t]*)/);
+        $indent . $banner . $blk;
+    }se);
+
+    if (!$found_override) {
+        $raw = $banner . $raw;
+    }
+    $changed = 1;
+}
+
+# Phase 3 resolution ceiling inside option ScreenModeResolution: cap at 2560x1600
+# (excludes 3K/4K where unscaled UI is unreadable, upgrading Phase 1/2 5120x3200 too).
+my $orig_res_caps = $raw;
+$raw =~ s/\b(uintProp[ \t]+maxResWidth[ \t]+)(?:2048|5120)\b/${1}2560/g;
+$raw =~ s/\b(uintProp[ \t]+maxResHeight[ \t]+)(?:2048|3200)\b/${1}1600/g;
+$changed = 1 if $raw ne $orig_res_caps;
+
+# Option A defaults inside option ScreenModeResolution -> setting $High (idempotent)
+$raw =~ s{(option[ \t]+ScreenModeResolution\b(?:(?!\r?\n[ \t]*end\b).)*)}{
+    my $res_blk = $1;
+    $res_blk =~ s{(setting[ \t]+\$High\b(?:(?!\r?\n[ \t]*(?:setting\b|end\b)).)*)}{
+        my $high_blk = $1;
+        my $orig_high = $high_blk;
+        $high_blk =~ s/\b(uintProp[ \t]+defaultResWidth[ \t]+)\d+\b/${1}$target_w/g;
+        $high_blk =~ s/\b(uintProp[ \t]+defaultResHeight[ \t]+)\d+\b/${1}$target_h/g;
+        $changed = 1 if $high_blk ne $orig_high;
+        $high_blk;
+    }se;
+    $res_blk;
+}se;
+
+if (!$changed) {
+    print "OK:already_patched\n";
+    exit 0;
+}
+
+write_atomic($grules_path, $raw, 0644);
+print "PATCHED\n";
+GRULES_PERL
+
+    runner_out="$(printf '%s\n' "$perl_script" | run_privileged "$grules_path" /usr/bin/perl - "$grules_path" "$backup_path" "$target_w" "$target_h" 2>&1)"
+    runner_rc=$?
+
+    if [ "$runner_rc" -ne 0 ]; then
+        GRULES_STATUS="AVERTISSEMENT ($runner_out)"
+        echo -e "${YELLOW}[!] Graphics Rules.sgr : Erreur ($runner_out)${NC}"
+        return 1
+    fi
+
+    local nl=$'\n'
+    local runner_line="${runner_out##*"$nl"}"
+    case "$runner_line" in
+        OK:already_patched)
+            GRULES_STATUS="OK (déjà patché / already patched)"
+            echo -e "${GREEN}[i] Graphics Rules.sgr :${NC} Déjà patché (OK:already_patched)."
+            ;;
+        PATCHED)
+            GRULES_STATUS="OK (Catalogue <=2560x1600, défaut ${target_w}x${target_h}, \$High, VRAM 1024 Mo)"
+            echo -e "${GREEN}[+] Graphics Rules.sgr :${NC} Optimisé (max 2560x1600, défaut ${target_w}x${target_h}, profil \$High, VRAM 1024 Mo) [PATCHED]."
+            ;;
+        *)
+            GRULES_STATUS="Statut ($runner_out)"
+            echo -e "${YELLOW}[!] Graphics Rules.sgr :${NC} $runner_out"
+            ;;
+    esac
+    return 0
+}
+
+# Step 2B — Idempotent Option A Fullscreen Aspect Unlock & Zero-Black-Bars Stretch Patch
+patch_option_a_display_binary() {
+    local exe_path="$1"
+
+    if [ -L "$exe_path" ]; then
+        echo -e "${RED}[-] Erreur de sécurité : lien symbolique refusé sur $exe_path.${NC}"
+        return 1
+    fi
+    if [ ! -f "$exe_path" ]; then
+        echo -e "${RED}[-] Binaire introuvable pour patch affichage Option A : $exe_path.${NC}"
+        return 1
+    fi
+
+    local perl_script runner_out runner_rc
+    { IFS= read -r -d '' perl_script || true; } <<'OPT_PERL'
+use strict;
+use warnings;
+
+my ($exe_path) = @ARGV;
+
+my $active_tmp;
+END {
+    unlink($active_tmp) if defined $active_tmp && -e $active_tmp;
+}
+
+sub count_occurrences {
+    my ($haystack, $needle) = @_;
+    my $count = 0;
+    my $pos = -1;
+    while (($pos = index($haystack, $needle, $pos + 1)) != -1) {
+        $count++;
+    }
+    return $count;
+}
+
+sub read_raw {
+    my ($p) = @_;
+    open(my $fh, "<:raw", $p) or die "Cannot read $p: $!\n";
+    local $/;
+    my $buf = <$fh>;
+    close($fh);
+    return $buf;
+}
+
+sub write_atomic {
+    my ($p, $buf, $mode) = @_;
+    die "Refusing to write through symlink: $p\n" if -l $p;
+    my $tmp = "$p.tmp.$$";
+    unlink($tmp) if -e $tmp || -l $tmp;
+    $active_tmp = $tmp;
+    open(my $out, ">:raw", $tmp) or do {
+        $active_tmp = undef;
+        die "Cannot create $tmp: $!\n";
+    };
+    if (!print {$out} $buf) {
+        my $err = $!;
+        close($out);
+        unlink($tmp);
+        $active_tmp = undef;
+        die "Write failed: $err\n";
+    }
+    if (!close($out)) {
+        my $err = $!;
+        unlink($tmp);
+        $active_tmp = undef;
+        die "Close failed: $err\n";
+    }
+    if (!chmod($mode, $tmp)) {
+        my $err = $!;
+        unlink($tmp);
+        $active_tmp = undef;
+        die "chmod failed: $err\n";
+    }
+    if (!rename($tmp, $p)) {
+        my $err = $!;
+        unlink($tmp);
+        $active_tmp = undef;
+        die "rename failed: $err\n";
+    }
+    $active_tmp = undef;
+}
+
+# Lift ASL resolution filter (0x10005e610..0x10005e618) so all calibrated modes <= 2560x1600
+# remain selectable regardless of current logical desktop size.
+my $orig_asl = pack("H*", "39f17fd04139f87fcb");
+my $repl_asl = pack("H*", "39f190904139f89090");
+
+# Phase 3 fullscreen resolution validator (0x101303243..0x10130325e, 28 bytes):
+# upgrade both original (exact aspect equality) and Phase 2 (<= desktop.w/h) binaries
+# to allow mode.w <= 2560 && mode.h <= 1600 cleanly.
+my $orig_val_p0 = pack("H*", "0f57c9f3480f2ac9f3480f2ad0f30f5eca0f2ec10f8538ffffff7b40");
+my $orig_val_p2 = pack("H*", "0f57c9f3480f2ac9f3480f2ad0f30f5eca3b45c077063b4dc4764190");
+my $repl_val_p3 = pack("H*", "3d000a0000771581f940060000770deb4b9090909090909090909090");
+
+# Edge-to-edge fullscreen stretch under macOS notch Space (0x1000a7619 -> 0x1000a7632):
+# eliminate left/right/bottom black letterbox/pillarbox clearing & FBO offset (1800x1169 rendu -> Space 1800x1130 sous encoche).
+my $orig_stretch = pack("H*", "e86277fbff84c074108b43183b45f0");
+my $repl_stretch = pack("H*", "e86277fbff84c0eb108b43183b45f0");
+
+my $data = read_raw($exe_path);
+my $changed = 0;
+
+my @opt_patches = (
+    [ "Phase 3 ASL Mode Filter Unlock (0x5e610)",       [ $orig_asl ],                  $repl_asl ],
+    [ "Phase 3 Fullscreen Catalog Cap (0x1303243)",    [ $orig_val_p0, $orig_val_p2 ], $repl_val_p3 ],
+    [ "Option A Fullscreen Fill (0xa7619)",            [ $orig_stretch ],              $repl_stretch ],
+);
+
+for my $entry (@opt_patches) {
+    my ($label, $orig_list, $repl) = @$entry;
+    my $repl_cnt = count_occurrences($data, $repl);
+    my $orig_total = 0;
+    my $matched_variants = 0;
+    my $matched_orig;
+
+    for my $cand (@$orig_list) {
+        my $cnt = count_occurrences($data, $cand);
+        if ($cnt > 0) {
+            $orig_total += $cnt;
+            $matched_orig = $cand;
+            $matched_variants++;
+        }
+    }
+
+    if ($repl_cnt == 1 && $orig_total == 0) {
+        print "[i] $label : Déjà appliqué / Already applied.\n";
+    } elsif ($orig_total == 1 && $matched_variants == 1 && $repl_cnt == 0) {
+        my $offset = index($data, $matched_orig);
+        substr($data, $offset, length($matched_orig), $repl);
+        printf("[+] %s : Appliqué à l'offset 0x%x !\n", $label, $offset);
+        $changed = 1;
+    } else {
+        die "Fingerprint mismatch for $label (orig=$orig_total, repl=$repl_cnt)\n";
+    }
+}
+
+if ($changed) {
+    write_atomic($exe_path, $data, 0755);
+    print "PATCHED\n";
+} else {
+    print "OK:already_patched\n";
+}
+OPT_PERL
+
+    runner_out="$(printf '%s\n' "$perl_script" | run_privileged "$exe_path" /usr/bin/perl - "$exe_path" 2>&1)"
+    runner_rc=$?
+    if [ "$runner_rc" -ne 0 ]; then
+        echo -e "${RED}[-] Patch affichage Option A échoué :${NC} $runner_out"
+        return 1
+    fi
+    printf '%s\n' "$runner_out" | grep -v -E '^(PATCHED|OK:already_patched)$' || true
+    return 0
+}
+
+# Step 3B — Idempotent LC_LOAD_WEAK_DYLIB Mach-O 64-bit injector
+inject_weak_dylib_macho() {
+    local exe_path="$1"
+    local dylib_install_name="${2:-@executable_path/libsims2_trackpad.dylib}"
+
+    if [ -L "$exe_path" ]; then
+        echo -e "${RED}[-] Erreur de sécurité : lien symbolique refusé sur $exe_path.${NC}"
+        return 1
+    fi
+    if [ ! -f "$exe_path" ]; then
+        echo -e "${RED}[-] Binaire introuvable pour injection Mach-O : $exe_path.${NC}"
+        return 1
+    fi
+
+    local perl_script runner_out runner_rc
+    { IFS= read -r -d '' perl_script || true; } <<'MACHO_PERL'
+use strict;
+use warnings;
+
+my ($exe_path, $dylib_install_name) = @ARGV;
+
+my $active_tmp;
+END {
+    unlink($active_tmp) if defined $active_tmp && -e $active_tmp;
+}
+
+sub read_raw {
+    my ($p) = @_;
+    open(my $fh, "<:raw", $p) or die "Cannot read $p: $!\n";
+    local $/;
+    my $buf = <$fh>;
+    close($fh);
+    return $buf;
+}
+
+sub write_atomic {
+    my ($p, $buf, $mode) = @_;
+    die "Refusing to write through symlink: $p\n" if -l $p;
+    my $tmp = "$p.tmp.$$";
+    unlink($tmp) if -e $tmp || -l $tmp;
+    $active_tmp = $tmp;
+    open(my $out, ">:raw", $tmp) or do {
+        $active_tmp = undef;
+        die "Cannot create $tmp: $!\n";
+    };
+    if (!print {$out} $buf) {
+        my $err = $!;
+        close($out);
+        unlink($tmp);
+        $active_tmp = undef;
+        die "Write failed: $err\n";
+    }
+    if (!close($out)) {
+        my $err = $!;
+        unlink($tmp);
+        $active_tmp = undef;
+        die "Close failed: $err\n";
+    }
+    if (!chmod($mode, $tmp)) {
+        my $err = $!;
+        unlink($tmp);
+        $active_tmp = undef;
+        die "chmod failed: $err\n";
+    }
+    if (!rename($tmp, $p)) {
+        my $err = $!;
+        unlink($tmp);
+        $active_tmp = undef;
+        die "rename failed: $err\n";
+    }
+    $active_tmp = undef;
+}
+
+die "Refusing symlink: $exe_path\n" if -l $exe_path;
+my $data = read_raw($exe_path);
+die "File too small for Mach-O 64-bit header\n" if length($data) < 32;
+
+my ($magic, $cputype, $cpusubtype, $filetype, $ncmds, $sizeofcmds, $flags, $reserved) =
+    unpack("V8", substr($data, 0, 32));
+die sprintf("Invalid Mach-O 64-bit magic: 0x%08x\n", $magic) if $magic != 0xfeedfacf;
+die "Invalid sizeofcmds in Mach-O header\n" if 32 + $sizeofcmds > length($data);
+
+my $off = 32;
+my $end_cmds = 32 + $sizeofcmds;
+my $min_sect_off;
+
+for (my $i = 0; $i < $ncmds; $i++) {
+    die "Truncated load command at offset $off\n" if $off + 8 > $end_cmds;
+    my ($cmd, $cmdsize) = unpack("VV", substr($data, $off, 8));
+    die "Invalid load command size ($cmdsize) at offset $off\n"
+        if $cmdsize < 8 || $off + $cmdsize > $end_cmds;
+
+    if ($cmd == 0x0c || $cmd == 0x80000018) {
+        if ($cmdsize >= 24) {
+            my $str_off = unpack("V", substr($data, $off + 8, 4));
+            my $read_off = ($str_off >= 24 && $str_off < $cmdsize) ? $str_off : 24;
+            my $name = substr($data, $off + $read_off, $cmdsize - $read_off);
+            $name =~ s/\0.*$//s;
+            if ($name eq $dylib_install_name || index($name, "libsims2_trackpad.dylib") != -1) {
+                print "ALREADY_INJECTED\n";
+                exit 0;
+            }
+        }
+    } elsif ($cmd == 0x19) {
+        die "Truncated LC_SEGMENT_64 at offset $off\n" if $cmdsize < 72;
+        my $nsects = unpack("V", substr($data, $off + 64, 4));
+        die "Truncated section_64 list in LC_SEGMENT_64 at offset $off\n"
+            if 72 + $nsects * 80 > $cmdsize;
+        for (my $s = 0; $s < $nsects; $s++) {
+            my $sect_off = $off + 72 + ($s * 80);
+            my $sec_file_off = unpack("V", substr($data, $sect_off + 48, 4));
+            if ($sec_file_off > 0 && (!defined($min_sect_off) || $sec_file_off < $min_sect_off)) {
+                $min_sect_off = $sec_file_off;
+            }
+        }
+    }
+
+    $off += $cmdsize;
+}
+
+my $str = $dylib_install_name . "\0";
+my $raw_len = 24 + length($str);
+my $new_cmdsize = ($raw_len + 7) & ~7;
+my $pad = "\0" x ($new_cmdsize - $raw_len);
+my $new_cmd = pack("VVVVVV", 0x80000018, $new_cmdsize, 24, 2, 0x00010000, 0x00010000) . $str . $pad;
+
+my $target_off = 32 + $sizeofcmds;
+die "Insufficient Mach-O header padding for LC_LOAD_WEAK_DYLIB\n"
+    unless defined($min_sect_off) && ($target_off + $new_cmdsize <= $min_sect_off);
+
+my $target_space = substr($data, $target_off, $new_cmdsize);
+die "Non-zero bytes in Mach-O header padding\n"
+    unless $target_space eq ("\0" x $new_cmdsize);
+
+substr($data, $target_off, $new_cmdsize, $new_cmd);
+substr($data, 16, 4, pack("V", $ncmds + 1));
+substr($data, 20, 4, pack("V", $sizeofcmds + $new_cmdsize));
+
+write_atomic($exe_path, $data, 0755);
+print "INJECTED\n";
+MACHO_PERL
+
+    runner_out="$(printf '%s\n' "$perl_script" | run_privileged "$exe_path" /usr/bin/perl - "$exe_path" "$dylib_install_name" 2>&1)"
+    runner_rc=$?
+
+    if [ "$runner_rc" -ne 0 ]; then
+        echo -e "${YELLOW}[!] Injection LC_LOAD_WEAK_DYLIB échouée :${NC} $runner_out"
+        return 1
+    fi
+
+    local nl=$'\n'
+    local runner_line="${runner_out##*"$nl"}"
+    case "$runner_line" in
+        ALREADY_INJECTED)
+            echo -e "${GREEN}[i] Mach-O Weak Dylib :${NC} Déjà injecté (ALREADY_INJECTED)."
+            ;;
+        INJECTED)
+            echo -e "${GREEN}[+] Mach-O Weak Dylib :${NC} LC_LOAD_WEAK_DYLIB injecté (INJECTED)."
+            ;;
+        *)
+            echo -e "${YELLOW}[!] Mach-O Weak Dylib :${NC} $runner_out"
+            ;;
+    esac
+    return 0
+}
+
+toggle_debug_mode() {
+    local mode="${1:-toggle}"
+    local log_dir="${SIMS2_LOG_DIR:-$REAL_HOME/Library/Logs/Sims2-Crash-Patch}"
+    local flag_file="$log_dir/.debug_enabled"
+    local action="$mode"
+
+    if [ "$action" = "toggle" ]; then
+        if [ -f "$flag_file" ]; then
+            action="disable"
+        else
+            action="enable"
+        fi
+    fi
+
+    if [ "$action" = "disable" ]; then
+        run_as_real_user rm -f \
+            "$flag_file" \
+            "$log_dir/debug_boot.log" \
+            "$log_dir/debug_boot.previous.log" \
+            "$log_dir/launch_boot.log" \
+            "$log_dir/launch_boot.previous.log" \
+            "$log_dir/trackpad_events.log" \
+            "$log_dir/trackpad_events.previous.log" >/dev/null 2>&1 || true
+        echo -e "${GREEN}[+] Mode debug DÉSACTIVÉ / Debug mode DISABLED.${NC}"
+        echo "    Drapeau .debug_enabled et anciens journaux debug supprimés."
+        echo "    (crash_report.log est conservé s'il existe.)"
+    else
+        run_as_real_user mkdir -p "$log_dir" >/dev/null 2>&1 || true
+        run_as_real_user touch "$flag_file"
+        echo -e "${GREEN}[+] Mode debug ACTIVÉ / Debug mode ENABLED.${NC}"
+        echo "    Drapeau créé : $flag_file"
+        echo "    Lancez Les Sims 2 pour enregistrer debug_boot.log, puis générez le rapport GitHub."
+    fi
+}
+
+inspect_binary_patch_status() {
+    local exe_path="${1:-$EXE_PATH}"
+    local app_path="${2:-$APP_PATH}"
+    local grules_path="${3:-$GRULES_PATH}"
+
+    if [ ! -f "$exe_path" ]; then
+        echo "Jeu introuvable ($exe_path)"
+        return 0
+    fi
+
+    local bin_summary
+    bin_summary="$(/usr/bin/perl - "$exe_path" "$app_path" "$grules_path" <<'SUPPORT_PERL'
+use strict;
+use warnings;
+
+my ($exe_path, $app_path, $grules_path) = @ARGV;
+open(my $fh, "<:raw", $exe_path) or do {
+    print "Erreur lecture binaire: $!\n";
+    exit 0;
+};
+local $/;
+my $data = <$fh>;
+close($fh);
+
+my %checks = (
+    patch1 => [ pack("H*", "41bf3c000000909090904889df"), pack("H*", "f20f1045d0f2440f2cf84889df") ],
+    patch2 => [ pack("H*", "41bf3c00000090909090c70300000000"), pack("H*", "41bf3c000000440f45f8c70300000000") ],
+    asl    => [ pack("H*", "39f190904139f89090"), pack("H*", "39f17fd04139f87fcb") ],
+    val_p3 => [ pack("H*", "3d000a0000771581f940060000770deb4b9090909090909090909090"), pack("H*", "0f57c9f3480f2ac9f3480f2ad0f30f5eca0f2ec10f8538ffffff7b40") ],
+    stretch=> [ pack("H*", "e86277fbff84c0eb108b43183b45f0"), pack("H*", "e86277fbff84c074108b43183b45f0") ],
+);
+
+sub state_of {
+    my ($patched, $orig) = @_;
+    return "APPLIQUE" if index($data, $patched) != -1 && index($data, $orig) == -1;
+    return "NON_APPLIQUE" if index($data, $orig) != -1 && index($data, $patched) == -1;
+    return "AUTRE";
+}
+
+my $p1 = state_of(@{$checks{patch1}});
+my $p2 = state_of(@{$checks{patch2}});
+my $asl = state_of(@{$checks{asl}});
+my $vp3 = state_of(@{$checks{val_p3}});
+my $str = state_of(@{$checks{stretch}});
+my $dylib_inj = (index($data, "libsims2_trackpad.dylib") != -1) ? "INJECTE" : "ABSENT";
+my $dylib_file = (-f "$app_path/Contents/MacOS/libsims2_trackpad.dylib") ? "PRESENT" : "ABSENT";
+my $exe_bak = (-f "$exe_path.backup") ? "PRESENT" : "ABSENT";
+
+my $grules_state = "ABSENT";
+if (-f $grules_path && open(my $gfh, "<:raw", $grules_path)) {
+    local $/;
+    my $graw = <$gfh>;
+    close($gfh);
+    $grules_state = (index($graw, "# Patched by sims2-crash-patch") != -1) ? "PATCHE" : "ORIGINE";
+}
+
+print "Patch1_60Hz=$p1 | Patch2_60Hz=$p2 | ASL=$asl | CatalogP3=$vp3 | NotchFill=$str\n";
+print "WeakDylib_MachO=$dylib_inj | Dylib_File=$dylib_file | Backup_Exe=$exe_bak | GraphicsRules=$grules_state\n";
+SUPPORT_PERL
+)"
+    printf '%s\n' "$bin_summary"
+    if [ -x /usr/bin/codesign ] && [ -d "$app_path" ]; then
+        local cs_verify
+        cs_verify="$(/usr/bin/codesign --verify --deep --strict "$app_path" 2>&1)"
+        if [ $? -eq 0 ]; then
+            echo "Codesign_Strict=VALIDE"
+        else
+            echo "Codesign_Strict=ERREUR (${cs_verify:-inconnu})"
+        fi
+    fi
+}
+
+read_userprops_display_mode() {
+    local userprops_path="${1:-$REAL_HOME/Library/Application Support/Aspyr/The Sims 2/Config/userProps.xml}"
+    if [ ! -f "$userprops_path" ]; then
+        echo "Absent (fichier inexistant)"
+        return 0
+    fi
+    /usr/bin/perl - "$userprops_path" <<'SUPPORT_PERL'
+use strict;
+use warnings;
+my ($p) = @ARGV;
+open(my $fh, "<:raw", $p) or do {
+    print "Illisible ($!)\n";
+    exit 0;
+};
+local $/;
+my $raw = <$fh>;
+close($fh);
+if ($raw =~ m{<AnyString\b[^>]*\bkey="activeDeviceDisplayMode"[^>]*>([^<]*)</AnyString>}) {
+    my $v = $1;
+    $v =~ s/^\s+|\s+$//g;
+    print($v ne "" ? "$v\n" : "(vide)\n");
+} else {
+    print "Cle activeDeviceDisplayMode absente\n";
+}
+SUPPORT_PERL
+}
+
+anonymize_support_report() {
+    local real_home="${1:-$REAL_HOME}"
+    SIMS2_ANON_HOME="$real_home" /usr/bin/perl -pe '
+        my $h = $ENV{"SIMS2_ANON_HOME"} // "";
+        if (length($h)) { s/\Q$h\E/~/g; }
+        s#/Users/[^/\s"\x27`<>:)]+#~#g;
+    '
+}
+
+generate_github_support_report() {
+    local log_dir="${SIMS2_LOG_DIR:-$REAL_HOME/Library/Logs/Sims2-Crash-Patch}"
+    local report_file="$log_dir/github_support_report.md"
+    local userprops_file="${SIMS2_USERPROPS_OVERRIDE:-$REAL_HOME/Library/Application Support/Aspyr/The Sims 2/Config/userProps.xml}"
+    local debug_flag="$log_dir/.debug_enabled"
+    local crash_log="$log_dir/crash_report.log"
+    local debug_log="$log_dir/debug_boot.log"
+
+    run_as_real_user mkdir -p "$log_dir" >/dev/null 2>&1 || true
+
+    local hw_model cpu_brand arch_name os_prod os_ver os_build
+    hw_model="$(sysctl -n hw.model 2>/dev/null || echo 'unknown')"
+    cpu_brand="$(sysctl -n machdep.cpu.brand_string 2>/dev/null || echo 'unknown')"
+    arch_name="$(uname -m 2>/dev/null || echo 'unknown')"
+    os_prod="$(sw_vers -productName 2>/dev/null || echo 'macOS')"
+    os_ver="$(sw_vers -productVersion 2>/dev/null || echo 'unknown')"
+    os_build="$(sw_vers -buildVersion 2>/dev/null || echo 'unknown')"
+
+    local displays_info="indisponible"
+    if [ "${SIMS2_SKIP_SYSTEM_PROFILER:-0}" != "1" ] && command -v system_profiler >/dev/null 2>&1; then
+        displays_info="$(system_profiler SPDisplaysDataType 2>/dev/null | sed -n '1,80p')"
+        [ -z "$displays_info" ] && displays_info="(aucune sortie system_profiler)"
+    fi
+
+    query_display_modes
+    local app_status="Non installé / Introuvable"
+    if locate_app_bundle >/dev/null 2>&1; then
+        app_status="$(inspect_binary_patch_status "$EXE_PATH" "$APP_PATH" "$GRULES_PATH")"
+    fi
+
+    local userprops_mode
+    userprops_mode="$(read_userprops_display_mode "$userprops_file")"
+    local debug_state="DÉSACTIVÉ"
+    [ -f "$debug_flag" ] && debug_state="ACTIVÉ (.debug_enabled présent)"
+
+    local raw_report
+    raw_report="$(
+        cat <<EOF
+### Rapport de Diagnostic — Sims 2 Crash Patch v${PATCH_VERSION}
+
+- **Version du patch :** \`v${PATCH_VERSION}\`
+- **Modèle Mac (\`hw.model\`) :** \`${hw_model}\`
+- **Puce / Architecture :** \`${cpu_brand}\` (\`${arch_name}\`)
+- **macOS :** \`${os_prod} ${os_ver} (${os_build})\`
+- **Résolution logique active détectée :** \`${DISPLAY_CUR:-inconnue}\` (modes viables : \`${DISPLAY_MODES:-inconnus}\`)
+- **Mode Debug :** \`${debug_state}\`
+- **\`userProps.xml\` (\`activeDeviceDisplayMode\`) :** \`${userprops_mode}\`
+
+#### État des patchs binaires & signature
+\`\`\`text
+${app_status}
+\`\`\`
+
+#### Écrans / Résolutions / ProMotion (\`system_profiler SPDisplaysDataType\`)
+\`\`\`text
+${displays_info}
+\`\`\`
+EOF
+        if [ -f "$crash_log" ]; then
+            echo ""
+            echo '#### Dernier rapport de crash (`crash_report.log`)'
+            echo '```text'
+            tail -n 150 "$crash_log" 2>/dev/null || true
+            echo '```'
+        fi
+        if [ -f "$debug_log" ]; then
+            echo ""
+            echo '#### Journal Debug (`debug_boot.log`)'
+            echo '```text'
+            tail -n 150 "$debug_log" 2>/dev/null || true
+            echo '```'
+        fi
+    )"
+
+    local tmp_report="${report_file}.tmp.$$"
+    printf '%s\n' "$raw_report" | anonymize_support_report "$REAL_HOME" > "$tmp_report"
+    chmod 644 "$tmp_report" >/dev/null 2>&1 || true
+    mv -f "$tmp_report" "$report_file"
+
+    local clip_note="Presse-papier non copié"
+    if [ "${SIMS2_SKIP_PBCOPY:-0}" != "1" ] && command -v pbcopy >/dev/null 2>&1; then
+        if run_as_real_user pbcopy < "$report_file" >/dev/null 2>&1; then
+            clip_note="Copié automatiquement dans le presse-papier (Cmd+V prêt)"
+        fi
+    fi
+
+    echo ""
+    echo -e "${GREEN}[+] Rapport de support GitHub généré :${NC} $report_file"
+    echo -e "${CYAN}[i] ${clip_note}.${NC}"
+    echo "    Les chemins personnels (/Users/<utilisateur>) ont été anonymisés en ~."
+    echo "    Collez le contenu de ce fichier dans votre ticket GitHub."
+}
+
+run_support_menu() {
+    local log_dir="${SIMS2_LOG_DIR:-$REAL_HOME/Library/Logs/Sims2-Crash-Patch}"
+    local flag_file="$log_dir/.debug_enabled"
+
+    case "${SIMS2_SUPPORT_ACTION:-}" in
+        toggle_debug)
+            toggle_debug_mode toggle
+            return 0
+            ;;
+        enable_debug)
+            toggle_debug_mode enable
+            return 0
+            ;;
+        disable_debug)
+            toggle_debug_mode disable
+            return 0
+            ;;
+        report)
+            generate_github_support_report
+            return 0
+            ;;
+    esac
+
+    while true; do
+        local dbg_label="DÉSACTIVÉ"
+        [ -f "$flag_file" ] && dbg_label="ACTIVÉ"
+        echo ""
+        echo -e "${CYAN}${BOLD}--- Diagnostic & Support GitHub (v${PATCH_VERSION}) ---${NC}"
+        echo -e "  Mode debug actuel : ${BOLD}${dbg_label}${NC}"
+        echo "  [1] Activer / Désactiver le mode debug (debug_boot.log)"
+        echo "  [2] Générer le rapport de support GitHub (github_support_report.md + presse-papier)"
+        echo "  [3] Retour / Quitter"
+        echo ""
+        local sub=""
+        if ! read -r -p "Votre choix [1/2/3] : " sub; then
+            echo ""
+            return 0
+        fi
+        case "$sub" in
+            1)
+                toggle_debug_mode toggle
+                ;;
+            2)
+                generate_github_support_report
+                pause_exit 0
+                ;;
+            3|q|Q)
+                return 0
+                ;;
+            *)
+                echo -e "${YELLOW}[!] Choix invalide ($sub). Tapez 1, 2 ou 3.${NC}"
+                ;;
+        esac
+    done
+}
+
+run_install_patch() {
     # 1. Verify application presence (supports /Applications or ~/Applications)
     if ! locate_app_bundle; then
-        init_diagnostic_log "patch_sims2.command v1.3.1"
+        init_diagnostic_log "patch_sims2.command v1.4.0"
         log_diag "ERROR game not found (/Applications or ~/Applications)"
         echo -e "${RED}[-] Erreur / Error:${NC} Jeu introuvable / Game not found at:"
         echo "    /Applications/The Sims 2.app/Contents/MacOS/Sims2XP_Exe"
@@ -953,7 +1800,7 @@ main() {
         pause_exit 1
     fi
 
-    init_diagnostic_log "patch_sims2.command v1.3.1"
+    init_diagnostic_log "patch_sims2.command v1.4.0"
     local ASPYR_BASE_DIR="$REAL_HOME/Library/Application Support/Aspyr"
     local TARGET_DATA_DIR="$ASPYR_BASE_DIR/The Sims 2"
     log_diag "START active_dir=$TARGET_DATA_DIR sudo_required=$APP_REQUIRES_SUDO"
@@ -962,7 +1809,7 @@ main() {
     echo ""
 
     # 2. Verify the game is not currently running
-    if pgrep -x "Sims2XP_Exe" >/dev/null 2>&1 || pgrep -x "AppBundleExe" >/dev/null 2>&1; then
+    if [ "${SIMS2_SKIP_RUNNING_CHECK:-0}" != "1" ] && (pgrep -x "Sims2XP_Exe" >/dev/null 2>&1 || pgrep -x "AppBundleExe" >/dev/null 2>&1); then
         echo -e "${YELLOW}[!] Attention / Warning:${NC} Les Sims 2 est actuellement ouvert !"
         echo "    Fermez complètement le jeu (Cmd+Q / vérifiez le Dock) puis relancez ce script."
         echo "    Please quit The Sims 2 completely before running this patch."
@@ -1076,7 +1923,8 @@ sub is_pristine {
         count_occurrences($buf, $orig1) == 1 &&
         count_occurrences($buf, $orig2) == 1 &&
         count_occurrences($buf, $repl1) == 0 &&
-        count_occurrences($buf, $repl2) == 0
+        count_occurrences($buf, $repl2) == 0 &&
+        index($buf, "libsims2_trackpad.dylib") == -1
     );
 }
 
@@ -1147,14 +1995,86 @@ PERLEOF
         echo -e "${RED}[-] Le patch binaire a échoué / Binary patch failed.${NC}"
         pause_exit 1
     fi
+    if ! patch_option_a_display_binary "$EXE_PATH"; then
+        PATCH_STATUS="FAILED (Option A display patch error)"
+        log_diag "OPTION_A_DISPLAY_PATCH FAILED"
+        echo -e "${RED}[-] Le patch affichage Option A a échoué / Option A display patch failed.${NC}"
+        pause_exit 1
+    fi
     if ! run_privileged "$EXE_PATH" chmod 755 "$EXE_PATH"; then
         PATCH_STATUS="FAILED (chmod 755 error)"
         log_diag "BINARY_PATCH CHMOD FAILED"
         echo -e "${RED}[-] Impossible d'appliquer les permissions 0755 sur $EXE_PATH.${NC}"
         pause_exit 1
     fi
-    PATCH_STATUS="OK (60 Hz verrouillé / locked)"
+    PATCH_STATUS="OK (60 Hz verrouillé + plein écran natif sous encoche)"
     log_diag "BINARY_PATCH OK"
+
+    # 4B. Graphics Rules.sgr optimization & native Trackpad weak dylib injection
+    echo ""
+    echo -e "${BOLD}[+] Optimisation Graphics Rules.sgr & Module Trackpad natif...${NC}"
+    query_display_modes
+    local grules_w="1280"
+    local grules_h="800"
+    if [ -n "$DISPLAY_CUR" ]; then
+        local dw="${DISPLAY_CUR%%x*}"
+        local dh="${DISPLAY_CUR#*x}"
+        case "$dw:$dh" in
+            *[!0-9:]*|:*) ;;
+            *)
+                if [ "$dw" -ge 800 ] && [ "$dh" -ge 600 ] && [ "$dw" -le 2560 ] && [ "$dh" -le 1600 ]; then
+                    grules_w="$dw"
+                    grules_h="$dh"
+                fi
+                ;;
+        esac
+    fi
+    if patch_graphics_rules_sgr "$GRULES_PATH" "$GRULES_BACKUP_PATH" "$grules_w" "$grules_h"; then
+        log_diag "GRULES_PATCH OK"
+    else
+        log_diag "GRULES_PATCH WARNING"
+    fi
+
+    local trackpad_src=""
+    if [ -f "$SCRIPT_DIR/trackpad_mod/libsims2_trackpad.dylib" ]; then
+        trackpad_src="$SCRIPT_DIR/trackpad_mod/libsims2_trackpad.dylib"
+    elif [ -f "$SCRIPT_DIR/libsims2_trackpad.dylib" ]; then
+        trackpad_src="$SCRIPT_DIR/libsims2_trackpad.dylib"
+    fi
+
+    if [ -n "$trackpad_src" ]; then
+        if [ -L "$trackpad_src" ] || [ -L "$TRACKPAD_DYLIB_DEST" ]; then
+            TRACKPAD_STATUS="AVERTISSEMENT (lien symbolique refusé)"
+            log_diag "TRACKPAD_DYLIB SYMLINK_REFUSED"
+            echo -e "${YELLOW}[!] Sécurité : lien symbolique refusé pour libsims2_trackpad.dylib.${NC}"
+        else
+            local tmp_dylib="${TRACKPAD_DYLIB_DEST}.tmp.$$"
+            run_privileged "$TRACKPAD_DYLIB_DEST" rm -f "$tmp_dylib" 2>/dev/null || true
+            if run_privileged "$TRACKPAD_DYLIB_DEST" cp -f "$trackpad_src" "$tmp_dylib" && \
+               run_privileged "$TRACKPAD_DYLIB_DEST" chmod 755 "$tmp_dylib" && \
+               run_privileged "$TRACKPAD_DYLIB_DEST" mv -f "$tmp_dylib" "$TRACKPAD_DYLIB_DEST" && \
+               run_privileged "$TRACKPAD_DYLIB_DEST" chmod 755 "$TRACKPAD_DYLIB_DEST"; then
+                run_privileged "$TRACKPAD_DYLIB_DEST" /usr/bin/xattr -d com.apple.quarantine "$TRACKPAD_DYLIB_DEST" >/dev/null 2>&1 || true
+                echo -e "${GREEN}[+] Module Trackpad installé :${NC} $TRACKPAD_DYLIB_DEST"
+                if inject_weak_dylib_macho "$EXE_PATH" "@executable_path/libsims2_trackpad.dylib"; then
+                    TRACKPAD_STATUS="OK (libsims2_trackpad.dylib installé & injecté)"
+                    log_diag "TRACKPAD_DYLIB OK"
+                else
+                    TRACKPAD_STATUS="AVERTISSEMENT (injection LC_LOAD_WEAK_DYLIB échouée)"
+                    log_diag "TRACKPAD_DYLIB INJECT_FAILED"
+                fi
+            else
+                run_privileged "$TRACKPAD_DYLIB_DEST" rm -f "$tmp_dylib" 2>/dev/null || true
+                TRACKPAD_STATUS="AVERTISSEMENT (copie dylib échouée)"
+                log_diag "TRACKPAD_DYLIB COPY_FAILED"
+                echo -e "${YELLOW}[!] Impossible d'installer libsims2_trackpad.dylib dans $TRACKPAD_DYLIB_DEST.${NC}"
+            fi
+        fi
+    else
+        TRACKPAD_STATUS="Ignoré (libsims2_trackpad.dylib absent)"
+        log_diag "TRACKPAD_DYLIB SKIPPED missing_source"
+        echo -e "${CYAN}[i] Module Trackpad :${NC} libsims2_trackpad.dylib absent du dossier — étape ignorée."
+    fi
 
     # 5. Ad-hoc Local Code Signing + Strict Verification
     echo ""
@@ -1312,6 +2232,8 @@ FINDBAK
         echo "========================================================================"
         echo -e "${NC}"
         echo -e "  • ${BOLD}Patch Binaire 120 Hz :${NC} $PATCH_STATUS"
+        echo -e "  • ${BOLD}Graphics Rules.sgr   :${NC} $GRULES_STATUS"
+        echo -e "  • ${BOLD}Module Trackpad      :${NC} $TRACKPAD_STATUS"
         echo -e "  • ${BOLD}Sauvegardes / Saves  :${NC} $MIGRATION_STATUS"
         echo -e "  • ${BOLD}Dossier Données/Mods :${NC} ~/Library/Application Support/Aspyr/The Sims 2/"
         echo -e "  • ${BOLD}Purge des Caches     :${NC} $CACHE_STATUS"
@@ -1348,10 +2270,12 @@ FINDBAK
 
     echo -e "${GREEN}${BOLD}"
     echo "========================================================================"
-    echo "  INSTALLATION TERMINÉE AVEC SUCCÈS / PATCH COMPLETE (v1.3.1) !         "
+    echo "  INSTALLATION TERMINÉE AVEC SUCCÈS / PATCH COMPLETE (v1.4.0) !         "
     echo "========================================================================"
     echo -e "${NC}"
     echo -e "  • ${BOLD}Patch Binaire 120 Hz :${NC} $PATCH_STATUS"
+    echo -e "  • ${BOLD}Graphics Rules.sgr   :${NC} $GRULES_STATUS"
+    echo -e "  • ${BOLD}Module Trackpad      :${NC} $TRACKPAD_STATUS"
     echo -e "  • ${BOLD}Sauvegardes / Saves  :${NC} $MIGRATION_STATUS"
     echo -e "  • ${BOLD}Dossier Données/Mods :${NC} ~/Library/Application Support/Aspyr/The Sims 2/"
     echo -e "  • ${BOLD}Purge des Caches     :${NC} $CACHE_STATUS"
@@ -1372,6 +2296,80 @@ FINDBAK
     echo "========================================================================"
 
     pause_exit 0
+}
+
+main() {
+    echo -e "${CYAN}${BOLD}"
+    echo "========================================================================"
+    echo "  The Sims 2: Super Collection — ProMotion 120Hz & Stability Patch v1.4.0"
+    echo "========================================================================"
+    echo -e "${NC}"
+
+    if ! resolve_real_user; then
+        pause_exit 1
+    fi
+
+    if [ "${1:-}" = "--auto" ] || [ "${1:-}" = "--install" ]; then
+        run_install_patch
+        return $?
+    fi
+    if [ "${1:-}" = "--support" ] || [ "${1:-}" = "--diag" ]; then
+        run_support_menu
+        return $?
+    fi
+
+    if [ -n "${SIMS2_MENU_CHOICE:-}" ]; then
+        case "$SIMS2_MENU_CHOICE" in
+            1)
+                run_install_patch
+                return $?
+                ;;
+            2)
+                run_support_menu
+                return $?
+                ;;
+            3)
+                echo "Fermeture / Exiting."
+                return 0
+                ;;
+        esac
+    fi
+
+    if [ "${SIMS2_NONINTERACTIVE:-0}" = "1" ]; then
+        run_install_patch
+        return $?
+    fi
+
+    while true; do
+        echo ""
+        echo -e "${BOLD}Que souhaitez-vous faire ? / What would you like to do?${NC}"
+        echo "  [1] Installer / Mettre à jour le patch 60 Hz & Trackpad (Entrée par défaut)"
+        echo "  [2] Diagnostic & Support GitHub (Mode Debug / Générer un rapport GitHub)"
+        echo "  [3] Quitter / Quit"
+        echo ""
+        local choice=""
+        if ! read -r -p "Votre choix [1/2/3] (Entrée = 1) : " choice; then
+            echo ""
+            return 0
+        fi
+        [ -z "$choice" ] && choice="1"
+        case "$choice" in
+            1)
+                run_install_patch
+                return $?
+                ;;
+            2)
+                run_support_menu
+                ;;
+            3|q|Q)
+                echo "Fermeture / Exiting."
+                return 0
+                ;;
+            *)
+                echo -e "${YELLOW}[!] Choix invalide ($choice). Tapez 1, 2 ou 3.${NC}"
+                ;;
+        esac
+    done
 }
 
 if [ "${SIMS2_LIB_ONLY:-0}" != "1" ]; then
