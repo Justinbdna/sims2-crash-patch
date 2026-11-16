@@ -8,9 +8,10 @@
 1. INSTALLATION EN 3 CLICS
    1) Décompressez tout le fichier .zip (Téléchargements ou Bureau) et fermez
       Les Sims 2 (Cmd + Q).
-   2) Débloquez Gatekeeper : Clic droit -> Ouvrir sur « patch_sims2.command ».
-      (Sur macOS 15+, si bloqué : cliquez « Terminé », ouvrez Réglages Système
-      -> Confidentialité et sécurité -> « Ouvrir quand même » -> « Ouvrir ».)
+   2) Débloquez Gatekeeper : double-cliquez sur « patch_sims2.command » -> si
+      macOS affiche « bloqué pour protéger votre Mac », cliquez sur « Terminé »,
+      ouvrez Réglages Système -> Confidentialité et sécurité, descendez tout
+      en bas et cliquez sur « Ouvrir quand même ».
    3) Appuyez sur Entrée ([1]) dans le Terminal :
       - Tapez votre mot de passe Mac à l'aveugle (rien ne s'affiche à l'écran,
         aucun '*', c'est normal !) puis Entrée.
@@ -56,9 +57,9 @@
 
 1. 3-CLICK SETUP
    1) Unzip the full archive (Downloads or Desktop) and quit The Sims 2 (Cmd+Q).
-   2) Bypass Gatekeeper: Right-click -> Open on "patch_sims2.command".
-      (On macOS 15+, if still blocked: click Done -> System Settings ->
-      Privacy & Security -> "Open Anyway" -> "Open".)
+   2) Bypass Gatekeeper: double-click "patch_sims2.command" -> if macOS
+      shows "blocked to protect your Mac", click "Done", open System Settings
+      -> Privacy & Security, scroll down and click "Open Anyway".
    3) Press Enter ([1]) in Terminal:
       - Type your Mac login password blindly at "Password:" (zero characters
         or '*' appear on screen — normal macOS security) then press Enter.
