@@ -567,7 +567,7 @@ class TestMacScriptsIntegrity(unittest.TestCase):
         clt_tools_rx = re.compile(r"(?<![#\w/.-])(python3|swift|git|clang|xcodebuild|objdump|cc)\b")
         for script_name in ("patch_sims2.command", "clean_sims2_cache.command", "restore_sims2.command"):
             text = (ROOT_DIR / script_name).read_text(encoding="utf-8")
-            self.assertIn("Version: 1.4.0", text)
+            self.assertIn("Version: 1.4.1", text)
             non_comment = "\n".join(ln for ln in text.splitlines() if not ln.lstrip().startswith("#"))
             # Remove heredoc text/URLs isn't needed if no CLT tool word appears in code lines
             for line in non_comment.splitlines():
@@ -582,10 +582,11 @@ class TestMacScriptsIntegrity(unittest.TestCase):
         readme_md = (ROOT_DIR / "README.md").read_text(encoding="utf-8")
         changelog = (ROOT_DIR / "CHANGELOG.md").read_text(encoding="utf-8")
         for doc_text in (readme_txt, readme_md):
-            self.assertIn("v1.4.0", doc_text)
+            self.assertIn("v1.4.1", doc_text)
             self.assertIn("Gatekeeper", doc_text)
             self.assertIn("userProps.xml.backup", doc_text)
             self.assertIn("Autoriser", doc_text)
+        self.assertIn("[1.4.1]", changelog)
         self.assertIn("[1.4.0]", changelog)
         self.assertIn("[1.3.1]", changelog)
         self.assertIn("[1.3.0]", changelog)
@@ -838,7 +839,7 @@ class TestMacScriptsIntegrity(unittest.TestCase):
             dylib_src = ROOT_DIR / "trackpad_mod" / "libsims2_trackpad.dylib"
             self.assertTrue(dylib_src.is_file(), "Missing trackpad_mod/libsims2_trackpad.dylib")
             expected_dylib = dylib_src.read_bytes()
-            mac_zip, _ = vp.package_releases("v1.4.0-test", tmp_dir)
+            mac_zip, _ = vp.package_releases("v1.4.1-test", tmp_dir)
             with zipfile.ZipFile(mac_zip, "r") as zf:
                 info = zf.getinfo("trackpad_mod/libsims2_trackpad.dylib")
                 mode = (info.external_attr >> 16) & 0o777
@@ -892,7 +893,6 @@ class TestMacScriptsIntegrity(unittest.TestCase):
         self.assertIn("!gCtrlMiddleDragActive", src_m)
         self.assertIn("isRight == gCtrlDragWasRight", src_m)
         self.assertNotIn("gOptionHandPanActive", src_m)
-        self.assertIn("trackpad_events.log", src_m)
         self.assertIn("swizzled_setFullscreenSpace", src_m)
         self.assertIn("swizzled_miniaturize", src_m)
         self.assertIn("swizzled_activateIgnoringOtherApps", src_m)
@@ -907,33 +907,56 @@ class TestMacScriptsIntegrity(unittest.TestCase):
         self.assertIn("gForcedNonInvertedEvent", src_m)
         self.assertIn("resolve_window_listener", src_m)
 
-        # Real hardware CoreGraphics __DATA,__la_symbol_ptr hooks + permanent launch_boot.log + visibleFrame clamp (no synthetic modes)
+        # Real hardware CoreGraphics __DATA,__la_symbol_ptr hooks + dynamic visibleFrame clamp (no synthetic modes or experimental hooks)
         self.assertNotIn("Sims2SyntheticDisplayMode", src_m)
         self.assertIn("hook_coregraphics_la_symbol_ptrs", src_m)
         self.assertIn("S_LAZY_SYMBOL_POINTERS", src_m)
         self.assertIn("--------RRRRRRRRGGGGGGGGBBBBBBBB", src_m)
-        self.assertIn("launch_boot.log", src_m)
-        self.assertIn("bootlog_userprops", src_m)
-        self.assertIn("refresh_userprops_target_resolution", src_m)
-        self.assertIn("set_target_render_resolution", src_m)
         self.assertIn("clamp_fullscreen_window_to_visible_frame", src_m)
-        self.assertIn("hook_CGDisplayFade", src_m)
-        self.assertIn("hook_CGDisplaySetDisplayMode", src_m)
-        for hooked_sym in (
-            "_CGDisplayCopyAllDisplayModes",
+        self.assertIn("update_cached_screen_geometry", src_m)
+        self.assertIn("SIMS2_PATCH_VERSION \"1.4.1\"", src_m)
+        self.assertIn("_CGDisplayCopyAllDisplayModes", src_m)
+        self.assertIn("___cxa_throw", src_m)
+
+        # Experimental hot-resolution hooks, userProps watcher & mouse remapping must be completely removed
+        for removed_sym in (
             "_CGAcquireDisplayFadeReservation",
             "_CGDisplayFade",
             "_CGReleaseDisplayFadeReservation",
             "_CGConfigureDisplayFadeEffect",
             "_CGDisplaySetDisplayMode",
-            "___cxa_throw",
             "_glViewport",
             "_glScissor",
             "_CGLSetParameter",
             "_CGLEnable",
             "_CGLDisable",
+            "refresh_userprops_target_resolution",
+            "gTargetRenderWidth",
+            "gTargetRenderHeight",
+            "launch_boot.log",
+            "trackpad_events.log",
+            "fallback-1800x1169",
+            "1800x1130",
         ):
-            self.assertIn(hooked_sym, src_m)
+            self.assertNotIn(removed_sym, src_m)
+
+        # Silent default logging + automatic crash_report.log + on-demand debug_boot.log
+        for crash_tok in (
+            "crash_report.log",
+            "debug_boot.log",
+            ".debug_enabled",
+            "SIMS2_DEBUG",
+            "SIGSEGV",
+            "SIGABRT",
+            "SIGBUS",
+            "SIGILL",
+            "SIGFPE",
+            "_ZSt13set_terminatePFvvE",
+            "backtrace_symbols_fd",
+            "hw.model",
+        ):
+            self.assertIn(crash_tok, src_m)
+
         for cat_pair in (
             "{ 1280,  800 }",
             "{ 1440,  900 }",
@@ -949,24 +972,6 @@ class TestMacScriptsIntegrity(unittest.TestCase):
         ):
             self.assertIn(cat_pair, src_m)
 
-        # Metal SIGABRT guard: target init/validation, drawable check, no CGLEnable inside hook_CGLSetParameter
-        self.assertIn("w >= 800 && h >= 600 && w <= 4096 && h <= 4096", src_m)
-        self.assertIn("ensure_target_render_resolution_initialized", src_m)
-        self.assertIn("fallback-1800x1169", src_m)
-        self.assertIn("cgl_context_has_attached_drawable", src_m)
-        self.assertIn("CGLGetSurface", src_m)
-        self.assertIn("NSOpenGLContext", src_m)
-        self.assertIn("tInCGLHook", src_m)
-        cgl_set_match = re.search(
-            r"static int hook_CGLSetParameter\(.*?\n\}\n",
-            src_m,
-            flags=re.DOTALL,
-        )
-        self.assertIsNotNone(cgl_set_match)
-        cgl_set_body = cgl_set_match.group(0)
-        self.assertNotIn("gRealCGLEnable", cgl_set_body)
-        self.assertNotIn("CGLEnable(", cgl_set_body)
-
         # Compiled dylib header check (Mach-O 64-bit x86_64 MH_DYLIB)
         raw = dylib.read_bytes()
         magic, cputype, _, filetype = struct.unpack_from("<IIII", raw, 0)
@@ -981,23 +986,179 @@ class TestMacScriptsIntegrity(unittest.TestCase):
             b"CGDisplayModeGetPixelWidth",
             b"CGDisplayModeGetPixelHeight",
             b"CGDisplayModeGetRefreshRate",
-            b"launch_boot.log",
+            b"__cxa_throw",
+            b"backtrace_symbols_fd",
+            b"crash_report.log",
+            b"debug_boot.log",
+        ):
+            self.assertIn(cg_sym, raw)
+        for absent_bin_sym in (
+            b"Sims2SyntheticDisplayMode",
             b"CGDisplayFade",
             b"CGAcquireDisplayFadeReservation",
             b"CGDisplaySetDisplayMode",
             b"CGLSetParameter",
-            b"CGLGetParameter",
-            b"CGLGetSurface",
             b"CGLDisable",
             b"glScissor",
-            b"__cxa_throw",
             b"glViewport",
+            b"launch_boot.log",
+            b"trackpad_events.log",
         ):
-            self.assertIn(cg_sym, raw)
-        self.assertNotIn(b"Sims2SyntheticDisplayMode", raw)
+            self.assertNotIn(absent_bin_sym, raw)
         if sys.platform == "darwin":
             cs = subprocess.run(["codesign", "--verify", "--strict", dylib.as_posix()], capture_output=True, text=True)
             self.assertEqual(cs.returncode, 0, cs.stderr)
+
+    def test_v141_silent_logs_crash_capture_dynamic_res_and_github_support(self) -> None:
+        patch_text = (ROOT_DIR / "patch_sims2.command").read_text(encoding="utf-8")
+        self.assertNotIn('grules_w="1800"', patch_text)
+        self.assertNotIn('grules_h="1169"', patch_text)
+        self.assertNotIn("affichage natif 1800x1169", patch_text)
+        self.assertIn("Diagnostic & Support GitHub", patch_text)
+        self.assertIn("github_support_report.md", patch_text)
+
+        bug_tpl = ROOT_DIR / ".github" / "ISSUE_TEMPLATE" / "bug_report.md"
+        self.assertTrue(bug_tpl.is_file(), "Missing .github/ISSUE_TEMPLATE/bug_report.md")
+        bug_tpl_text = bug_tpl.read_text(encoding="utf-8")
+        self.assertIn("patch_sims2.command", bug_tpl_text)
+        self.assertIn("Diagnostic & Support GitHub", bug_tpl_text)
+        self.assertIn("github_support_report.md", bug_tpl_text)
+
+        if sys.platform == "darwin":
+            bash_bin = vp.find_bash()
+            self.assertIsNotNone(bash_bin)
+
+            # Interactive menu of patch_sims2.command shows [1]..[3] and exits cleanly on 3
+            res_quit = subprocess.run(
+                [bash_bin, "./patch_sims2.command"],
+                cwd=str(ROOT_DIR),
+                input="3\n",
+                capture_output=True,
+                text=True,
+            )
+            self.assertEqual(res_quit.returncode, 0, res_quit.stderr or res_quit.stdout)
+            self.assertIn("[1]", res_quit.stdout)
+            self.assertIn("Diagnostic & Support GitHub", res_quit.stdout)
+            self.assertIn("[3]", res_quit.stdout)
+
+            # Debug toggle + GitHub support report generation + /Users/<user> anonymization
+            with tempfile.TemporaryDirectory() as tmp:
+                base = Path(tmp)
+                fake_home = base / "Users" / "alice_secret"
+                log_dir = fake_home / "Library" / "Logs" / "Sims2-Crash-Patch"
+                cfg_dir = fake_home / "Library" / "Application Support" / "Aspyr" / "The Sims 2" / "Config"
+                cfg_dir.mkdir(parents=True)
+                userprops = cfg_dir / "userProps.xml"
+                userprops.write_text(
+                    '<?xml version="1.0"?><cGZPersistDBSegment>'
+                    '<AnyString key="activeDeviceDisplayMode" type="0x0b8bea18">1440x900x32x60</AnyString>'
+                    '</cGZPersistDBSegment>\n',
+                    encoding="utf-8",
+                )
+
+                r_dbg_on = self._run_bash_lib(
+                    "patch_sims2.command",
+                    'REAL_HOME="$1"; SIMS2_LOG_DIR="$2"; toggle_debug_mode enable',
+                    fake_home.as_posix(),
+                    log_dir.as_posix(),
+                )
+                self.assertEqual(r_dbg_on.returncode, 0, r_dbg_on.stderr or r_dbg_on.stdout)
+                self.assertTrue((log_dir / ".debug_enabled").is_file())
+
+                crash_file = log_dir / "crash_report.log"
+                crash_file.write_text(
+                    f"Patch Version : 1.4.1\nPath: /Users/alice_secret/Library/Application Support/test\n",
+                    encoding="utf-8",
+                )
+                dbg_file = log_dir / "debug_boot.log"
+                dbg_file.write_text("BOOT pid=1234 path=/Users/alice_secret/Desktop\n", encoding="utf-8")
+                (log_dir / "debug_boot.previous.log").write_text("OLD\n", encoding="utf-8")
+
+                env = dict(os.environ)
+                env["SIMS2_LIB_ONLY"] = "1"
+                env["SIMS2_SKIP_PBCOPY"] = "1"
+                env["SIMS2_SKIP_SYSTEM_PROFILER"] = "1"
+                env["SIMS2_LOG_DIR"] = log_dir.as_posix()
+                env["SIMS2_USERPROPS_OVERRIDE"] = userprops.as_posix()
+                r_rep = subprocess.run(
+                    [
+                        bash_bin,
+                        "-c",
+                        'set -u; source "./patch_sims2.command"; REAL_HOME="$1"; REAL_USER="alice_secret"; generate_github_support_report',
+                        "_",
+                        fake_home.as_posix(),
+                    ],
+                    cwd=str(ROOT_DIR),
+                    env=env,
+                    capture_output=True,
+                    text=True,
+                )
+                self.assertEqual(r_rep.returncode, 0, r_rep.stderr or r_rep.stdout)
+                report_path = log_dir / "github_support_report.md"
+                self.assertTrue(report_path.is_file())
+                rep_text = report_path.read_text(encoding="utf-8")
+                self.assertIn("v1.4.1", rep_text)
+                self.assertIn("1440x900x32x60", rep_text)
+                self.assertIn("crash_report.log", rep_text)
+                self.assertIn("debug_boot.log", rep_text)
+                self.assertNotIn("alice_secret", rep_text)
+                self.assertIn("~/Library/Application Support/test", rep_text)
+
+                r_dbg_off = self._run_bash_lib(
+                    "patch_sims2.command",
+                    'REAL_HOME="$1"; SIMS2_LOG_DIR="$2"; toggle_debug_mode disable',
+                    fake_home.as_posix(),
+                    log_dir.as_posix(),
+                )
+                self.assertEqual(r_dbg_off.returncode, 0, r_dbg_off.stderr or r_dbg_off.stdout)
+                self.assertFalse((log_dir / ".debug_enabled").exists())
+                self.assertFalse(dbg_file.exists())
+                self.assertFalse((log_dir / "debug_boot.previous.log").exists())
+                self.assertTrue(crash_file.is_file())
+
+            # Runtime test of compiled x86_64 dylib (silent normal mode, debug_boot.log, crash_report.log)
+            clangxx = vp.find_unix_tool("clang++", ())
+            if clangxx:
+                cpp_src = (
+                    "#include <csignal>\n"
+                    "#include <stdexcept>\n"
+                    "#include <string>\n"
+                    "int main(int argc, char **argv) {\n"
+                    "  if (argc > 1 && std::string(argv[1]) == \"terminate\") throw std::runtime_error(\"boom\");\n"
+                    "  if (argc > 1 && std::string(argv[1]) == \"segv\") std::raise(SIGSEGV);\n"
+                    "  return 0;\n"
+                    "}\n"
+                )
+                with tempfile.TemporaryDirectory() as tmp:
+                    tmp_p = Path(tmp)
+                    src = tmp_p / "host.cpp"
+                    exe = tmp_p / "host"
+                    src.write_text(cpp_src, encoding="utf-8")
+                    subprocess.run([clangxx, "-arch", "x86_64", str(src), "-o", str(exe)], check=True)
+                    dylib_path = (ROOT_DIR / "trackpad_mod" / "libsims2_trackpad.dylib").as_posix()
+
+                    h_norm = tmp_p / "h_norm"
+                    h_norm.mkdir()
+                    rn = subprocess.run([str(exe)], env={**os.environ, "HOME": str(h_norm), "DYLD_INSERT_LIBRARIES": dylib_path})
+                    self.assertEqual(rn.returncode, 0)
+                    self.assertFalse((h_norm / "Library" / "Logs" / "Sims2-Crash-Patch").exists())
+
+                    h_dbg = tmp_p / "h_dbg"
+                    h_dbg.mkdir()
+                    rd = subprocess.run([str(exe)], env={**os.environ, "HOME": str(h_dbg), "SIMS2_DEBUG": "1", "DYLD_INSERT_LIBRARIES": dylib_path})
+                    self.assertEqual(rd.returncode, 0)
+                    self.assertTrue((h_dbg / "Library" / "Logs" / "Sims2-Crash-Patch" / "debug_boot.log").is_file())
+
+                    h_segv = tmp_p / "h_segv"
+                    h_segv.mkdir()
+                    rs = subprocess.run([str(exe), "segv"], env={**os.environ, "HOME": str(h_segv), "DYLD_INSERT_LIBRARIES": dylib_path})
+                    self.assertNotEqual(rs.returncode, 0)
+                    cr_segv = h_segv / "Library" / "Logs" / "Sims2-Crash-Patch" / "crash_report.log"
+                    self.assertTrue(cr_segv.is_file())
+                    cr_txt = cr_segv.read_text(encoding="utf-8")
+                    self.assertIn("Patch Version : 1.4.1", cr_txt)
+                    self.assertIn("SIGSEGV", cr_txt)
+                    self.assertIn("Backtrace", cr_txt)
 
     def test_v14_option_a_userprops_and_graphics_rules_1800x1125(self) -> None:
         if not vp.find_perl():

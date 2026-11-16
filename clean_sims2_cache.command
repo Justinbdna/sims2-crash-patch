@@ -1,7 +1,7 @@
 #!/bin/bash
 # ==============================================================================
 # The Sims 2: Super Collection — Maintenance, Caches & Display Reset Utility
-# Version: 1.4.0
+# Version: 1.4.1
 # Safe dual-location cache cleaner, userProps.xml display reset, CC/maxfiles check.
 # ==============================================================================
 
@@ -31,7 +31,7 @@ LOG_FILE=""
 LOG_FINALIZED=0
 
 init_diagnostic_log() {
-    local label="${1:-clean_sims2_cache.command v1.4.0}"
+    local label="${1:-clean_sims2_cache.command v1.4.1}"
     [ -z "${REAL_HOME:-}" ] && return 0
     local log_dir="${SIMS2_LOG_DIR:-$REAL_HOME/Library/Logs/Sims2-Crash-Patch}"
     run_as_real_user mkdir -p "$log_dir" >/dev/null 2>&1 || return 0
@@ -233,8 +233,8 @@ var curW = Math.round($.CGDisplayModeGetWidth(cur));
 var curH = Math.round($.CGDisplayModeGetHeight(cur));
 // Real macOS hardware modes only (no synthetic catalog): whitelist + current desktop mode.
 var whitelist = {
-    "1280x800": 1, "1440x900": 1, "1512x982": 1, "1680x1050": 1,
-    "1800x1169": 1, "2048x1280": 1, "2560x1600": 1,
+    "1280x800": 1, "1440x900": 1, "1470x956": 1, "1512x982": 1, "1680x1050": 1,
+    "1728x1117": 1, "1800x1169": 1, "2048x1280": 1, "2056x1329": 1, "2560x1600": 1,
     "1728x1080": 1, "1920x1080": 1, "1920x1200": 1, "2560x1440": 1
 };
 var notchedMap = {};
@@ -280,8 +280,20 @@ if (notchedMap[curKey]) {
     curH = parseInt(mapped[1], 10);
 }
 if (curW > 2560 || curH > 1600) {
-    curW = 1280;
-    curH = 800;
+    var bestW = 1280, bestH = 800, bestArea = 0;
+    var keys = Object.keys(seen);
+    for (var k = 0; k < keys.length; k++) {
+        var parts = keys[k].split("x");
+        var kw = parseInt(parts[0], 10);
+        var kh = parseInt(parts[1], 10);
+        if (kw <= 2560 && kh <= 1600 && (kw * kh) > bestArea) {
+            bestArea = kw * kh;
+            bestW = kw;
+            bestH = kh;
+        }
+    }
+    curW = bestW;
+    curH = bestH;
 }
 if (curW > 0 && curH > 0) {
     "CUR=" + curW + "x" + curH + "\nMODES=" + Object.keys(seen).join(",");
@@ -686,7 +698,7 @@ run_menu_choice() {
 
     case "$choice" in
         1|2|3)
-            init_diagnostic_log "clean_sims2_cache.command v1.4.0 (menu=$choice)"
+            init_diagnostic_log "clean_sims2_cache.command v1.4.1 (menu=$choice)"
             ;;
     esac
 
@@ -703,7 +715,7 @@ run_menu_choice() {
             echo ""
             if [ "$SANDBOX_FAILED" -eq 0 ]; then
                 echo -e "${GREEN}${BOLD}========================================================================${NC}"
-                echo -e "${GREEN}${BOLD}  NETTOYAGE TERMINÉ / CACHE PURGE COMPLETE (v1.4.0) !                   ${NC}"
+                echo -e "${GREEN}${BOLD}  NETTOYAGE TERMINÉ / CACHE PURGE COMPLETE (v1.4.1) !                   ${NC}"
                 echo -e "${GREEN}${BOLD}========================================================================${NC}"
                 echo "  Vos quartiers, familles et mods (Downloads) sont 100 % intacts."
                 echo "  Vous pouvez relancer Les Sims 2 et charger votre quartier en sécurité."
@@ -714,7 +726,7 @@ run_menu_choice() {
                 pause_exit 0
             else
                 echo -e "${YELLOW}${BOLD}========================================================================${NC}"
-                echo -e "${YELLOW}${BOLD}  NETTOYAGE PARTIEL / PARTIAL CLEANUP (v1.4.0)                          ${NC}"
+                echo -e "${YELLOW}${BOLD}  NETTOYAGE PARTIEL / PARTIAL CLEANUP (v1.4.1)                          ${NC}"
                 echo -e "${YELLOW}${BOLD}========================================================================${NC}"
                 echo "  Le dossier actif Application Support a été vérifié/nettoyé, mais le"
                 echo "  conteneur Sandbox n'a pas pu être inspecté via Finder (voir message"
@@ -762,7 +774,7 @@ run_menu_choice() {
 main() {
     echo -e "${CYAN}${BOLD}"
     echo "========================================================================"
-    echo "  The Sims 2 — Maintenance, Caches & Affichage / Utility (v1.4.0)       "
+    echo "  The Sims 2 — Maintenance, Caches & Affichage / Utility (v1.4.1)       "
     echo "========================================================================"
     echo -e "${NC}"
 

@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Sims 2 Crash Patch — Windows Special Edition Toolkit (Standalone, Non-Mac)
+Sims 2 Crash Patch — Windows Special Edition Toolkit (Standalone, Non-Mac, v1.4.1)
 
 Provides safe diagnostics, 4GB/LARGEADDRESSAWARE PE inspection & patching,
 display refresh-rate / OneDrive checks, userProps.xml repair, and cache

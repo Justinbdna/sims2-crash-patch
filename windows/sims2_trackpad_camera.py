@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Sims 2 Crash Patch — Windows Trackpad & Camera Rotation Helper (Standalone)
+Sims 2 Crash Patch — Windows Trackpad & Camera Rotation Helper (Standalone, v1.4.1)
 
 Solves the classic Sims 2 trackpad limitation (no physical Middle Mouse Button
 drag for 3D camera orbit & tilt) cleanly in user space without touching game files

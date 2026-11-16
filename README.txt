@@ -1,5 +1,5 @@
 ================================================================================
-  THE SIMS 2: SUPER COLLECTION — PROMOTION 120Hz PATCH & STABILITY FIX (v1.4.0)
+  THE SIMS 2: SUPER COLLECTION — PROMOTION 120Hz PATCH & STABILITY FIX (v1.4.1)
   Tested on MacBook Pro (Apple Silicon M1 Pro, 120 Hz ProMotion, macOS 27.0)
   Mac App Store Edition (com.aspyr.sims2.appstore)
 ================================================================================
@@ -7,26 +7,31 @@
 [FRANÇAIS] (English guide follows below / Version anglaise plus bas) ----------
 
 1. PRÉSENTATION & OUTILS INCLUS
-   - patch_sims2.command       : Installateur principal automatique :
-                                 • Vérifie la session Admin et trouve le jeu
-                                   (/Applications ou ~/Applications)
-                                 • Sauvegarde le binaire d'origine vérifié
-                                   (Sims2XP_Exe.backup)
-                                 • Applique le double patch atomique 60 Hz
-                                 • Optimise Graphics Rules.sgr (résolutions
-                                   jusqu'à 5120x3200, profil $High ombres/textures,
-                                   fallback VRAM 1024 Mo, Graphics Rules.sgr.backup)
-                                 • Installe & injecte le module Trackpad natif
-                                   libsims2_trackpad.dylib via LC_LOAD_WEAK_DYLIB
-                                   sans Xcode (Control + clic-glissé = inclinaison/
-                                   orbite 3D, Option + glisser ou clic-glissé = se
-                                   déplacer, pincement 2 doigts = zoom +/-,
-                                   swipe/rotation 2 doigts = ,/.)
-                                 • Re-signe l'application proprement
-                                 • Copie vos sauvegardes Sandbox sans écraser
-                                 • Purge les caches corrompus (Actif + Sandbox)
-                                 • Vérifie userProps.xml (écran externe/120 Hz)
-                                   et diagnostique vos Mods (.package / maxfiles)
+   - patch_sims2.command       : Installateur principal & Diagnostic [1/2/3] :
+                                 • [1] Installer / Mettre à jour (Entrée) :
+                                   - Vérifie la session Admin et trouve le jeu
+                                     (/Applications ou ~/Applications)
+                                   - Sauvegarde le binaire d'origine vérifié
+                                     (Sims2XP_Exe.backup)
+                                   - Applique le double patch atomique 60 Hz &
+                                     plein écran calé sous encoche (visibleFrame)
+                                   - Optimise Graphics Rules.sgr (résolutions
+                                     jusqu'à 2560x1600, défaut natif dynamique,
+                                     profil $High, fallback VRAM 1024 Mo, .backup)
+                                   - Installe & injecte le module Trackpad natif
+                                     libsims2_trackpad.dylib via LC_LOAD_WEAK_DYLIB
+                                     sans Xcode (Control + clic-glissé = orbite 3D,
+                                     Option + glisser = panoramique, pincement 2 doigts
+                                     = zoom +/-, swipe/rotation 2 doigts = ,/.)
+                                   - Re-signe l'application proprement
+                                   - Copie vos sauvegardes Sandbox sans écraser
+                                   - Purge les caches corrompus (Actif + Sandbox)
+                                   - Vérifie userProps.xml (écran externe/120 Hz)
+                                     et diagnostique vos Mods (.package / maxfiles)
+                                 • [2] Diagnostic & Support GitHub :
+                                   - Active/désactive le mode debug (debug_boot.log)
+                                   - Génère github_support_report.md anonymisé
+                                     (+ copie automatique dans le presse-papier)
    - clean_sims2_cache.command : Utilitaire interactif avec menu [1 / 2 / 3 / 4]
                                  (SANS mot de passe pour les caches / affichage) :
                                  [1] Nettoyer les caches (appui sur Entrée)
@@ -146,10 +151,12 @@
         Accès complet au disque à Terminal dans Réglages Système).
 
    CAS 4B : Partager un rapport clair si quelque chose ne marche pas
-   -> Chaque exécution des scripts enregistre un journal technique propre
-      (0 % CPU en arrière-plan, aucun mot de passe enregistré) dans :
-      ~/Library/Logs/Sims2-Crash-Patch/latest.log
-      Copiez-collez ce fichier (et Documents/Logs du jeu si besoin) !
+   -> En session normale, zéro journal de jeu n'est écrit sur le disque
+      (un crash_report.log est généré uniquement si un crash survient).
+   -> Lancez patch_sims2.command -> [2] Diagnostic & Support GitHub pour
+      activer/désactiver le mode debug (debug_boot.log) et générer le rapport
+      prêt à coller ~/Library/Logs/Sims2-Crash-Patch/github_support_report.md
+      (copié automatiquement dans le presse-papier, /Users/... anonymisé en ~).
 
    CAS 5 : Le jeu démarre mais mes anciens quartiers / familles semblent absents
    -> Regardez dans ~/Library/Application Support/Aspyr/ (Finder : menu Aller ->
@@ -194,7 +201,7 @@
      0xfe741 -> NOPs sur branche _CVDisplayLink). Zéro dépendance Xcode CLT
      (/usr/bin/perl, /usr/bin/osascript, /usr/bin/codesign natifs uniquement).
    - Graphics Rules.sgr : sauvegarde Graphics Rules.sgr.backup, déblocage jusqu'à
-     5120x3200, profil $High (ombres, éclairage, effets, matériaux), textureMemory 1024 Mo.
+     2560x1600, défaut $High sur résolution native dynamique, textureMemory 1024 Mo.
    - Trackpad natif (libsims2_trackpad.dylib) : chargé via LC_LOAD_WEAK_DYLIB
      sans Xcode : Control (^) + clic-glissé = inclinaison / orbite 3D libre,
      Option (⌥) + glisser ou clic-glissé = se déplacer (curseur 4 flèches),
@@ -208,24 +215,21 @@
 [ENGLISH] ----------------------------------------------------------------------
 
 1. OVERVIEW & INCLUDED TOOLS
-   - patch_sims2.command       : Automatic main installer:
-                                 • Verifies Admin rights & locates app bundle
-                                   (/Applications or ~/Applications)
-                                 • Backs up verified original Sims2XP_Exe.backup
-                                 • Applies atomic dual 60 Hz lock patch
-                                 • Upgrades Graphics Rules.sgr (up to 5120x3200,
-                                   $High shadows/textures, 1024 MB VRAM fallback,
-                                   saves Graphics Rules.sgr.backup)
-                                 • Installs & injects native Trackpad module
-                                   libsims2_trackpad.dylib via LC_LOAD_WEAK_DYLIB
-                                   without Xcode (Control + drag = 3D orbit/tilt,
-                                   Option + slide or drag = camera pan, 2-finger
-                                   pinch = zoom +/-, 2-finger swipe/rotate = ,/.)
-                                 • Re-signs app locally (ad-hoc, --strict check)
-                                 • Copies Sandbox saves with zero overwrite
-                                 • Purges corrupted caches (Active + Sandbox)
-                                 • Validates/repairs userProps.xml (creates .backup)
-                                 • Checks CC/mods (.package/.zip) & maxfiles
+   - patch_sims2.command       : Automatic main installer & Support menu [1/2/3]:
+                                 • [1] Install/Update (Enter):
+                                   - Verifies Admin rights & locates app bundle
+                                   - Backs up verified original Sims2XP_Exe.backup
+                                   - Applies atomic dual 60 Hz & notch-fit patch
+                                   - Upgrades Graphics Rules.sgr (up to 2560x1600,
+                                     dynamic native $High default, 1024 MB VRAM)
+                                   - Installs & injects libsims2_trackpad.dylib
+                                   - Re-signs locally (--strict), migrates saves
+                                     with zero overwrite, purges caches, validates
+                                     userProps.xml & checks CC/maxfiles
+                                 • [2] Diagnostics & GitHub Support:
+                                   - Toggles Debug Mode (debug_boot.log)
+                                   - Generates anonymized github_support_report.md
+                                     (copied to clipboard automatically)
    - clean_sims2_cache.command : Interactive maintenance menu [1 / 2 / 3 / 4]:
                                  [1] Clean caches (Default on Enter — no sudo)
                                  [2] Reset display mode in userProps.xml (60 Hz)
@@ -262,7 +266,7 @@
    Step 6: Click "Allow" if macOS asks Terminal to control Finder.
    Step 7: If maxfiles hard limit < 10240, optionally answer "y" to install the
            managed /Library/LaunchDaemons/limit.maxfiles.plist (press Enter = No).
-   Step 8: When "PATCH COMPLETE (v1.4.0)" appears, launch The Sims 2 normally!
+   Step 8: When "PATCH COMPLETE (v1.4.1)" appears, launch The Sims 2 normally!
 
 4. PRACTICAL TROUBLESHOOTING CASES
    - Case 1 (Gatekeeper block): Follow Step 4 above for any first-run .command.
@@ -280,9 +284,11 @@
      and drag Neighborhoods/Downloads into ~/Library/Application Support/Aspyr/The Sims 2/
      (or grant Full Disk Access to Terminal). Note: if you already have active
      saves in Application Support, you can still launch normally.
-   - Case 4B (Sharing diagnostic logs): Each script run saves a lightweight log
-     (0% background CPU, zero passwords saved) to:
-     ~/Library/Logs/Sims2-Crash-Patch/latest.log
+   - Case 4B (Diagnostics & GitHub Support): Normal game sessions write zero log
+     files (crash_report.log is written only if a crash occurs). Run
+     patch_sims2.command -> [2] Diagnostic & Support GitHub to toggle Debug Mode
+     or generate ~/Library/Logs/Sims2-Crash-Patch/github_support_report.md
+     (copied to clipboard with /Users/... anonymized to ~).
    - Case 5 (Old saves appear missing -> Sandbox Backup folder): Check
      ~/Library/Application Support/Aspyr/ for "The Sims 2 (Sandbox Backup ...)"
      and merge Neighborhoods/Downloads while the game is closed.
