@@ -23,7 +23,7 @@
 #import <unistd.h>
 
 /*
- * libsims2_trackpad.dylib (v1.4.1)
+ * libsims2_trackpad.dylib (v1.4.0)
  * Free & open-source Trackpad, Display & Stability helper for The Sims 2: Super Collection (macOS).
  *
  * Features:
@@ -49,7 +49,7 @@
  *   SIMS2_TRACKPAD_DEBUG=0|1     (default 0, logs via NSLog)
  */
 
-#define SIMS2_PATCH_VERSION "1.4.1"
+#define SIMS2_PATCH_VERSION "1.4.0"
 
 typedef NS_ENUM(NSInteger, Sims2ScrollAxis) {
     Sims2ScrollAxisNone = 0,
