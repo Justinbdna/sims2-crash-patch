@@ -220,7 +220,7 @@ handle_clean_sandbox_result() {
     esac
 }
 
-# Query current logical display mode & supported CoreGraphics modes without Xcode CLT
+# Query current logical display mode & optimal CoreGraphics mode <= 2560x1600 without Xcode CLT
 query_display_modes() {
     DISPLAY_CUR=""
     DISPLAY_MODES=""
@@ -231,74 +231,73 @@ ObjC.import("AppKit");
 ObjC.import("Foundation");
 var did = $.CGMainDisplayID();
 var cur = $.CGDisplayCopyDisplayMode(did);
-var curW = Math.round($.CGDisplayModeGetWidth(cur));
-var curH = Math.round($.CGDisplayModeGetHeight(cur));
-// Real macOS hardware modes only (no synthetic catalog): whitelist + current desktop mode.
-var whitelist = {
-    "1280x800": 1, "1440x900": 1, "1470x956": 1, "1512x982": 1, "1680x1050": 1,
-    "1728x1117": 1, "1800x1169": 1, "2048x1280": 1, "2056x1329": 1, "2560x1600": 1,
-    "1728x1080": 1, "1920x1080": 1, "1920x1200": 1, "2560x1440": 1
-};
-var notchedMap = {};
-function isAllowedNonNotched(w, h) {
-    if (w < 800 || h < 600 || w <= h || w > 2560 || h > 1600) return false;
-    if (w === curW && h === curH) return true;
-    return whitelist[w + "x" + h] === 1;
+var curW = cur ? Math.round($.CGDisplayModeGetWidth(cur)) : 0;
+var curH = cur ? Math.round($.CGDisplayModeGetHeight(cur)) : 0;
+
+if ((curW <= 0 || curH <= 0)) {
+    var ms = $.NSScreen.mainScreen;
+    if (ms) {
+        var sf = ms.frame;
+        curW = Math.round(sf.size.width);
+        curH = Math.round(sf.size.height);
+    }
 }
-var seen = {};
-if (isAllowedNonNotched(curW, curH)) seen[curW + "x" + curH] = 1;
+
+function isValidMode(w, h) {
+    return (w >= 800 && h >= 600 && w > h && w <= 2560 && h <= 1600);
+}
+
 var optsDict = $.CFDictionaryCreateMutable($(), 1, $.kCFTypeDictionaryKeyCallBacks, $.kCFTypeDictionaryValueCallBacks);
 $.CFDictionarySetValue(optsDict, $.kCGDisplayShowDuplicateLowResolutionModes, $.kCFBooleanTrue);
 var arr = ObjC.castRefToObject($.CGDisplayCopyAllDisplayModes(did, optsDict) || $.CGDisplayCopyAllDisplayModes(did, $()));
-if (arr && arr.count) {
+
+var bestW = 0, bestH = 0;
+if (isValidMode(curW, curH)) {
+    bestW = curW;
+    bestH = curH;
+} else if (arr && arr.count) {
+    var targetAspect = (curW > 0 && curH > 0) ? (curW / curH) : (16.0 / 10.0);
+    var bestAspectOk = false;
+    var bestArea = 0;
+    var bestDeltaHz = 9999.0;
     for (var i = 0; i < arr.count; i++) {
         var m = arr.objectAtIndex(i);
         var w = Math.round($.CGDisplayModeGetWidth(m));
         var h = Math.round($.CGDisplayModeGetHeight(m));
-        if (isAllowedNonNotched(w, h)) {
-            seen[w + "x" + h] = 1;
+        if (!isValidMode(w, h)) continue;
+        var aspectOk = Math.abs((w / h) - targetAspect) <= 0.03;
+        var area = w * h;
+        var hz = $.CGDisplayModeGetRefreshRate(m);
+        var dHz = Math.abs((hz > 0.1 ? hz : 60.0) - 60.0);
+        if (bestW === 0 ||
+            (aspectOk && !bestAspectOk) ||
+            (aspectOk === bestAspectOk && area > bestArea) ||
+            (aspectOk === bestAspectOk && area === bestArea && dHz < bestDeltaHz - 0.5)) {
+            bestW = w;
+            bestH = h;
+            bestAspectOk = aspectOk;
+            bestArea = area;
+            bestDeltaHz = dHz;
         }
     }
 }
-var screens = $.NSScreen.screens;
-if (screens && screens.count) {
-    for (var j = 0; j < screens.count; j++) {
-        var f = screens.objectAtIndex(j).frame;
+
+if (bestW <= 0 || bestH <= 0) {
+    var screens = $.NSScreen.screens;
+    if (screens && screens.count) {
+        var f = screens.objectAtIndex(0).frame;
         var sw = Math.round(f.size.width);
         var sh = Math.round(f.size.height);
-        if (isAllowedNonNotched(sw, sh)) {
-            seen[sw + "x" + sh] = 1;
-        }
-        if ((curW === 0 || curH === 0) && sw > 0 && sh > 0) {
-            curW = sw;
-            curH = sh;
+        if (isValidMode(sw, sh)) {
+            bestW = sw;
+            bestH = sh;
         }
     }
 }
-var curKey = curW + "x" + curH;
-if (notchedMap[curKey]) {
-    var mapped = notchedMap[curKey].split("x");
-    curW = parseInt(mapped[0], 10);
-    curH = parseInt(mapped[1], 10);
-}
-if (curW > 2560 || curH > 1600) {
-    var bestW = 1280, bestH = 800, bestArea = 0;
-    var keys = Object.keys(seen);
-    for (var k = 0; k < keys.length; k++) {
-        var parts = keys[k].split("x");
-        var kw = parseInt(parts[0], 10);
-        var kh = parseInt(parts[1], 10);
-        if (kw <= 2560 && kh <= 1600 && (kw * kh) > bestArea) {
-            bestArea = kw * kh;
-            bestW = kw;
-            bestH = kh;
-        }
-    }
-    curW = bestW;
-    curH = bestH;
-}
-if (curW > 0 && curH > 0) {
-    "CUR=" + curW + "x" + curH + "\nMODES=" + Object.keys(seen).join(",");
+
+if (bestW > 0 && bestH > 0) {
+    var res = bestW + "x" + bestH;
+    "CUR=" + res + "\nMODES=" + res;
 }
 JXAEOF
 )"
@@ -309,17 +308,27 @@ JXAEOF
     fi
 }
 
-# Conservative userProps.xml repair (creates userProps.xml.backup once before editing)
+# Conservative userProps.xml repair & initialization (creates userProps.xml.backup once before editing)
 repair_userprops_xml() {
     local userprops_path="$1"
     local cur_res="$2"
     local supported_modes="$3"
     local force_reset="${4:-0}"
 
-    if [ ! -f "$userprops_path" ]; then
-        USERPROPS_STATUS="Non encore créé (sera généré au 1er lancement)"
-        echo -e "${GREEN}[i] userProps.xml :${NC} Non encore créé (configuration générée sainement au 1er lancement)."
-        return 0
+    if [ -L "$userprops_path" ]; then
+        USERPROPS_STATUS="ERREUR (lien symbolique refusé sur userProps.xml)"
+        echo -e "${RED}[-] Sécurité : lien symbolique refusé sur $userprops_path.${NC}"
+        return 1
+    fi
+
+    local cfg_dir
+    cfg_dir="$(dirname "$userprops_path")"
+    if [ ! -d "$cfg_dir" ]; then
+        if [ "$(id -u)" -eq 0 ] && [ "${SIMS2_LIB_ONLY:-0}" != "1" ]; then
+            run_as_real_user mkdir -p "$cfg_dir" >/dev/null 2>&1 || true
+        else
+            mkdir -p "$cfg_dir" >/dev/null 2>&1 || true
+        fi
     fi
 
     local perl_script runner_out runner_rc
@@ -345,7 +354,9 @@ sub read_raw {
 
 sub write_atomic {
     my ($p, $buf, $mode) = @_;
+    die "Refusing to write through symlink: $p\n" if -l $p;
     my $tmp = "$p.tmp.$$";
+    unlink($tmp) if -e $tmp || -l $tmp;
     $active_tmp = $tmp;
     open(my $out, ">:raw", $tmp) or do {
         $active_tmp = undef;
@@ -379,16 +390,6 @@ sub write_atomic {
     $active_tmp = undef;
 }
 
-my $raw = read_raw($xml_path);
-my $rx = qr{(<AnyString\b[^>]*\bkey="activeDeviceDisplayMode"[^>]*>)([^<]*)(</AnyString>)};
-if ($raw !~ $rx) {
-    print "NO_KEY\n";
-    exit 0;
-}
-
-my $old_mode = $2;
-$old_mode =~ s/^\s+|\s+$//g;
-
 my %supported;
 if (defined $modes_csv && $modes_csv ne "") {
     for my $item (split /,/, $modes_csv) {
@@ -397,8 +398,6 @@ if (defined $modes_csv && $modes_csv ne "") {
     }
 }
 
-# Native notched modes (1800x1169, 1512x982...) are kept as-is: the engine's
-# cDeviceEnumDX only accepts modes really exposed by macOS.
 my %notched_map = ();
 
 my $fallback_res = ($cur_res && $cur_res =~ /^\d+x\d+$/) ? $cur_res : "1280x800";
@@ -408,6 +407,42 @@ if (exists $notched_map{$fallback_res} && $supported{$notched_map{$fallback_res}
 if ($fallback_res =~ /^(\d+)x(\d+)$/ && ($1 > 2560 || $2 > 1600)) {
     $fallback_res = "1280x800";
 }
+
+if (!-e $xml_path) {
+    my $init_mode = "${fallback_res}x32x60";
+    my $init_xml = qq{<?xml version="1.0" encoding="UTF-8"?>\n}
+        . qq{<cGZPropertySetString>\n}
+        . qq{  <AnyString key="activeDeviceDisplayMode" type="0x0b8bea18">$init_mode</AnyString>\n}
+        . qq{</cGZPropertySetString>\n};
+    write_atomic($xml_path, $init_xml, 0644);
+    print "CREATED:$init_mode\n";
+    exit 0;
+}
+
+my $raw = read_raw($xml_path);
+my $rx = qr{(<AnyString\b[^>]*\bkey="activeDeviceDisplayMode"[^>]*>)([^<]*)(</AnyString>)};
+if ($raw !~ $rx) {
+    my $init_mode = "${fallback_res}x32x60";
+    my $entry = qq{  <AnyString key="activeDeviceDisplayMode" type="0x0b8bea18">$init_mode</AnyString>\n};
+    my $updated = $raw;
+    if ($updated =~ s{(</(?:cGZPropertySetString|cGZPersistDBSegment)>)}{$entry$1}) {
+        my $backup_path = "$xml_path.backup";
+        my $bak_state = "kept";
+        if (!-e $backup_path) {
+            write_atomic($backup_path, $raw, 0644);
+            $bak_state = "created";
+        }
+        write_atomic($xml_path, $updated, 0644);
+        print "INSERTED:$init_mode|$bak_state\n";
+        exit 0;
+    }
+    print "NO_KEY\n";
+    exit 0;
+}
+
+my $old_mode = $2;
+$old_mode =~ s/^\s+|\s+$//g;
+
 my $target_mode = "";
 my $need_fix = 0;
 
@@ -420,7 +455,7 @@ if ($old_mode =~ /^(\d+)x(\d+)x(\d+)x(\d+)$/) {
         $res_known_ok = 0;
     } elsif (exists $notched_map{$res_key} && $supported{$notched_map{$res_key}}) {
         $res_known_ok = 0;
-    } elsif (%supported && !$supported{$res_key} && $res_key ne "800x600") {
+    } elsif (%supported && !$supported{$res_key}) {
         $res_known_ok = 0;
     }
 
@@ -470,6 +505,19 @@ PERLEOF
     fi
 
     case "$runner_out" in
+        CREATED:*)
+            local created_val="${runner_out#CREATED:}"
+            USERPROPS_STATUS="Initialisé ($created_val)"
+            echo -e "${GREEN}[+] userProps.xml : Initialisé directement sur la résolution native ($created_val) !${NC}"
+            ;;
+        INSERTED:*)
+            local payload="${runner_out#INSERTED:}"
+            local ins_val="${payload%|*}"
+            local bak="${payload#*|}"
+            USERPROPS_STATUS="Initialisé ($ins_val, backup .backup $bak)"
+            echo -e "${GREEN}[+] userProps.xml : Résolution native ajoutée ($ins_val) !${NC}"
+            echo "    Sauvegarde de retour : $(dirname "$userprops_path")/userProps.xml.backup"
+            ;;
         OK:*)
             local cur_val="${runner_out#OK:}"
             USERPROPS_STATUS="Valide ($cur_val)"
