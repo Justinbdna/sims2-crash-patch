@@ -4,6 +4,15 @@ All notable changes to **Sims 2 Crash Patch** (*The Sims 2: Super Collection* �
 
 ---
 
+## [1.4.1] - 2026-11-18
+
+### Added & Changed (FR / EN)
+- **Licence MIT & Mentions Légales Internationales (`LICENSE`, `README.md`, `README.txt`, en-têtes des scripts & `trackpad_mod/sims2_trackpad.m`):**
+  - **FR :** Ajout du fichier `LICENSE` (licence MIT) à la racine du dépôt (également inclus dans l'archive macOS) et intégration d'une section légale bilingue complète précisant le caractère **100 % gratuit, communautaire et à but non lucratif** du projet, son objet strictement limité au **débogage, à la correction d'erreurs et à la préservation** d'un jeu ancien non maintenu pour Apple Silicon (*The Sims 2: Super Collection*), l'absence totale de fichiers propriétaires et de contournement de DRM, la non-affiliation (EA, Maxis, Aspyr, Apple) et les cadres législatifs informatifs (UE Directive `2009/24/CE` art. `5(1)` & `6`, USA `17 U.S.C. § 117(a)`, `§ 1201(f)`, `§ 107`, Royaume-Uni `CDPA 1988 s. 50B/50C`, Canada, Australie, Suisse et principes OMPI).
+  - **EN:** Added root `LICENSE` (MIT License, also packaged inside the macOS release ZIP) and comprehensive bilingual legal & software preservation notices across `README.md`, `README.txt`, script headers, and `sims2_trackpad.m`, clarifying that the project is **100% free, community-driven, and strictly non-profit**, exists solely to **debug, fix compatibility bugs, and preserve** a legitimately owned, unsupported legacy game, distributes zero copyrighted game binaries, bypasses zero DRM, is unaffiliated with EA/Maxis/Aspyr/Apple, and references informational international frameworks (EU Directive `2009/24/EC` Art. `5(1)` & `6`, USA `17 U.S.C. § 117(a)`, `§ 1201(f)`, `§ 107`, UK `CDPA 1988 s. 50B/50C`, and comparable international interoperability/preservation exceptions).
+
+---
+
 ## [1.4.0] - 2026-11-16
 
 ### Added & Changed (FR / EN)

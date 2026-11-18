@@ -1,6 +1,6 @@
 ================================================================================
-  THE SIMS 2: SUPER COLLECTION (macOS) — QUICK START & SUPPORT MEMO (v1.4.0)
-  Apple Silicon & Intel | Zero Xcode Required | Free & Open Source
+  THE SIMS 2: SUPER COLLECTION (macOS) — QUICK START & SUPPORT MEMO (v1.4.1)
+  Apple Silicon & Intel | Zero Xcode | MIT License (Free & Non-Profit)
 ================================================================================
 
 [FRANÇAIS] (English version below / Version anglaise plus bas) -----------------
@@ -17,7 +17,7 @@
         aucun '*', c'est normal !) puis Entrée.
       - Cliquez impérativement sur « Autoriser » si Terminal demande à contrôler
         Finder (pour copier vos sauvegardes sans rien écraser).
-      - Attendez « PATCH COMPLETE (v1.4.0) » puis lancez le jeu !
+      - Attendez « PATCH COMPLETE (v1.4.1) » puis lancez le jeu !
 
 2. CONTRÔLES TRACKPAD MACBOOK
    - Pincement 2 doigts                 : Zoom (+ / -)
@@ -30,7 +30,7 @@
      [1] Nettoyer les caches corrompus (Entrée, sans mot de passe).
      [2] Réinitialiser la résolution au lancement dans userProps.xml (crée
          userProps.xml.backup). Note : pas de changement de résolution à chaud
-         en pleine partie dans la v1.4.0.
+         en pleine partie dans la v1.4.1.
      [3] Vérifier vos Mods (.package / .zip oubliés) & limite maxfiles (10 240).
    - restore_sims2.command :
      Restaure le jeu d'origine (Sims2XP_Exe.backup + Graphics Rules.sgr.backup)
@@ -65,7 +65,7 @@
         or '*' appear on screen — normal macOS security) then press Enter.
       - Click "Allow" ("Autoriser") if Terminal asks to control Finder so your
         saves are copied without overwriting anything.
-      - Wait for "PATCH COMPLETE (v1.4.0)" and launch the game!
+      - Wait for "PATCH COMPLETE (v1.4.1)" and launch the game!
 
 2. MACBOOK TRACKPAD CONTROLS
    - 2-finger pinch                     : Zoom in / out (+ / -)
@@ -77,7 +77,7 @@
    - clean_sims2_cache.command :
      [1] Purge corrupted caches (Enter, no password).
      [2] Reset launch resolution in userProps.xml (keeps userProps.xml.backup).
-         Note: there is no in-game hot-swap resolution switching in v1.4.0.
+         Note: there is no in-game hot-swap resolution switching in v1.4.1.
      [3] Check Mods/CC (.package / leftover .zip) & 10,240 open-file limit.
    - restore_sims2.command :
      Cleanly restores original binaries/configs and removes the trackpad dylib.
@@ -97,4 +97,21 @@
 
 -> Full technical details (binary offsets, CoreGraphics, notch) in README.md on
    GitHub: https://github.com/Justinbdna/sims2-crash-patch
+
+--------------------------------------------------------------------------------
+5. MENTIONS LÉGALES & PRÉSERVATION / LEGAL NOTICE & SOFTWARE PRESERVATION
+   - FR : Projet communautaire 100 % gratuit, open-source (licence MIT) et à
+     but non lucratif. Destiné uniquement au débogage et à la correction
+     d'erreurs d'une copie légitime d'un jeu ancien non maintenu (macOS).
+     Aucun binaire propriétaire distribué, aucun DRM contourné, aucune
+     affiliation avec EA, Maxis, Aspyr ou Apple. Cadres informatifs :
+     UE Directive 2009/24/CE (art. 5(1), 6), USA (17 U.S.C. § 117, § 1201(f),
+     § 107), UK (CDPA 1988 s. 50B/50C) et principes internationaux analogues.
+   - EN : 100% free, non-profit, open-source (MIT License, see LICENSE)
+     community tool solely for debugging, bug-fixing, and preserving a
+     legitimately owned, unsupported legacy game. Zero copyrighted binaries
+     distributed, zero DRM bypassed, no affiliation with EA, Maxis, Aspyr, or
+     Apple. Informational frameworks: EU Directive 2009/24/EC (Art. 5(1), 6),
+     USA (17 U.S.C. § 117, § 1201(f), § 107), UK (CDPA 1988 s. 50B/50C), and
+     comparable international interoperability/preservation exceptions.
 ================================================================================

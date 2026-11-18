@@ -23,8 +23,10 @@
 #import <unistd.h>
 
 /*
- * libsims2_trackpad.dylib (v1.4.0)
- * Free & open-source Trackpad, Display & Stability helper for The Sims 2: Super Collection (macOS).
+ * libsims2_trackpad.dylib (v1.4.1)
+ * Free, non-profit & open-source (MIT) Trackpad, Display & Stability helper
+ * for lawful owners of The Sims 2: Super Collection (macOS).
+ * Software preservation, debugging & interoperability only — no DRM bypass.
  *
  * Features:
  *   1. SDL2 macOS Fullscreen Space & Dock fix (SDL_VIDEO_MAC_FULLSCREEN_SPACES, etc.)
@@ -49,7 +51,7 @@
  *   SIMS2_TRACKPAD_DEBUG=0|1     (default 0, logs via NSLog)
  */
 
-#define SIMS2_PATCH_VERSION "1.4.0"
+#define SIMS2_PATCH_VERSION "1.4.1"
 
 typedef NS_ENUM(NSInteger, Sims2ScrollAxis) {
     Sims2ScrollAxisNone = 0,
