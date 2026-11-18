@@ -86,6 +86,14 @@ static IMP gOrigActivateIgnoringOtherAppsIMP = NULL;
 static IMP gOrigFocusSomeWindowIMP = NULL;
 static IMP gOrigCanBecomeKeyWindowIMP = NULL;
 static IMP gOrigCanBecomeMainWindowIMP = NULL;
+static IMP gOrigSDLSetStyleMaskIMP = NULL;
+static IMP gOrigSDLSetFrameDisplayIMP = NULL;
+static IMP gOrigSDLSetFrameDisplayAnimateIMP = NULL;
+static IMP gOrigSDLSetContentSizeIMP = NULL;
+static IMP gOrigSDLConstrainFrameRectIMP = NULL;
+static IMP gOrigSDLSetCollectionBehaviorIMP = NULL;
+static IMP gOrigSDLToggleFullScreenIMP = NULL;
+static Class gSDLWindowClass = Nil;
 
 static Sims2ScrollAxis gScrollAxis = Sims2ScrollAxisNone;
 static double gScrollAccumX = 0.0;
@@ -107,7 +115,10 @@ static __weak id gWindowListener = nil;
 static BOOL gAppHasActivatedOnce = NO;
 static BOOL gAppIsActive = YES;
 static BOOL gAppIsHiding = NO;
+static BOOL gAppIsTerminating = NO;
 static BOOL gInFullscreenTransition = NO;
+static BOOL gAllowResizableForSpaceToggle = NO;
+static BOOL gHasAppliedPresentationOpts = NO;
 static CFAbsoluteTime gLastResignTimestamp = 0.0;
 
 static BOOL gDebugBootEnabled = NO;
@@ -168,6 +179,7 @@ static void ensure_dir_exists(const char *path) {
 
 static void debuglog_write(const char *category, const char *fmt, ...) __attribute__((format(printf, 2, 3)));
 static BOOL is_sdl_game_window(id winObj);
+static void enforce_primary_window_borderless_fullscreen(NSWindow *win, const char *reason);
 
 static void debuglog_write(const char *category, const char *fmt, ...) {
     if (!gDebugBootEnabled || !gDebugLogFile || !fmt) {
@@ -1052,6 +1064,22 @@ static void handle_camera_mouse_down(id self, SEL _cmd, NSEvent *event, IMP orig
         ((Fn)origIMP)(self, _cmd, event);
         return;
     }
+    if (gDebugBootEnabled && event) {
+        static int sClickAlignLogs = 0;
+        if (sClickAlignLogs < 12) {
+            NSWindow *evWin = [event window];
+            if (evWin && is_sdl_game_window(evWin)) {
+                sClickAlignLogs++;
+                NSPoint loc = [event locationInWindow];
+                NSRect wf = evWin.frame;
+                NSRect cb = evWin.contentView ? evWin.contentView.bounds : NSZeroRect;
+                debuglog_write("MOUSE", "btn=%s click=(%.1f,%.1f) content=%.0fx%.0f frame=%.0fx%.0f style=0x%lx",
+                               isRight ? "right" : "left",
+                               loc.x, loc.y, cb.size.width, cb.size.height,
+                               wf.size.width, wf.size.height, (unsigned long)evWin.styleMask);
+            }
+        }
+    }
     NSEventModifierFlags rawFlags = raw_event_modifier_flags(event);
     BOOL ctrlHeld = (rawFlags & NSEventModifierFlagControl) != 0;
     BOOL cmdHeld = (rawFlags & NSEventModifierFlagCommand) != 0;
@@ -1223,6 +1251,9 @@ static BOOL is_sdl_game_window(id winObj) {
     if (!winObj || ![winObj isKindOfClass:[NSWindow class]]) {
         return NO;
     }
+    if (gSDLWindowClass && [winObj isKindOfClass:gSDLWindowClass]) {
+        return YES;
+    }
     NSWindow *win = (NSWindow *)winObj;
     id delegate = [win delegate];
     Class listenerCls = objc_getClass("Cocoa_WindowListener");
@@ -1230,6 +1261,62 @@ static BOOL is_sdl_game_window(id winObj) {
         return YES;
     }
     return NO;
+}
+
+static NSWindowStyleMask sanitize_sdl_style_mask(NSWindowStyleMask mask) {
+    NSWindowStyleMask allowed = NSWindowStyleMaskBorderless | (mask & NSWindowStyleMaskFullScreen);
+    if (gAllowResizableForSpaceToggle || gInFullscreenTransition) {
+        allowed |= (mask & NSWindowStyleMaskResizable);
+    }
+    return allowed;
+}
+
+static void apply_borderless_presentation_options(BOOL wantHiddenDesktopUI) {
+    if (!NSApp) {
+        return;
+    }
+    @try {
+        if (wantHiddenDesktopUI) {
+            if (!gHasAppliedPresentationOpts) {
+                [NSApp setPresentationOptions:(NSApplicationPresentationHideDock |
+                                               NSApplicationPresentationHideMenuBar)];
+                gHasAppliedPresentationOpts = YES;
+            }
+        } else if (gHasAppliedPresentationOpts) {
+            [NSApp setPresentationOptions:NSApplicationPresentationDefault];
+            gHasAppliedPresentationOpts = NO;
+        }
+    } @catch (NSException *ex) {
+        debuglog_write("WIN", "presentationOptions exception: %s",
+                       ex.reason ? [ex.reason UTF8String] : "unknown");
+        gHasAppliedPresentationOpts = NO;
+    }
+}
+
+static NSRect compute_primary_game_frame(NSWindow *win) {
+    NSScreen *scr = (win && win.screen) ? win.screen : [NSScreen mainScreen];
+    if (!scr) {
+        return win ? win.frame : NSZeroRect;
+    }
+    update_cached_screen_geometry(scr);
+    NSRect sf = scr.frame;
+    NSRect vf = scr.visibleFrame;
+    if (sf.size.width < 640.0 || sf.size.height < 480.0) {
+        return vf.size.width >= 640.0 ? vf : sf;
+    }
+    BOOL inSpace = win ? ((win.styleMask & NSWindowStyleMaskFullScreen) != 0) : NO;
+    if (inSpace) {
+        return (vf.size.width >= 640.0 && vf.size.height >= 480.0) ? vf : sf;
+    }
+    CGFloat topLimit = (vf.size.height >= 480.0) ? (vf.origin.y + vf.size.height) : (sf.origin.y + sf.size.height);
+    if (topLimit > sf.origin.y + sf.size.height) {
+        topLimit = sf.origin.y + sf.size.height;
+    }
+    CGFloat targetH = topLimit - sf.origin.y;
+    if (targetH < 480.0) {
+        return (vf.size.width >= 640.0 && vf.size.height >= 480.0) ? vf : sf;
+    }
+    return NSMakeRect(sf.origin.x, sf.origin.y, sf.size.width, targetH);
 }
 
 static BOOL is_secondary_orphan_game_window(id winObj) {
@@ -1406,18 +1493,28 @@ static void swizzled_windowDidExitFullScreen(id self, SEL _cmd, NSNotification *
 
 static BOOL swizzled_setFullscreenSpace(id self, SEL _cmd, BOOL state) {
     gWindowListener = self;
-    if (!state && !gAppIsHiding && !(NSApp && [NSApp isHidden]) &&
-        should_suppress_focus_steal_or_fullscreen_exit()) {
+    BOOL primaryInSpace = (gPrimaryFullscreenWindow &&
+                           (([gPrimaryFullscreenWindow styleMask] & NSWindowStyleMaskFullScreen) != 0));
+    if (!state && !gAppIsTerminating && !gAppIsHiding && !(NSApp && [NSApp isHidden]) &&
+        (should_suppress_focus_steal_or_fullscreen_exit() || primaryInSpace)) {
         CFAbsoluteTime dt = (gLastResignTimestamp > 0.0) ? (CFAbsoluteTimeGetCurrent() - gLastResignTimestamp) : -1.0;
-        debuglog_write("WIN", "SUPPRESSED setFullscreenSpace:NO (active=%d nsActive=%d dt=%.3fs)",
-                       gAppIsActive ? 1 : 0, (NSApp && [NSApp isActive]) ? 1 : 0, dt);
+        debuglog_write("WIN", "SUPPRESSED setFullscreenSpace:NO (active=%d nsActive=%d primaryFS=%d dt=%.3fs)",
+                       gAppIsActive ? 1 : 0, (NSApp && [NSApp isActive]) ? 1 : 0,
+                       primaryInSpace ? 1 : 0, dt);
         return YES;
     }
     debuglog_write("WIN", "setFullscreenSpace:%d (active=%d hiding=%d)",
                    state ? 1 : 0, gAppIsActive ? 1 : 0, gAppIsHiding ? 1 : 0);
+    if (state) {
+        apply_borderless_presentation_options(NO);
+    }
     if (gOrigSetFullscreenSpaceIMP) {
         typedef BOOL (*Fn)(id, SEL, BOOL);
-        return ((Fn)gOrigSetFullscreenSpaceIMP)(self, _cmd, state);
+        BOOL prevAllow = gAllowResizableForSpaceToggle;
+        gAllowResizableForSpaceToggle = YES;
+        BOOL res = ((Fn)gOrigSetFullscreenSpaceIMP)(self, _cmd, state);
+        gAllowResizableForSpaceToggle = prevAllow;
+        return res;
     }
     return NO;
 }
@@ -1460,6 +1557,12 @@ static void swizzled_makeKeyAndOrderFront(id self, SEL _cmd, id sender) {
                        gAppIsActive ? 1 : 0, (NSApp && [NSApp isActive]) ? 1 : 0, (__bridge void *)self);
         return;
     }
+    if (is_sdl_game_window(self)) {
+        NSWindow *win = (NSWindow *)self;
+        if (win.frame.size.width >= 640.0 && win.frame.size.height >= 480.0) {
+            enforce_primary_window_borderless_fullscreen(win, "makeKeyAndOrderFront");
+        }
+    }
     if (gOrigMakeKeyAndOrderFrontIMP) {
         typedef void (*Fn)(id, SEL, id);
         ((Fn)gOrigMakeKeyAndOrderFrontIMP)(self, _cmd, sender);
@@ -1476,6 +1579,12 @@ static void swizzled_orderFrontRegardless(id self, SEL _cmd) {
         debuglog_write("WIN", "SUPPRESSED orderFrontRegardless (active=%d nsActive=%d) win=%p",
                        gAppIsActive ? 1 : 0, (NSApp && [NSApp isActive]) ? 1 : 0, (__bridge void *)self);
         return;
+    }
+    if (is_sdl_game_window(self)) {
+        NSWindow *win = (NSWindow *)self;
+        if (win.frame.size.width >= 640.0 && win.frame.size.height >= 480.0) {
+            enforce_primary_window_borderless_fullscreen(win, "orderFrontRegardless");
+        }
     }
     if (gOrigOrderFrontRegardlessIMP) {
         typedef void (*Fn)(id, SEL);
@@ -1539,6 +1648,157 @@ static void swizzled_activateIgnoringOtherApps(id self, SEL _cmd, BOOL flag) {
     }
 }
 
+static BOOL is_main_sized_sdl_window(NSWindow *win, NSRect rect) {
+    if (!win || is_secondary_orphan_game_window(win)) {
+        return NO;
+    }
+    if (gPrimaryFullscreenWindow && win == gPrimaryFullscreenWindow) {
+        return YES;
+    }
+    if (rect.size.width >= 640.0 && rect.size.height >= 480.0) {
+        return YES;
+    }
+    NSRect curF = win.frame;
+    if (curF.size.width >= 640.0 && curF.size.height >= 480.0) {
+        return YES;
+    }
+    return NO;
+}
+
+static void swizzled_sdlSetStyleMask(id self, SEL _cmd, NSWindowStyleMask styleMask) {
+    NSWindow *win = (NSWindow *)self;
+    NSWindowStyleMask cleanMask = is_secondary_orphan_game_window(win)
+        ? styleMask
+        : sanitize_sdl_style_mask(styleMask);
+    if (cleanMask != styleMask) {
+        debuglog_write("WIN", "SDLWindow setStyleMask: sanitized 0x%lx -> 0x%lx win=%p",
+                       (unsigned long)styleMask, (unsigned long)cleanMask, (__bridge void *)win);
+    }
+    if (gOrigSDLSetStyleMaskIMP) {
+        typedef void (*Fn)(id, SEL, NSWindowStyleMask);
+        ((Fn)gOrigSDLSetStyleMaskIMP)(self, _cmd, cleanMask);
+    }
+}
+
+static void swizzled_sdlSetCollectionBehavior(id self, SEL _cmd, NSWindowCollectionBehavior behavior) {
+    NSWindow *win = (NSWindow *)self;
+    NSWindowCollectionBehavior cleanBehavior = behavior;
+    if (!is_secondary_orphan_game_window(win)) {
+        cleanBehavior &= ~(NSWindowCollectionBehaviorFullScreenNone | NSWindowCollectionBehaviorFullScreenAuxiliary);
+        cleanBehavior |= NSWindowCollectionBehaviorFullScreenPrimary;
+    }
+    if (gOrigSDLSetCollectionBehaviorIMP) {
+        typedef void (*Fn)(id, SEL, NSWindowCollectionBehavior);
+        ((Fn)gOrigSDLSetCollectionBehaviorIMP)(self, _cmd, cleanBehavior);
+    }
+}
+
+static NSRect swizzled_sdlConstrainFrameRect(id self, SEL _cmd, NSRect frameRect, NSScreen *screen) {
+    NSWindow *win = (NSWindow *)self;
+    if (!gNotchFitInProgress && is_main_sized_sdl_window(win, frameRect)) {
+        return compute_primary_game_frame(win);
+    }
+    if (gOrigSDLConstrainFrameRectIMP) {
+        typedef NSRect (*Fn)(id, SEL, NSRect, NSScreen *);
+        return ((Fn)gOrigSDLConstrainFrameRectIMP)(self, _cmd, frameRect, screen);
+    }
+    return frameRect;
+}
+
+static void sync_content_view_to_window_bounds(NSWindow *win, NSRect targetFrame) {
+    if (!win || !win.contentView) {
+        return;
+    }
+    NSRect bounds = NSMakeRect(0.0, 0.0, targetFrame.size.width, targetFrame.size.height);
+    if (!NSEqualRects(win.contentView.frame, bounds)) {
+        [win.contentView setFrame:bounds];
+    }
+}
+
+static void swizzled_sdlSetFrameDisplay(id self, SEL _cmd, NSRect frameRect, BOOL flag) {
+    NSWindow *win = (NSWindow *)self;
+    NSRect finalRect = frameRect;
+    if (!gNotchFitInProgress && is_main_sized_sdl_window(win, frameRect)) {
+        NSWindowStyleMask curStyle = [win styleMask];
+        NSWindowStyleMask cleanStyle = sanitize_sdl_style_mask(curStyle);
+        if (cleanStyle != curStyle && gOrigSDLSetStyleMaskIMP) {
+            typedef void (*StyleFn)(id, SEL, NSWindowStyleMask);
+            ((StyleFn)gOrigSDLSetStyleMaskIMP)(self, @selector(setStyleMask:), cleanStyle);
+        }
+        finalRect = compute_primary_game_frame(win);
+        if (fabs(finalRect.size.width - frameRect.size.width) > 1.0 ||
+            fabs(finalRect.size.height - frameRect.size.height) > 1.0 ||
+            fabs(finalRect.origin.x - frameRect.origin.x) > 1.0 ||
+            fabs(finalRect.origin.y - frameRect.origin.y) > 1.0) {
+            debuglog_write("WIN", "SDLWindow setFrame clamped %.0fx%.0f@(%.0f,%.0f) -> %.0fx%.0f@(%.0f,%.0f)",
+                           frameRect.size.width, frameRect.size.height, frameRect.origin.x, frameRect.origin.y,
+                           finalRect.size.width, finalRect.size.height, finalRect.origin.x, finalRect.origin.y);
+        }
+        gNotchFitInProgress = YES;
+        if (gOrigSDLSetFrameDisplayIMP) {
+            typedef void (*Fn)(id, SEL, NSRect, BOOL);
+            ((Fn)gOrigSDLSetFrameDisplayIMP)(self, _cmd, finalRect, flag);
+        }
+        sync_content_view_to_window_bounds(win, finalRect);
+        gNotchFitInProgress = NO;
+        return;
+    }
+    if (gOrigSDLSetFrameDisplayIMP) {
+        typedef void (*Fn)(id, SEL, NSRect, BOOL);
+        ((Fn)gOrigSDLSetFrameDisplayIMP)(self, _cmd, finalRect, flag);
+    }
+}
+
+static void swizzled_sdlSetFrameDisplayAnimate(id self, SEL _cmd, NSRect frameRect, BOOL displayFlag, BOOL animateFlag) {
+    NSWindow *win = (NSWindow *)self;
+    NSRect finalRect = frameRect;
+    if (!gNotchFitInProgress && is_main_sized_sdl_window(win, frameRect)) {
+        NSWindowStyleMask curStyle = [win styleMask];
+        NSWindowStyleMask cleanStyle = sanitize_sdl_style_mask(curStyle);
+        if (cleanStyle != curStyle && gOrigSDLSetStyleMaskIMP) {
+            typedef void (*StyleFn)(id, SEL, NSWindowStyleMask);
+            ((StyleFn)gOrigSDLSetStyleMaskIMP)(self, @selector(setStyleMask:), cleanStyle);
+        }
+        finalRect = compute_primary_game_frame(win);
+        gNotchFitInProgress = YES;
+        if (gOrigSDLSetFrameDisplayAnimateIMP) {
+            typedef void (*Fn)(id, SEL, NSRect, BOOL, BOOL);
+            ((Fn)gOrigSDLSetFrameDisplayAnimateIMP)(self, _cmd, finalRect, displayFlag, NO);
+        }
+        sync_content_view_to_window_bounds(win, finalRect);
+        gNotchFitInProgress = NO;
+        return;
+    }
+    if (gOrigSDLSetFrameDisplayAnimateIMP) {
+        typedef void (*Fn)(id, SEL, NSRect, BOOL, BOOL);
+        ((Fn)gOrigSDLSetFrameDisplayAnimateIMP)(self, _cmd, finalRect, displayFlag, animateFlag);
+    }
+}
+
+static void swizzled_sdlSetContentSize(id self, SEL _cmd, NSSize newSize) {
+    NSWindow *win = (NSWindow *)self;
+    if (!gNotchFitInProgress && is_main_sized_sdl_window(win, NSMakeRect(0.0, 0.0, newSize.width, newSize.height))) {
+        debuglog_write("WIN", "SDLWindow setContentSize:(%.0fx%.0f) -> enforcing borderless fullscreen",
+                       newSize.width, newSize.height);
+        enforce_primary_window_borderless_fullscreen(win, "setContentSize");
+        return;
+    }
+    if (gOrigSDLSetContentSizeIMP) {
+        typedef void (*Fn)(id, SEL, NSSize);
+        ((Fn)gOrigSDLSetContentSizeIMP)(self, _cmd, newSize);
+    }
+}
+
+static void swizzled_sdlToggleFullScreen(id self, SEL _cmd, id sender) {
+    if (gOrigSDLToggleFullScreenIMP) {
+        typedef void (*Fn)(id, SEL, id);
+        BOOL prevAllow = gAllowResizableForSpaceToggle;
+        gAllowResizableForSpaceToggle = YES;
+        ((Fn)gOrigSDLToggleFullScreenIMP)(self, _cmd, sender);
+        gAllowResizableForSpaceToggle = prevAllow;
+    }
+}
+
 static IMP swizzle_instance_method(Class cls, SEL sel, IMP newIMP) {
     if (!cls) {
         return NULL;
@@ -1550,24 +1810,34 @@ static IMP swizzle_instance_method(Class cls, SEL sel, IMP newIMP) {
     return method_setImplementation(m, newIMP);
 }
 
+static void swizzle_target_class_method(Class targetCls, SEL sel, IMP newIMP, IMP *outOrigIMP) {
+    if (!targetCls || !sel || !newIMP) {
+        return;
+    }
+    Method m = class_getInstanceMethod(targetCls, sel);
+    if (!m) {
+        return;
+    }
+    const char *types = method_getTypeEncoding(m);
+    IMP curIMP = method_getImplementation(m);
+    if (class_addMethod(targetCls, sel, newIMP, types)) {
+        if (outOrigIMP) {
+            *outOrigIMP = curIMP;
+        }
+    } else {
+        IMP prev = method_setImplementation(m, newIMP);
+        if (outOrigIMP) {
+            *outOrigIMP = prev;
+        }
+    }
+}
+
 /*
- * Real hardware display-mode filter (CGDisplayCopyAllDisplayModes) + dynamic
- * NSScreen.visibleFrame fullscreen clamping (no synthetic modes).
+ * Autonomous minimal hardware display-mode filter (CGDisplayCopyAllDisplayModes):
+ * returns ONLY the single optimal real CoreGraphics 32-bit ARGB mode closest to
+ * 60 Hz (active logical desktop mode when <= 2560x1600, else best <= 2560x1600
+ * matching aspect ratio) so the menu has zero bloated/broken intermediate modes.
  */
-typedef struct {
-    size_t width;
-    size_t height;
-} Sims2CatalogResolution;
-
-static const Sims2CatalogResolution kSims2ResolutionWhitelist[] = {
-    { 1280,  800 }, { 1440,  900 }, { 1470,  956 }, { 1512,  982 },
-    { 1680, 1050 }, { 1728, 1080 }, { 1728, 1117 }, { 1800, 1169 },
-    { 1920, 1080 }, { 1920, 1200 }, { 2048, 1280 }, { 2056, 1329 },
-    { 2560, 1440 }, { 2560, 1600 },
-};
-static const size_t kSims2WhitelistCount =
-    sizeof(kSims2ResolutionWhitelist) / sizeof(kSims2ResolutionWhitelist[0]);
-
 static BOOL is_32bit_argb_pixel_encoding(CGDisplayModeRef mode) {
     if (!mode) {
         return NO;
@@ -1585,19 +1855,75 @@ static BOOL is_32bit_argb_pixel_encoding(CGDisplayModeRef mode) {
     return ok;
 }
 
-static BOOL is_whitelisted_or_desktop(size_t w, size_t h, size_t curW, size_t curH) {
+static BOOL is_better_display_mode(CGDisplayModeRef candidate,
+                                    CGDisplayModeRef best,
+                                    size_t curW,
+                                    size_t curH,
+                                    BOOL requireExactDesktop) {
+    if (!candidate || !is_32bit_argb_pixel_encoding(candidate)) {
+        return NO;
+    }
+    size_t w = CGDisplayModeGetWidth(candidate);
+    size_t h = CGDisplayModeGetHeight(candidate);
     if (w < 800 || h < 600 || w <= h || w > 2560 || h > 1600) {
         return NO;
     }
-    if (w == curW && h == curH) {
+    if (requireExactDesktop && (w != curW || h != curH)) {
+        return NO;
+    }
+    if (!best) {
         return YES;
     }
-    for (size_t i = 0; i < kSims2WhitelistCount; i++) {
-        if (kSims2ResolutionWhitelist[i].width == w && kSims2ResolutionWhitelist[i].height == h) {
-            return YES;
+
+    size_t bw = CGDisplayModeGetWidth(best);
+    size_t bh = CGDisplayModeGetHeight(best);
+    if (!requireExactDesktop && curW > 0 && curH > 0) {
+        double targetAspect = (double)curW / (double)curH;
+        double cAspectDiff = fabs(((double)w / (double)h) - targetAspect);
+        double bAspectDiff = fabs(((double)bw / (double)bh) - targetAspect);
+        BOOL cAspectOk = (cAspectDiff <= 0.03);
+        BOOL bAspectOk = (bAspectDiff <= 0.03);
+        if (cAspectOk != bAspectOk) {
+            return cAspectOk;
+        }
+        size_t cArea = w * h;
+        size_t bArea = bw * bh;
+        if (cArea != bArea) {
+            return cArea > bArea;
         }
     }
-    return NO;
+
+    double cHz = CGDisplayModeGetRefreshRate(candidate);
+    double bHz = CGDisplayModeGetRefreshRate(best);
+    double cDelta = fabs((cHz > 0.1 ? cHz : 60.0) - 60.0);
+    double bDelta = fabs((bHz > 0.1 ? bHz : 60.0) - 60.0);
+    if (cDelta < bDelta - 0.5) {
+        return YES;
+    }
+    if (bDelta < cDelta - 0.5) {
+        return NO;
+    }
+    BOOL c1x = (CGDisplayModeGetPixelWidth(candidate) == w && CGDisplayModeGetPixelHeight(candidate) == h);
+    BOOL b1x = (CGDisplayModeGetPixelWidth(best) == bw && CGDisplayModeGetPixelHeight(best) == bh);
+    return (c1x && !b1x);
+}
+
+static CGDisplayModeRef find_optimal_mode_in_array(CFArrayRef modes,
+                                                   size_t curW,
+                                                   size_t curH,
+                                                   BOOL requireExactDesktop) {
+    if (!modes) {
+        return NULL;
+    }
+    CFIndex count = CFArrayGetCount(modes);
+    CGDisplayModeRef best = NULL;
+    for (CFIndex i = 0; i < count; i++) {
+        CGDisplayModeRef m = (CGDisplayModeRef)CFArrayGetValueAtIndex(modes, i);
+        if (is_better_display_mode(m, best, curW, curH, requireExactDesktop)) {
+            best = m;
+        }
+    }
+    return best;
 }
 
 static CFArrayRef hook_CGDisplayCopyAllDisplayModes(CGDirectDisplayID display,
@@ -1616,75 +1942,63 @@ static CFArrayRef hook_CGDisplayCopyAllDisplayModes(CGDirectDisplayID display,
         CGDisplayModeRelease(cur);
     }
 
-    CFIndex realCount = CFArrayGetCount(realModes);
-    CFMutableArrayRef result = CFArrayCreateMutable(kCFAllocatorDefault, 0, &kCFTypeArrayCallBacks);
-    if (!result) {
-        return realModes;
-    }
+    BOOL desktopWithinCap = (curW >= 800 && curH >= 600 && curW > curH && curW <= 2560 && curH <= 1600);
+    CFArrayRef extraDupModes = NULL;
+    CGDisplayModeRef selected = NULL;
 
-    /* Keep one genuine macOS mode per WxH (closest to 60 Hz, then 1x backing). */
-    for (CFIndex i = 0; i < realCount; i++) {
-        CGDisplayModeRef m = (CGDisplayModeRef)CFArrayGetValueAtIndex(realModes, i);
-        if (!m) {
-            continue;
-        }
-        size_t w = CGDisplayModeGetWidth(m);
-        size_t h = CGDisplayModeGetHeight(m);
-        if (!is_whitelisted_or_desktop(w, h, curW, curH) || !is_32bit_argb_pixel_encoding(m)) {
-            continue;
-        }
-        double hz = CGDisplayModeGetRefreshRate(m);
-        double delta = fabs((hz > 0.1 ? hz : 60.0) - 60.0);
-        BOOL is1x = (CGDisplayModeGetPixelWidth(m) == w && CGDisplayModeGetPixelHeight(m) == h);
-
-        CFIndex existing = -1;
-        CFIndex resCount = CFArrayGetCount(result);
-        for (CFIndex r = 0; r < resCount; r++) {
-            CGDisplayModeRef e = (CGDisplayModeRef)CFArrayGetValueAtIndex(result, r);
-            if (CGDisplayModeGetWidth(e) == w && CGDisplayModeGetHeight(e) == h) {
-                existing = r;
-                break;
+    if (desktopWithinCap) {
+        selected = find_optimal_mode_in_array(realModes, curW, curH, YES);
+        if (!selected) {
+            CFMutableDictionaryRef dupOpts = CFDictionaryCreateMutable(kCFAllocatorDefault, 1,
+                                                                       &kCFTypeDictionaryKeyCallBacks,
+                                                                       &kCFTypeDictionaryValueCallBacks);
+            if (dupOpts) {
+                CFDictionarySetValue(dupOpts, kCGDisplayShowDuplicateLowResolutionModes, kCFBooleanTrue);
+                extraDupModes = CGDisplayCopyAllDisplayModes(display, dupOpts);
+                CFRelease(dupOpts);
+                selected = find_optimal_mode_in_array(extraDupModes, curW, curH, YES);
             }
         }
-        if (existing < 0) {
-            CFArrayAppendValue(result, m);
-            continue;
-        }
-        CGDisplayModeRef e = (CGDisplayModeRef)CFArrayGetValueAtIndex(result, existing);
-        double eHz = CGDisplayModeGetRefreshRate(e);
-        double eDelta = fabs((eHz > 0.1 ? eHz : 60.0) - 60.0);
-        BOOL e1x = (CGDisplayModeGetPixelWidth(e) == w && CGDisplayModeGetPixelHeight(e) == h);
-        if (delta < eDelta - 0.5 || (fabs(delta - eDelta) <= 0.5 && is1x && !e1x)) {
-            CFArraySetValueAtIndex(result, existing, m);
+    }
+    if (!selected) {
+        selected = find_optimal_mode_in_array(realModes, curW, curH, NO);
+        if (!selected && extraDupModes) {
+            selected = find_optimal_mode_in_array(extraDupModes, curW, curH, NO);
         }
     }
 
-    CFIndex keptCount = CFArrayGetCount(result);
-    if (keptCount == 0) {
-        CFRelease(result);
+    CFIndex realCount = CFArrayGetCount(realModes);
+    if (!selected) {
+        if (extraDupModes) {
+            CFRelease(extraDupModes);
+        }
         debuglog_write("DISPLAY", "filter kept 0/%ld modes -> returning unfiltered macOS list", (long)realCount);
         return realModes;
     }
+
+    CFMutableArrayRef result = CFArrayCreateMutable(kCFAllocatorDefault, 1, &kCFTypeArrayCallBacks);
+    if (!result) {
+        if (extraDupModes) {
+            CFRelease(extraDupModes);
+        }
+        return realModes;
+    }
+    CFArrayAppendValue(result, selected);
 
     if (gDebugBootEnabled) {
         static int sLoggedEnum = 0;
         if (sLoggedEnum < 4) {
             sLoggedEnum++;
-            char listBuf[1024];
-            size_t off = 0;
-            listBuf[0] = '\0';
-            for (CFIndex r = 0; r < keptCount && off < sizeof(listBuf) - 32; r++) {
-                CGDisplayModeRef e = (CGDisplayModeRef)CFArrayGetValueAtIndex(result, r);
-                off += (size_t)snprintf(listBuf + off, sizeof(listBuf) - off, "%s%zux%zu@%.0f",
-                                        r ? "," : "",
-                                        CGDisplayModeGetWidth(e), CGDisplayModeGetHeight(e),
-                                        CGDisplayModeGetRefreshRate(e));
-            }
-            debuglog_write("DISPLAY", "CGDisplayCopyAllDisplayModes(display=%u) real=%ld kept=%ld desktop=%zux%zu modes=[%s]",
-                           (unsigned)display, (long)realCount, (long)keptCount, curW, curH, listBuf);
+            debuglog_write("DISPLAY", "CGDisplayCopyAllDisplayModes(display=%u) real=%ld kept=1 desktop=%zux%zu optimal=%zux%zu@%.0f",
+                           (unsigned)display, (long)realCount, curW, curH,
+                           CGDisplayModeGetWidth(selected), CGDisplayModeGetHeight(selected),
+                           CGDisplayModeGetRefreshRate(selected));
         }
     }
 
+    if (extraDupModes) {
+        CFRelease(extraDupModes);
+    }
     CFRelease(realModes);
     return (CFArrayRef)result;
 }
@@ -1737,9 +2051,10 @@ static void debuglog_window_geometry(const char *reason, NSWindow *win) {
     NSRect sf = scr ? scr.frame : NSZeroRect;
     NSRect vf = scr ? scr.visibleFrame : NSZeroRect;
     BOOL fs = (win.styleMask & NSWindowStyleMaskFullScreen) != 0;
-    debuglog_write("WIN", "%s win=%p class=%s fs=%d frame=%.0fx%.0f@(%.0f,%.0f) content=%.0fx%.0f "
+    debuglog_write("WIN", "%s win=%p class=%s fs=%d style=0x%lx frame=%.0fx%.0f@(%.0f,%.0f) content=%.0fx%.0f "
                    "screen=%.0fx%.0f visible=%.0fx%.0f@(%.0f,%.0f) scale=%.1f",
                    reason, (__bridge void *)win, object_getClassName(win), fs,
+                   (unsigned long)win.styleMask,
                    f.size.width, f.size.height, f.origin.x, f.origin.y,
                    cb.size.width, cb.size.height,
                    sf.size.width, sf.size.height,
@@ -1747,28 +2062,77 @@ static void debuglog_window_geometry(const char *reason, NSWindow *win) {
                    scr ? scr.backingScaleFactor : 0.0);
 }
 
-static void clamp_fullscreen_window_to_visible_frame(NSWindow *win) {
-    if (gNotchFitInProgress || !win || !is_sdl_game_window(win) ||
-        !(win.styleMask & NSWindowStyleMaskFullScreen)) {
+static void enforce_primary_window_borderless_fullscreen(NSWindow *win, const char *reason) {
+    if (gNotchFitInProgress || !win || !is_sdl_game_window(win) || is_secondary_orphan_game_window(win)) {
+        return;
+    }
+    NSRect curF = win.frame;
+    if (curF.size.width < 640.0 && curF.size.height < 480.0 && win != gPrimaryFullscreenWindow) {
         return;
     }
     NSScreen *scr = win.screen ?: [NSScreen mainScreen];
     if (!scr) {
         return;
     }
-    update_cached_screen_geometry(scr);
-    NSRect vf = scr.visibleFrame;
-    NSRect f = win.frame;
+
+    BOOL inSpace = ((win.styleMask & NSWindowStyleMaskFullScreen) != 0);
+    if (inSpace) {
+        apply_borderless_presentation_options(NO);
+    } else if (gAppIsActive && !gAppIsHiding && !gAppIsTerminating && !gInFullscreenTransition) {
+        apply_borderless_presentation_options(YES);
+    }
+
+    NSWindowStyleMask curStyle = win.styleMask;
+    NSWindowStyleMask cleanStyle = sanitize_sdl_style_mask(curStyle);
+    if (cleanStyle != curStyle) {
+        debuglog_write("WIN", "strip styleMask 0x%lx -> 0x%lx (%s) win=%p",
+                       (unsigned long)curStyle, (unsigned long)cleanStyle,
+                       reason ? reason : "guard", (__bridge void *)win);
+        if (gOrigSDLSetStyleMaskIMP && gSDLWindowClass && [win isKindOfClass:gSDLWindowClass]) {
+            typedef void (*StyleFn)(id, SEL, NSWindowStyleMask);
+            ((StyleFn)gOrigSDLSetStyleMaskIMP)(win, @selector(setStyleMask:), cleanStyle);
+        } else {
+            [win setStyleMask:cleanStyle];
+        }
+    }
+
+    if (![win.backgroundColor isEqual:[NSColor blackColor]]) {
+        [win setBackgroundColor:[NSColor blackColor]];
+    }
+    if (![win isOpaque]) {
+        [win setOpaque:YES];
+    }
+    if ([win hasShadow]) {
+        [win setHasShadow:NO];
+    }
+    NSWindowCollectionBehavior behavior = win.collectionBehavior;
+    if ((behavior & NSWindowCollectionBehaviorFullScreenPrimary) == 0 ||
+        (behavior & (NSWindowCollectionBehaviorFullScreenNone | NSWindowCollectionBehaviorFullScreenAuxiliary)) != 0) {
+        NSWindowCollectionBehavior targetBehavior =
+            (behavior & ~(NSWindowCollectionBehaviorFullScreenNone | NSWindowCollectionBehaviorFullScreenAuxiliary)) |
+            NSWindowCollectionBehaviorFullScreenPrimary;
+        if (gOrigSDLSetCollectionBehaviorIMP && gSDLWindowClass && [win isKindOfClass:gSDLWindowClass]) {
+            typedef void (*BehFn)(id, SEL, NSWindowCollectionBehavior);
+            ((BehFn)gOrigSDLSetCollectionBehaviorIMP)(win, @selector(setCollectionBehavior:), targetBehavior);
+        } else {
+            [win setCollectionBehavior:targetBehavior];
+        }
+    }
+
+    NSRect vf = compute_primary_game_frame(win);
     if (vf.size.width < 640.0 || vf.size.height < 480.0) {
         return;
     }
-    if (fabs(f.size.width - vf.size.width) <= 1.0 && fabs(f.size.height - vf.size.height) <= 1.0 &&
-        fabs(f.origin.x - vf.origin.x) <= 1.0 && fabs(f.origin.y - vf.origin.y) <= 1.0) {
+
+    if (fabs(curF.size.width - vf.size.width) <= 1.0 && fabs(curF.size.height - vf.size.height) <= 1.0 &&
+        fabs(curF.origin.x - vf.origin.x) <= 1.0 && fabs(curF.origin.y - vf.origin.y) <= 1.0) {
         gNotchTargetFrame = vf;
         gNotchClampAttempts = 0;
+        sync_content_view_to_window_bounds(win, vf);
         return;
     }
     if (NSEqualRects(gNotchTargetFrame, vf) && gNotchClampAttempts >= 8) {
+        sync_content_view_to_window_bounds(win, curF);
         return;
     }
     if (!NSEqualRects(gNotchTargetFrame, vf)) {
@@ -1777,19 +2141,23 @@ static void clamp_fullscreen_window_to_visible_frame(NSWindow *win) {
     }
     gNotchClampAttempts++;
     gNotchFitInProgress = YES;
-    debuglog_write("WIN", "clamp fs #%d %.0fx%.0f@(%.0f,%.0f) -> visibleFrame %.0fx%.0f@(%.0f,%.0f)",
-                   gNotchClampAttempts,
-                   f.size.width, f.size.height, f.origin.x, f.origin.y,
+    debuglog_write("WIN", "clamp %s #%d (fs=%d) %.0fx%.0f@(%.0f,%.0f) -> %.0fx%.0f@(%.0f,%.0f)",
+                   reason ? reason : "guard", gNotchClampAttempts, inSpace ? 1 : 0,
+                   curF.size.width, curF.size.height, curF.origin.x, curF.origin.y,
                    vf.size.width, vf.size.height, vf.origin.x, vf.origin.y);
-    [win setFrame:vf display:YES];
-    if (win.contentView) {
-        NSRect bounds = NSMakeRect(0.0, 0.0, vf.size.width, vf.size.height);
-        if (!NSEqualRects(win.contentView.frame, bounds)) {
-            [win.contentView setFrame:bounds];
-        }
+    if (gOrigSDLSetFrameDisplayIMP && gSDLWindowClass && [win isKindOfClass:gSDLWindowClass]) {
+        typedef void (*FrameFn)(id, SEL, NSRect, BOOL);
+        ((FrameFn)gOrigSDLSetFrameDisplayIMP)(win, @selector(setFrame:display:), vf, YES);
+    } else {
+        [win setFrame:vf display:YES];
     }
+    sync_content_view_to_window_bounds(win, vf);
     gNotchFitInProgress = NO;
     debuglog_window_geometry("after-clamp", win);
+}
+
+static void clamp_fullscreen_window_to_visible_frame(NSWindow *win) {
+    enforce_primary_window_borderless_fullscreen(win, "observer");
 }
 
 static void register_window_geometry_observers(void) {
@@ -1826,6 +2194,13 @@ static void register_window_geometry_observers(void) {
         debuglog_window_geometry("DidResize", win);
         clamp_fullscreen_window_to_visible_frame(win);
     }];
+    [nc addObserverForName:NSWindowDidMoveNotification object:nil queue:nil
+                usingBlock:^(NSNotification *note) {
+        NSWindow *win = (NSWindow *)note.object;
+        if (win && is_sdl_game_window(win) && !is_secondary_orphan_game_window(win)) {
+            clamp_fullscreen_window_to_visible_frame(win);
+        }
+    }];
     [nc addObserverForName:NSWindowDidEnterFullScreenNotification object:nil queue:nil
                 usingBlock:^(NSNotification *note) {
         NSWindow *win = (NSWindow *)note.object;
@@ -1838,7 +2213,11 @@ static void register_window_geometry_observers(void) {
     [nc addObserverForName:NSWindowDidExitFullScreenNotification object:nil queue:nil
                 usingBlock:^(NSNotification *note) {
         gNotchClampAttempts = 0;
-        debuglog_window_geometry("DidExitFullScreen", (NSWindow *)note.object);
+        NSWindow *win = (NSWindow *)note.object;
+        debuglog_window_geometry("DidExitFullScreen", win);
+        if (!gAppIsTerminating && win && is_sdl_game_window(win) && !is_secondary_orphan_game_window(win)) {
+            enforce_primary_window_borderless_fullscreen(win, "DidExitFullScreen");
+        }
     }];
 }
 
@@ -2041,6 +2420,7 @@ static void sims2_trackpad_init(void) {
     gOrigOrderFrontRegardlessIMP = swizzle_instance_method(winCls, @selector(orderFrontRegardless), (IMP)swizzled_orderFrontRegardless);
 
     Class sdlWinCls = objc_getClass("SDLWindow");
+    gSDLWindowClass = sdlWinCls;
     if (sdlWinCls) {
         gOrigCanBecomeKeyWindowIMP = swizzle_instance_method(sdlWinCls,
                                                              @selector(canBecomeKeyWindow),
@@ -2048,6 +2428,20 @@ static void sims2_trackpad_init(void) {
         gOrigCanBecomeMainWindowIMP = swizzle_instance_method(sdlWinCls,
                                                               @selector(canBecomeMainWindow),
                                                               (IMP)swizzled_canBecomeMainWindow);
+        swizzle_target_class_method(sdlWinCls, @selector(setStyleMask:),
+                                    (IMP)swizzled_sdlSetStyleMask, &gOrigSDLSetStyleMaskIMP);
+        swizzle_target_class_method(sdlWinCls, @selector(setFrame:display:),
+                                    (IMP)swizzled_sdlSetFrameDisplay, &gOrigSDLSetFrameDisplayIMP);
+        swizzle_target_class_method(sdlWinCls, @selector(setFrame:display:animate:),
+                                    (IMP)swizzled_sdlSetFrameDisplayAnimate, &gOrigSDLSetFrameDisplayAnimateIMP);
+        swizzle_target_class_method(sdlWinCls, @selector(setContentSize:),
+                                    (IMP)swizzled_sdlSetContentSize, &gOrigSDLSetContentSizeIMP);
+        swizzle_target_class_method(sdlWinCls, @selector(constrainFrameRect:toScreen:),
+                                    (IMP)swizzled_sdlConstrainFrameRect, &gOrigSDLConstrainFrameRectIMP);
+        swizzle_target_class_method(sdlWinCls, @selector(setCollectionBehavior:),
+                                    (IMP)swizzled_sdlSetCollectionBehavior, &gOrigSDLSetCollectionBehaviorIMP);
+        swizzle_target_class_method(sdlWinCls, @selector(toggleFullScreen:),
+                                    (IMP)swizzled_sdlToggleFullScreen, &gOrigSDLToggleFullScreenIMP);
     }
 
     Class listenerCls = objc_getClass("Cocoa_WindowListener");
@@ -2078,6 +2472,7 @@ static void sims2_trackpad_init(void) {
         gAppIsActive = NO;
         gLastResignTimestamp = CFAbsoluteTimeGetCurrent();
         reset_gesture_and_key_state(resolve_window_listener());
+        apply_borderless_presentation_options(NO);
         CGAssociateMouseAndMouseCursorPosition(true);
         CGDisplayShowCursor(kCGDirectMainDisplay);
         debuglog_write("APP", "WillResignActive");
@@ -2103,6 +2498,9 @@ static void sims2_trackpad_init(void) {
         gAppIsHiding = NO;
         gLastResignTimestamp = 0.0;
         neutralize_secondary_orphan_windows(gPrimaryFullscreenWindow);
+        if (gPrimaryFullscreenWindow) {
+            enforce_primary_window_borderless_fullscreen(gPrimaryFullscreenWindow, "WillBecomeActive");
+        }
         debuglog_write("APP", "WillBecomeActive");
     }];
     [nc addObserverForName:NSApplicationDidBecomeActiveNotification
@@ -2115,6 +2513,9 @@ static void sims2_trackpad_init(void) {
         gAppIsHiding = NO;
         gLastResignTimestamp = 0.0;
         neutralize_secondary_orphan_windows(gPrimaryFullscreenWindow);
+        if (gPrimaryFullscreenWindow) {
+            enforce_primary_window_borderless_fullscreen(gPrimaryFullscreenWindow, "DidBecomeActive");
+        }
         debuglog_write("APP", "DidBecomeActive");
     }];
     [nc addObserverForName:NSApplicationWillHideNotification
@@ -2123,6 +2524,7 @@ static void sims2_trackpad_init(void) {
                 usingBlock:^(NSNotification *note) {
         (void)note;
         gAppIsHiding = YES;
+        apply_borderless_presentation_options(NO);
         debuglog_write("APP", "WillHide");
     }];
     [nc addObserverForName:NSApplicationDidUnhideNotification
@@ -2132,6 +2534,15 @@ static void sims2_trackpad_init(void) {
         (void)note;
         gAppIsHiding = NO;
         debuglog_write("APP", "DidUnhide");
+    }];
+    [nc addObserverForName:NSApplicationWillTerminateNotification
+                    object:nil
+                     queue:nil
+                usingBlock:^(NSNotification *note) {
+        (void)note;
+        gAppIsTerminating = YES;
+        apply_borderless_presentation_options(NO);
+        debuglog_write("APP", "WillTerminate");
     }];
 
     uint16_t initLeft = 43, initRight = 47;
