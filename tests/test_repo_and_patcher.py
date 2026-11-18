@@ -396,14 +396,17 @@ class TestMacScriptsIntegrity(unittest.TestCase):
             with tempfile.TemporaryDirectory() as tmp:
                 base = Path(tmp)
 
-                # 1. Missing userProps.xml must succeed without error
+                # 1. Missing userProps.xml must initialize activeDeviceDisplayMode to native resolution without .backup
                 missing_xml = base / "missing.xml"
                 r_missing = self._run_bash_lib(
                     script,
-                    'repair_userprops_xml "$1" "1800x1169" "1800x1169,1280x800" 0',
+                    'repair_userprops_xml "$1" "1800x1169" "1800x1169" 0',
                     missing_xml.as_posix(),
                 )
                 self.assertEqual(r_missing.returncode, 0, r_missing.stderr or r_missing.stdout)
+                self.assertTrue(missing_xml.exists())
+                self.assertIn('key="activeDeviceDisplayMode"', missing_xml.read_text(encoding="utf-8"))
+                self.assertIn("1800x1169x32x60", missing_xml.read_text(encoding="utf-8"))
                 self.assertFalse(missing_xml.with_suffix(".xml.backup").exists())
 
                 # 2. Valid 60 Hz mode in supported list must remain untouched without creating .backup
@@ -468,6 +471,7 @@ class TestMacScriptsIntegrity(unittest.TestCase):
                 self.assertEqual(r_bad.returncode, 0)
                 self.assertIn(">1800x1169x32x60<", bad_xml.read_text(encoding="utf-8"))
 
+                # 6a. Known Sims 2 root XML without activeDeviceDisplayMode gets initialized to native resolution
                 nokey_xml = base / "nokey.xml"
                 nokey_text = '<?xml version="1.0"?><cGZPersistDBSegment></cGZPersistDBSegment>\n'
                 nokey_xml.write_text(nokey_text, encoding="utf-8")
@@ -476,9 +480,25 @@ class TestMacScriptsIntegrity(unittest.TestCase):
                     'repair_userprops_xml "$1" "1800x1169" "1800x1169" 0',
                     nokey_xml.as_posix(),
                 )
-                self.assertEqual(r_nokey.returncode, 0)
-                self.assertEqual(nokey_xml.read_text(encoding="utf-8"), nokey_text)
-                self.assertFalse(Path(str(nokey_xml) + ".backup").exists())
+                self.assertEqual(r_nokey.returncode, 0, r_nokey.stderr or r_nokey.stdout)
+                nokey_updated = nokey_xml.read_text(encoding="utf-8")
+                self.assertIn('key="activeDeviceDisplayMode"', nokey_updated)
+                self.assertIn("1800x1169x32x60", nokey_updated)
+                self.assertTrue(Path(str(nokey_xml) + ".backup").exists())
+                self.assertEqual(Path(str(nokey_xml) + ".backup").read_text(encoding="utf-8"), nokey_text)
+
+                # 6b. Unrecognized XML without known root tag must stay untouched (NO_KEY, no .backup)
+                unknown_xml = base / "unknown.xml"
+                unknown_text = '<?xml version="1.0"?><UnknownRoot></UnknownRoot>\n'
+                unknown_xml.write_text(unknown_text, encoding="utf-8")
+                r_unknown = self._run_bash_lib(
+                    script,
+                    'repair_userprops_xml "$1" "1800x1169" "1800x1169" 0',
+                    unknown_xml.as_posix(),
+                )
+                self.assertEqual(r_unknown.returncode, 0, r_unknown.stderr or r_unknown.stdout)
+                self.assertEqual(unknown_xml.read_text(encoding="utf-8"), unknown_text)
+                self.assertFalse(Path(str(unknown_xml) + ".backup").exists())
 
     def test_v13_count_cc_and_maxfiles_warnings(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -959,20 +979,22 @@ class TestMacScriptsIntegrity(unittest.TestCase):
         ):
             self.assertIn(crash_tok, src_m)
 
-        for cat_pair in (
-            "{ 1280,  800 }",
-            "{ 1440,  900 }",
-            "{ 1512,  982 }",
-            "{ 1680, 1050 }",
-            "{ 1800, 1169 }",
-            "{ 2048, 1280 }",
-            "{ 2560, 1600 }",
-            "{ 1728, 1080 }",
-            "{ 1920, 1080 }",
-            "{ 1920, 1200 }",
-            "{ 2560, 1440 }",
+        # Autonomous minimal single-native display mode selection + strict SDLWindow borderless guard
+        self.assertNotIn("kSims2ResolutionWhitelist", src_m)
+        for guard_tok in (
+            "find_optimal_mode_in_array",
+            "is_better_display_mode",
+            "swizzle_target_class_method",
+            "swizzled_sdlSetStyleMask",
+            "swizzled_sdlSetFrameDisplay",
+            "sanitize_sdl_style_mask",
+            "NSWindowStyleMaskBorderless",
+            "apply_borderless_presentation_options",
+            "compute_primary_game_frame",
+            "sync_content_view_to_window_bounds",
+            "enforce_primary_window_borderless_fullscreen",
         ):
-            self.assertIn(cat_pair, src_m)
+            self.assertIn(guard_tok, src_m)
 
         # Compiled dylib header check (Mach-O 64-bit x86_64 MH_DYLIB)
         raw = dylib.read_bytes()
