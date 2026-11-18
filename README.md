@@ -1,6 +1,7 @@
-# 💎 Sims 2 Crash Patch — macOS Edition (`v1.4.0`)
+# 💎 Sims 2 Crash Patch — macOS Edition (`v1.4.1`)
 
-[![Release v1.4.0](https://img.shields.io/badge/Release-v1.4.0-blue.svg)](https://github.com/Justinbdna/sims2-crash-patch/releases)
+[![Release v1.4.1](https://img.shields.io/badge/Release-v1.4.1-blue.svg)](https://github.com/Justinbdna/sims2-crash-patch/releases)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![macOS Apple Silicon & Intel](https://img.shields.io/badge/macOS-Apple%20Silicon%20%26%20Intel-black.svg?logo=apple)](https://apple.com)
 [![ProMotion 120Hz Fix](https://img.shields.io/badge/ProMotion-120Hz%20Fix-brightgreen.svg)](https://github.com/Justinbdna/sims2-crash-patch)
 [![Zero External Dependencies](https://img.shields.io/badge/Dependencies-Zero%20(No%20Xcode)-success.svg)](https://github.com/Justinbdna/sims2-crash-patch)
@@ -32,20 +33,20 @@
 > **Zero external dependencies:** uses only built-in macOS system tools (no Xcode or Command Line Tools required).
 
 ### 🇫🇷 Français
-1. **Téléchargez et décompressez** [`sims2-crash-patch-v1.4.0.zip`](https://github.com/Justinbdna/sims2-crash-patch/releases) *(fermez d'abord Les Sims 2 avec `Cmd + Q`)*.
+1. **Téléchargez et décompressez** [`sims2-crash-patch-v1.4.1.zip`](https://github.com/Justinbdna/sims2-crash-patch/releases) *(fermez d'abord Les Sims 2 avec `Cmd + Q`)*.
 2. **Débloquez Gatekeeper :** double-cliquez sur `patch_sims2.command` → si macOS affiche *« bloqué pour protéger votre Mac »*, cliquez sur **Terminé**, ouvrez **Réglages Système → Confidentialité et sécurité**, descendez tout en bas et cliquez sur **Ouvrir quand même**.
 3. **Appuyez sur `Entrée` (`[1]`)** dans le Terminal :
    - Tapez votre mot de passe session Mac à l'aveugle (`Password:`, **aucun caractère `*` ne s'affiche**, c'est la sécurité normale de macOS) puis faites `Entrée`.
    - Quand macOS affiche *« Terminal souhaite contrôler Finder »*, cliquez sur **Autoriser** pour copier vos sauvegardes sans rien écraser.
-   - Attendez le message `PATCH COMPLETE (v1.4.0)` puis lancez le jeu normalement.
+   - Attendez le message `PATCH COMPLETE (v1.4.1)` puis lancez le jeu normalement.
 
 ### 🇬🇧 English
-1. **Download and unzip** [`sims2-crash-patch-v1.4.0.zip`](https://github.com/Justinbdna/sims2-crash-patch/releases) *(quit The Sims 2 first with `Cmd + Q`)*.
+1. **Download and unzip** [`sims2-crash-patch-v1.4.1.zip`](https://github.com/Justinbdna/sims2-crash-patch/releases) *(quit The Sims 2 first with `Cmd + Q`)*.
 2. **Bypass Gatekeeper:** double-click `patch_sims2.command` → if macOS shows *"blocked to protect your Mac"*, click **Done**, open **System Settings → Privacy & Security**, scroll down and click **Open Anyway**.
 3. **Press `Enter` (`[1]`)** in Terminal:
    - Type your Mac login password blindly at `Password:` (**nothing prints on screen**, that is standard macOS security) and press `Enter`.
    - When macOS asks *"Terminal wants access to control Finder"*, click **Allow** so your App Store saves are safely copied without overwriting anything.
-   - Wait for `PATCH COMPLETE (v1.4.0)` and launch the game as usual.
+   - Wait for `PATCH COMPLETE (v1.4.1)` and launch the game as usual.
 
 ---
 
@@ -70,21 +71,21 @@ En plus de `patch_sims2.command`, deux scripts compagnons sont inclus dans l'arc
 | **`restore_sims2.command`** | Désinstallation complète et propre : restaure l'exécutable original vérifié (`Sims2XP_Exe.backup`) et `Graphics Rules.sgr.backup`, retire le module trackpad, re-signe l'app et nettoie le `LaunchDaemon` si le patch l'avait ajouté. *(Pour retrouver aussi la signature Mac App Store officielle, supprimez puis retéléchargez l'app depuis l'App Store ; vos sauvegardes restent intactes.)* | Clean full uninstall: restores the verified original binary (`Sims2XP_Exe.backup`) and `Graphics Rules.sgr.backup`, removes the trackpad module, re-signs the app, and removes the managed `LaunchDaemon` if installed by this patch. *(To also restore the Apple App Store signature/Sandbox, delete and re-download the app from the Mac App Store; saves are kept.)* |
 
 > [!NOTE]
-> **Résolution en jeu (`v1.4.0`) :** La résolution et le plein écran sous l'encoche sont configurés **au lancement du jeu** (via `userProps.xml` / `Graphics Rules.sgr` et l'option `[2]` de `clean_sims2_cache.command`). **Il n'y a pas de changement de résolution à chaud en pleine partie dans la `v1.4.0`.**  
-> **In-game resolution (`v1.4.0`):** Resolution and under-notch fullscreen are applied **at game launch** (via `userProps.xml` / `Graphics Rules.sgr` and `clean_sims2_cache.command` option `[2]`). **There is no in-game hot-swap resolution switching in `v1.4.0`.**
+> **Résolution en jeu (`v1.4.1`) :** La résolution et le plein écran sous l'encoche sont configurés **au lancement du jeu** (via `userProps.xml` / `Graphics Rules.sgr` et l'option `[2]` de `clean_sims2_cache.command`). **Il n'y a pas de changement de résolution à chaud en pleine partie dans la `v1.4.1`.**  
+> **In-game resolution (`v1.4.1`):** Resolution and under-notch fullscreen are applied **at game launch** (via `userProps.xml` / `Graphics Rules.sgr` and `clean_sims2_cache.command` option `[2]`). **There is no in-game hot-swap resolution switching in `v1.4.1`.**
 
 ---
 
 ## 🛟 Support & Dépannage rapide / Support & Quick Troubleshooting
 
 ### Outil intégré : `[2] Diagnostic & Support GitHub`
-Par défaut, la `v1.4.0` est **100 % silencieuse** : aucun fichier de log n'est écrit lors d'une partie normale.
+Par défaut, la `v1.4.1` est **100 % silencieuse** : aucun fichier de log n'est écrit lors d'une partie normale.
 * Si un plantage survient, un fichier `crash_report.log` est automatiquement créé dans `~/Library/Logs/Sims2-Crash-Patch/`.
 * En cas de souci, lancez **`patch_sims2.command` → `[2] Diagnostic & Support GitHub`** :
   * Activez/désactivez le mode debug à la demande (`debug_boot.log`).
   * Générez `github_support_report.md` : **votre nom d'utilisateur macOS est anonymisé avec `~`**, les infos utiles (`crash_report.log`, écran, `userProps.xml`) sont rassemblées, et le rapport est **copié automatiquement dans votre presse-papier** prêt à coller dans une [issue GitHub](https://github.com/Justinbdna/sims2-crash-patch/issues/new/choose).
 
-*By default, `v1.4.0` writes zero log files during normal gameplay. Only a crash triggers `crash_report.log`. Run `patch_sims2.command` → `[2] Diagnostic & Support GitHub` to toggle optional `debug_boot.log` or generate an anonymized (`~`) `github_support_report.md` copied straight to your clipboard for GitHub Issues.*
+*By default, `v1.4.1` writes zero log files during normal gameplay. Only a crash triggers `crash_report.log`. Run `patch_sims2.command` → `[2] Diagnostic & Support GitHub` to toggle optional `debug_boot.log` or generate an anonymized (`~`) `github_support_report.md` copied straight to your clipboard for GitHub Issues.*
 
 ### Cas fréquents / Common Cases
 * **Gatekeeper bloque le script :** double-cliquez sur `patch_sims2.command` → si macOS affiche *« bloqué pour protéger votre Mac »*, cliquez sur **Terminé**, ouvrez **Réglages Système → Confidentialité et sécurité**, descendez tout en bas et cliquez sur **Ouvrir quand même**.
@@ -92,6 +93,34 @@ Par défaut, la `v1.4.0` est **100 % silencieuse** : aucun fichier de log n'est 
 * **Sauvegardes / Finder (`-1743` ou `-5000`) :** Vos données actives sont dans `~/Library/Application Support/Aspyr/The Sims 2/`. Si vos anciens quartiers n'apparaissent pas, vérifiez `~/Library/Application Support/Aspyr/The Sims 2 (Sandbox Backup ...)` et fusionnez `Neighborhoods/` + `Downloads/` (jeu fermé). En cas d'erreur `-1743`, autorisez **Terminal → Finder** dans **Réglages Système → Confidentialité et sécurité → Automatisation**.
 * **Crash après débranchement d'écran externe :** Lancez `clean_sims2_cache.command` → **`[2]`** pour réinitialiser `userProps.xml` sur votre écran actuel en 60 Hz.
 * **Mods/CC manquants :** Décompressez bien vos `.zip`/`.rar`/`.7z` en `.package` dans `~/Library/Application Support/Aspyr/The Sims 2/Downloads/` et lancez `clean_sims2_cache.command` → **`[1]`** puis **`[3]`**.
+
+---
+
+## ⚖️ Mentions Légales, Licence & Préservation Logicielle / Legal Notice, License & Software Preservation
+
+### 🇫🇷 Français — Projet communautaire, gratuit & à but non lucratif
+* **Licence MIT & Zéro but lucratif :** Ce projet est **100 % gratuit, open-source ([`LICENSE`](LICENSE)) et à but strictement non lucratif** (aucune publicité, aucune monétisation, aucune télémétrie).
+* **Objet du correctif (débogage & préservation) :** Cet outil communautaire vise uniquement à **déboguer et corriger des incompatibilités techniques** empêchant le lancement ou l'utilisation normale d'un jeu ancien et non maintenu pour Apple Silicon (*The Sims 2: Super Collection* : crash au démarrage sur écrans 120 Hz ProMotion, gestion de l'encoche macOS, perte de focus `Command+Tab` et support trackpad).
+* **Propriété légitime, zéro binaire & zéro contournement de DRM :** Aucun fichier propriétaire du jeu n'est distribué dans ce dépôt ou dans les archives, et **aucun mécanisme de protection (DRM) ou de licence n'est contourné**. L'utilisateur doit posséder une copie légalement acquise du jeu (Mac App Store).
+* **Non-affiliation :** Ce projet est indépendant et **n'est ni affilié à, ni approuvé par, ni sponsorisé par** Electronic Arts Inc. (EA), Maxis, Aspyr Media Inc. ou Apple Inc. Toutes les marques citées appartiennent à leurs propriétaires respectifs.
+* **Cadre juridique international (à titre informatif) :**
+  * **Union Européenne (UE / EEE) :** Directive `2009/24/CE` sur la protection juridique des programmes d'ordinateur — **article 5(1)** *(actes nécessaires à l'utilisation du programme par l'acquéreur légitime, y compris la correction d'erreurs)* et **article 6** *(interopérabilité)*, ainsi que leurs transpositions nationales (ex. *Code de la propriété intellectuelle* en France, art. `L122-6-1`).
+  * **États-Unis (USA) :** `17 U.S.C. § 117(a)` *(adaptation essentielle permettant l'utilisation d'une copie légitime)*, `17 U.S.C. § 1201(f)` *(interopérabilité)* et `17 U.S.C. § 107` *(fair use à des fins techniques, de recherche et de préservation non commerciale)*.
+  * **Royaume-Uni (UK) :** *Copyright, Designs and Patents Act 1988*, sections `50B` & `50C` *(interopérabilité et correction d'erreurs par l'utilisateur légitime)*.
+  * **Autres pays (Canada, Australie, Suisse, principes OMPI / Convention de Berne) :** exceptions législatives analogues encadrant la correction d'erreurs, l'interopérabilité et la préservation logicielle sans but lucratif par le propriétaire d'une copie légitime (ex. Canada *Loi sur le droit d'auteur* art. `30.6` / `30.61`, Australie *Copyright Act 1968* art. `47D` / `47E`, Suisse *LDA/URG* art. `21`).
+* **Clause de non-responsabilité :** Logiciel fourni *« tel quel »* (*AS IS*), sans garantie, conformément à la licence MIT. Ces mentions sont fournies à titre purement informatif et ne constituent pas un avis juridique formel.
+
+### 🇬🇧 English — Community, Free & Non-Profit Software Preservation
+* **MIT License & Strictly Non-Profit:** This project is **100% free, open-source ([`LICENSE`](LICENSE)), and strictly non-commercial / non-profit** (no ads, no monetization, no telemetry).
+* **Purpose (Debugging, Bug-Fixing & Preservation):** This independent community utility exists solely to **debug and fix technical compatibility issues** that prevent a legacy, unmaintained title (*The Sims 2: Super Collection*) from launching or working properly on modern macOS / Apple Silicon hardware (120 Hz ProMotion startup crash, MacBook notch rendering, `Command+Tab` focus bugs, and Trackpad support).
+* **Lawful Ownership, Zero Game Binaries & Zero DRM Bypass:** **No copyrighted game binaries or assets are distributed**, and **no DRM, copy-protection, or licensing mechanism is bypassed or circumvented**. You must own a legitimate copy of the game (Mac App Store).
+* **No Affiliation:** Not affiliated with, endorsed by, or sponsored by Electronic Arts Inc., Maxis, Aspyr Media Inc., or Apple Inc. All trademarks belong to their respective owners.
+* **International Legal Frameworks (Informational):**
+  * **European Union (EU / EEA):** *Directive 2009/24/EC* on the legal protection of computer programs — **Article 5(1)** *(acts necessary for use by the lawful acquirer, including error correction)* and **Article 6** *(interoperability)*, along with national implementations (e.g., French *CPI* Art. `L122-6-1`).
+  * **United States (USA):** `17 U.S.C. § 117(a)` *(essential step / adaptation required to utilize a lawfully owned program)*, `17 U.S.C. § 1201(f)` *(interoperability)*, and `17 U.S.C. § 107` *(non-commercial compatibility, research, and preservation fair use)*.
+  * **United Kingdom (UK):** *Copyright, Designs and Patents Act 1988*, Sections `50B` & `50C` *(decompilation for interoperability and error correction by a lawful user)*.
+  * **Other Jurisdictions (Canada, Australia, Switzerland, WIPO / Berne principles):** comparable statutory exceptions allowing error correction, interoperability, and non-commercial preservation by lawful owners (e.g., Canadian *Copyright Act* s. `30.6` / `30.61`, Australian *Copyright Act 1968* s. `47D` / `47E`, Swiss *CopA/LDA* Art. `21`).
+* **Disclaimer:** Provided *"AS IS"* without warranty under the MIT License. This notice is informational and does not constitute formal legal advice.
 
 ---
 
@@ -117,7 +146,5 @@ Compilé en `x86_64` et injecté dans `Sims2XP_Exe` via `LC_LOAD_WEAK_DYLIB` (`@
 * **Migration Sandbox sans écrasement :** La re-signature locale retire les entitlements App Store Sandbox ; `patch_sims2.command` copie via Automation Finder les sauvegardes de `~/Library/Containers/com.aspyr.sims2.appstore/Data/Library/Application Support/Aspyr/The Sims 2/` vers `~/Library/Application Support/Aspyr/The Sims 2/` (ou vers `The Sims 2 (Sandbox Backup YYYY-MM-DD)` si un dossier actif existe déjà).
 * **`Graphics Rules.sgr` :** Sauvegarde `Graphics Rules.sgr.backup`, fixe `maxResWidth 2560` / `maxResHeight 1600`, configure `$High` sur la résolution native détectée et passe `textureMemory` à `1024` Mo.
 * **Intégrité macOS :** Nettoyage des attributs AppleDouble/ResourceFork superflus, signature ad-hoc `codesign --force --deep --sign -` et validation stricte `codesign --verify --deep --strict`.
-
-> *Initiative communautaire de préservation logicielle (Directive européenne 2009/24/CE, article 5(1)). Aucun binaire propriétaire distribué ni DRM contourné.*
 
 </details>

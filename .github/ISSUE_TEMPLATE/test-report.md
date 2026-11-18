@@ -13,7 +13,7 @@ assignees: ""
 - **Display Refresh Rate / Écran :** (e.g., Built-in Liquid Retina XDR 120 Hz ProMotion / External 120 Hz+ Monitor)
 - **macOS Version :** (e.g., macOS Sequoia 15.x / macOS 27.0)
 - **Keyboard Layout / Clavier :** (e.g., French AZERTY / US QWERTY / Other)
-- **Patch Version :** `v1.4.0` (or `v1.3.1`)
+- **Patch Version :** `v1.4.1` (or `v1.4.0`)
 
 ---
 
