@@ -39,6 +39,7 @@ MAC_RELEASE_FILES = (
     Path("clean_sims2_cache.command"),
     Path("restore_sims2.command"),
     Path("README.txt"),
+    Path("LICENSE"),
     Path("trackpad_mod/libsims2_trackpad.dylib"),
     Path("trackpad_mod/sims2_trackpad.m"),
     Path("trackpad_mod/build_trackpad.sh"),
@@ -201,7 +202,7 @@ def package_releases(version: str, out_dir: Path) -> tuple[Path, Path]:
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Verify repo & build release archives")
     parser.add_argument("--package", action="store_true", help="Build Mac & Windows release ZIPs in dist/")
-    parser.add_argument("--version", default="v1.4.0", help="Release version tag (default: v1.4.0)")
+    parser.add_argument("--version", default="v1.5.0-rc1", help="Release version tag (default: v1.5.0-rc1)")
     parser.add_argument("--out-dir", type=Path, default=ROOT_DIR / "dist")
     args = parser.parse_args(argv)
 

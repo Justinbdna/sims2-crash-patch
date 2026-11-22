@@ -1,12 +1,16 @@
 #!/bin/bash
 # ==============================================================================
 # The Sims 2: Super Collection — ProMotion 120Hz Patch, Save Migration & Fixes
-# Version: 1.4.0 (Option A — Non-Sandbox Architecture)
+# Version: 1.5.0-rc1 (Option A — Non-Sandbox Architecture)
 # Target:  /Applications/The Sims 2.app/Contents/MacOS/Sims2XP_Exe
 # Zero Xcode / Python dependency: native /usr/bin/perl, codesign & osascript.
+# License: MIT — Free, non-profit community software preservation & bug-fix
+# utility for lawful owners. No copyrighted game binaries or DRM bypass.
 # ==============================================================================
 
 set -u
+
+PATCH_VERSION="1.5.0-rc1"
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
@@ -48,7 +52,7 @@ LOG_FILE=""
 LOG_FINALIZED=0
 
 init_diagnostic_log() {
-    local label="${1:-patch_sims2.command v1.4.0}"
+    local label="${1:-patch_sims2.command v${PATCH_VERSION}}"
     [ -z "${REAL_HOME:-}" ] && return 0
     local log_dir="${SIMS2_LOG_DIR:-$REAL_HOME/Library/Logs/Sims2-Crash-Patch}"
     run_as_real_user mkdir -p "$log_dir" >/dev/null 2>&1 || return 0
@@ -281,12 +285,41 @@ print_container_access_help() {
     echo "    -> (Ou activez Accès complet au disque pour Terminal dans Réglages Système -> Confidentialité et sécurité.)"
 }
 
+cleanup_obsolete_experimental_prefs() {
+    local domain="${1:-com.aspyr.sims2.appstore}"
+    local key
+    for key in \
+        S2PatchFullscreenUpscaling \
+        S2PatchWindowedMode \
+        S2PatchTargetWidth \
+        S2PatchTargetHeight \
+        S2PatchPrefsConfigured; do
+        run_as_real_user /usr/bin/defaults delete "$domain" "$key" >/dev/null 2>&1 || true
+    done
+    return 0
+}
+
 sign_and_verify_app() {
     local target_app="${1:-$APP_PATH}"
-    local cs_out cs_rc verify_out verify_rc
+    local target_dylib="$target_app/Contents/MacOS/libsims2_trackpad.dylib"
+    local target_bin="$target_app/Contents/MacOS/Sims2XP_Exe"
+    local cs_out="" cs_rc=0 verify_out verify_rc
 
-    cs_out="$(run_privileged "$target_app" /usr/bin/codesign --force --deep --sign - "$target_app" 2>&1)"
-    cs_rc=$?
+    if [ -f "$target_dylib" ] && [ ! -L "$target_dylib" ]; then
+        run_privileged "$target_dylib" /usr/bin/xattr -cr "$target_dylib" >/dev/null 2>&1 || true
+        cs_out="$(run_privileged "$target_dylib" /usr/bin/codesign --force --sign - "$target_dylib" 2>&1)"
+        cs_rc=$?
+    fi
+
+    if [ "$cs_rc" -eq 0 ] && [ -f "$target_bin" ] && [ ! -L "$target_bin" ]; then
+        cs_out="$(run_privileged "$target_bin" /usr/bin/codesign --force --sign - "$target_bin" 2>&1)"
+        cs_rc=$?
+    fi
+
+    if [ "$cs_rc" -eq 0 ]; then
+        cs_out="$(run_privileged "$target_app" /usr/bin/codesign --force --sign - "$target_app" 2>&1)"
+        cs_rc=$?
+    fi
 
     if [ "$cs_rc" -ne 0 ] && printf '%s\n' "$cs_out" | grep -qiE '(detritus|Finder information|resource fork|AppleDouble)'; then
         echo -e "${YELLOW}[!] Détection d'attributs Finder parasites (detritus) — nettoyage sécurisé en cours...${NC}"
@@ -294,8 +327,19 @@ sign_and_verify_app() {
         run_privileged "$target_app" /usr/bin/xattr -dr com.apple.ResourceFork "$target_app" >/dev/null 2>&1 || true
         run_privileged "$target_app" /usr/bin/xattr -dr com.apple.quarantine "$target_app" >/dev/null 2>&1 || true
         run_privileged "$target_app" /usr/sbin/dot_clean -m "$target_app" >/dev/null 2>&1 || true
-        cs_out="$(run_privileged "$target_app" /usr/bin/codesign --force --deep --sign - "$target_app" 2>&1)"
-        cs_rc=$?
+        cs_rc=0
+        if [ -f "$target_dylib" ] && [ ! -L "$target_dylib" ]; then
+            cs_out="$(run_privileged "$target_dylib" /usr/bin/codesign --force --sign - "$target_dylib" 2>&1)"
+            cs_rc=$?
+        fi
+        if [ "$cs_rc" -eq 0 ] && [ -f "$target_bin" ] && [ ! -L "$target_bin" ]; then
+            cs_out="$(run_privileged "$target_bin" /usr/bin/codesign --force --sign - "$target_bin" 2>&1)"
+            cs_rc=$?
+        fi
+        if [ "$cs_rc" -eq 0 ]; then
+            cs_out="$(run_privileged "$target_app" /usr/bin/codesign --force --sign - "$target_app" 2>&1)"
+            cs_rc=$?
+        fi
     fi
 
     if [ "$cs_rc" -ne 0 ]; then
@@ -594,7 +638,7 @@ handle_sandbox_cache_result() {
     esac
 }
 
-# Query current logical display mode & supported CoreGraphics modes without Xcode CLT
+# Query current logical display mode & optimal CoreGraphics mode <= 2560x1600 without Xcode CLT
 query_display_modes() {
     DISPLAY_CUR=""
     DISPLAY_MODES=""
@@ -605,62 +649,73 @@ ObjC.import("AppKit");
 ObjC.import("Foundation");
 var did = $.CGMainDisplayID();
 var cur = $.CGDisplayCopyDisplayMode(did);
-var curW = Math.round($.CGDisplayModeGetWidth(cur));
-var curH = Math.round($.CGDisplayModeGetHeight(cur));
-// Real macOS hardware modes only (no synthetic catalog): whitelist + current desktop mode.
-var whitelist = {
-    "1280x800": 1, "1440x900": 1, "1512x982": 1, "1680x1050": 1,
-    "1800x1169": 1, "2048x1280": 1, "2560x1600": 1,
-    "1728x1080": 1, "1920x1080": 1, "1920x1200": 1, "2560x1440": 1
-};
-var notchedMap = {};
-function isAllowedNonNotched(w, h) {
-    if (w < 800 || h < 600 || w <= h || w > 2560 || h > 1600) return false;
-    if (w === curW && h === curH) return true;
-    return whitelist[w + "x" + h] === 1;
+var curW = cur ? Math.round($.CGDisplayModeGetWidth(cur)) : 0;
+var curH = cur ? Math.round($.CGDisplayModeGetHeight(cur)) : 0;
+
+if ((curW <= 0 || curH <= 0)) {
+    var ms = $.NSScreen.mainScreen;
+    if (ms) {
+        var sf = ms.frame;
+        curW = Math.round(sf.size.width);
+        curH = Math.round(sf.size.height);
+    }
 }
-var seen = {};
-if (isAllowedNonNotched(curW, curH)) seen[curW + "x" + curH] = 1;
+
+function isValidMode(w, h) {
+    return (w >= 800 && h >= 600 && w > h && w <= 2560 && h <= 1600);
+}
+
 var optsDict = $.CFDictionaryCreateMutable($(), 1, $.kCFTypeDictionaryKeyCallBacks, $.kCFTypeDictionaryValueCallBacks);
 $.CFDictionarySetValue(optsDict, $.kCGDisplayShowDuplicateLowResolutionModes, $.kCFBooleanTrue);
 var arr = ObjC.castRefToObject($.CGDisplayCopyAllDisplayModes(did, optsDict) || $.CGDisplayCopyAllDisplayModes(did, $()));
-if (arr && arr.count) {
+
+var bestW = 0, bestH = 0;
+if (isValidMode(curW, curH)) {
+    bestW = curW;
+    bestH = curH;
+} else if (arr && arr.count) {
+    var targetAspect = (curW > 0 && curH > 0) ? (curW / curH) : (16.0 / 10.0);
+    var bestAspectOk = false;
+    var bestArea = 0;
+    var bestDeltaHz = 9999.0;
     for (var i = 0; i < arr.count; i++) {
         var m = arr.objectAtIndex(i);
         var w = Math.round($.CGDisplayModeGetWidth(m));
         var h = Math.round($.CGDisplayModeGetHeight(m));
-        if (isAllowedNonNotched(w, h)) {
-            seen[w + "x" + h] = 1;
+        if (!isValidMode(w, h)) continue;
+        var aspectOk = Math.abs((w / h) - targetAspect) <= 0.03;
+        var area = w * h;
+        var hz = $.CGDisplayModeGetRefreshRate(m);
+        var dHz = Math.abs((hz > 0.1 ? hz : 60.0) - 60.0);
+        if (bestW === 0 ||
+            (aspectOk && !bestAspectOk) ||
+            (aspectOk === bestAspectOk && area > bestArea) ||
+            (aspectOk === bestAspectOk && area === bestArea && dHz < bestDeltaHz - 0.5)) {
+            bestW = w;
+            bestH = h;
+            bestAspectOk = aspectOk;
+            bestArea = area;
+            bestDeltaHz = dHz;
         }
     }
 }
-var screens = $.NSScreen.screens;
-if (screens && screens.count) {
-    for (var j = 0; j < screens.count; j++) {
-        var f = screens.objectAtIndex(j).frame;
+
+if (bestW <= 0 || bestH <= 0) {
+    var screens = $.NSScreen.screens;
+    if (screens && screens.count) {
+        var f = screens.objectAtIndex(0).frame;
         var sw = Math.round(f.size.width);
         var sh = Math.round(f.size.height);
-        if (isAllowedNonNotched(sw, sh)) {
-            seen[sw + "x" + sh] = 1;
-        }
-        if ((curW === 0 || curH === 0) && sw > 0 && sh > 0) {
-            curW = sw;
-            curH = sh;
+        if (isValidMode(sw, sh)) {
+            bestW = sw;
+            bestH = sh;
         }
     }
 }
-var curKey = curW + "x" + curH;
-if (notchedMap[curKey]) {
-    var mapped = notchedMap[curKey].split("x");
-    curW = parseInt(mapped[0], 10);
-    curH = parseInt(mapped[1], 10);
-}
-if (curW > 2560 || curH > 1600) {
-    curW = 1280;
-    curH = 800;
-}
-if (curW > 0 && curH > 0) {
-    "CUR=" + curW + "x" + curH + "\nMODES=" + Object.keys(seen).join(",");
+
+if (bestW > 0 && bestH > 0) {
+    var res = bestW + "x" + bestH;
+    "CUR=" + res + "\nMODES=" + res;
 }
 JXAEOF
 )"
@@ -671,17 +726,27 @@ JXAEOF
     fi
 }
 
-# Conservative userProps.xml repair (creates userProps.xml.backup once before editing)
+# Conservative userProps.xml repair & initialization (creates userProps.xml.backup once before editing)
 repair_userprops_xml() {
     local userprops_path="$1"
     local cur_res="$2"
     local supported_modes="$3"
     local force_reset="${4:-0}"
 
-    if [ ! -f "$userprops_path" ]; then
-        USERPROPS_STATUS="Non encore créé (sera généré au 1er lancement)"
-        echo -e "${GREEN}[i] userProps.xml :${NC} Non encore créé (configuration générée sainement au 1er lancement)."
-        return 0
+    if [ -L "$userprops_path" ]; then
+        USERPROPS_STATUS="ERREUR (lien symbolique refusé sur userProps.xml)"
+        echo -e "${RED}[-] Sécurité : lien symbolique refusé sur $userprops_path.${NC}"
+        return 1
+    fi
+
+    local cfg_dir
+    cfg_dir="$(dirname "$userprops_path")"
+    if [ ! -d "$cfg_dir" ]; then
+        if [ "$(id -u)" -eq 0 ] && [ "${SIMS2_LIB_ONLY:-0}" != "1" ]; then
+            run_as_real_user mkdir -p "$cfg_dir" >/dev/null 2>&1 || true
+        else
+            mkdir -p "$cfg_dir" >/dev/null 2>&1 || true
+        fi
     fi
 
     local perl_script runner_out runner_rc
@@ -743,16 +808,6 @@ sub write_atomic {
     $active_tmp = undef;
 }
 
-my $raw = read_raw($xml_path);
-my $rx = qr{(<AnyString\b[^>]*\bkey="activeDeviceDisplayMode"[^>]*>)([^<]*)(</AnyString>)};
-if ($raw !~ $rx) {
-    print "NO_KEY\n";
-    exit 0;
-}
-
-my $old_mode = $2;
-$old_mode =~ s/^\s+|\s+$//g;
-
 my %supported;
 if (defined $modes_csv && $modes_csv ne "") {
     for my $item (split /,/, $modes_csv) {
@@ -761,8 +816,6 @@ if (defined $modes_csv && $modes_csv ne "") {
     }
 }
 
-# Native notched modes (1800x1169, 1512x982...) are kept as-is: the engine's
-# cDeviceEnumDX only accepts modes really exposed by macOS.
 my %notched_map = ();
 
 my $fallback_res = ($cur_res && $cur_res =~ /^\d+x\d+$/) ? $cur_res : "1280x800";
@@ -772,6 +825,42 @@ if (exists $notched_map{$fallback_res} && $supported{$notched_map{$fallback_res}
 if ($fallback_res =~ /^(\d+)x(\d+)$/ && ($1 > 2560 || $2 > 1600)) {
     $fallback_res = "1280x800";
 }
+
+if (!-e $xml_path) {
+    my $init_mode = "${fallback_res}x32x60";
+    my $init_xml = qq{<?xml version="1.0" encoding="UTF-8"?>\n}
+        . qq{<cGZPropertySetString>\n}
+        . qq{  <AnyString key="activeDeviceDisplayMode" type="0x0b8bea18">$init_mode</AnyString>\n}
+        . qq{</cGZPropertySetString>\n};
+    write_atomic($xml_path, $init_xml, 0644);
+    print "CREATED:$init_mode\n";
+    exit 0;
+}
+
+my $raw = read_raw($xml_path);
+my $rx = qr{(<AnyString\b[^>]*\bkey="activeDeviceDisplayMode"[^>]*>)([^<]*)(</AnyString>)};
+if ($raw !~ $rx) {
+    my $init_mode = "${fallback_res}x32x60";
+    my $entry = qq{  <AnyString key="activeDeviceDisplayMode" type="0x0b8bea18">$init_mode</AnyString>\n};
+    my $updated = $raw;
+    if ($updated =~ s{(</(?:cGZPropertySetString|cGZPersistDBSegment)>)}{$entry$1}) {
+        my $backup_path = "$xml_path.backup";
+        my $bak_state = "kept";
+        if (!-e $backup_path) {
+            write_atomic($backup_path, $raw, 0644);
+            $bak_state = "created";
+        }
+        write_atomic($xml_path, $updated, 0644);
+        print "INSERTED:$init_mode|$bak_state\n";
+        exit 0;
+    }
+    print "NO_KEY\n";
+    exit 0;
+}
+
+my $old_mode = $2;
+$old_mode =~ s/^\s+|\s+$//g;
+
 my $target_mode = "";
 my $need_fix = 0;
 
@@ -784,7 +873,7 @@ if ($old_mode =~ /^(\d+)x(\d+)x(\d+)x(\d+)$/) {
         $res_known_ok = 0;
     } elsif (exists $notched_map{$res_key} && $supported{$notched_map{$res_key}}) {
         $res_known_ok = 0;
-    } elsif (%supported && !$supported{$res_key} && $res_key ne "800x600") {
+    } elsif (%supported && !$supported{$res_key}) {
         $res_known_ok = 0;
     }
 
@@ -834,6 +923,19 @@ PERLEOF
     fi
 
     case "$runner_out" in
+        CREATED:*)
+            local created_val="${runner_out#CREATED:}"
+            USERPROPS_STATUS="Initialisé ($created_val)"
+            echo -e "${GREEN}[+] userProps.xml : Initialisé directement sur la résolution native ($created_val) !${NC}"
+            ;;
+        INSERTED:*)
+            local payload="${runner_out#INSERTED:}"
+            local ins_val="${payload%|*}"
+            local bak="${payload#*|}"
+            USERPROPS_STATUS="Initialisé ($ins_val, backup .backup $bak)"
+            echo -e "${GREEN}[+] userProps.xml : Résolution native ajoutée ($ins_val) !${NC}"
+            echo "    Sauvegarde de retour : $(dirname "$userprops_path")/userProps.xml.backup"
+            ;;
         OK:*)
             local cur_val="${runner_out#OK:}"
             USERPROPS_STATUS="Valide ($cur_val)"
@@ -979,18 +1081,18 @@ count_cc_and_check_maxfiles() {
     fi
 }
 
-# Step 3A — Optimize Graphics Rules.sgr (Catalog cap 2560x1600, default natif 1800x1169, $High profile, 1024 MB VRAM)
+# Step 3A — Optimize Graphics Rules.sgr (Catalog cap 2560x1600, dynamic native resolution, $High profile, 1024 MB VRAM)
 patch_graphics_rules_sgr() {
     local grules_path="${1:-$GRULES_PATH}"
     local backup_path="${2:-$GRULES_BACKUP_PATH}"
-    local target_w="${3:-1800}"
-    local target_h="${4:-1169}"
+    local target_w="${3:-1280}"
+    local target_h="${4:-800}"
 
-    case "$target_w" in ''|*[!0-9]*) target_w="1800" ;; esac
-    case "$target_h" in ''|*[!0-9]*) target_h="1169" ;; esac
+    case "$target_w" in ''|*[!0-9]*) target_w="1280" ;; esac
+    case "$target_h" in ''|*[!0-9]*) target_h="800" ;; esac
     if [ "$target_w" -gt 2560 ] || [ "$target_h" -gt 1600 ] || [ "$target_w" -lt 800 ] || [ "$target_h" -lt 600 ]; then
-        target_w="1800"
-        target_h="1169"
+        target_w="1280"
+        target_h="800"
     fi
 
     if [ -L "$grules_path" ] || [ -L "$backup_path" ]; then
@@ -1011,8 +1113,8 @@ use strict;
 use warnings;
 
 my ($grules_path, $backup_path, $target_w, $target_h) = @ARGV;
-$target_w = 1800 if !defined $target_w || $target_w !~ /^\d+$/ || $target_w < 800;
-$target_h = 1169 if !defined $target_h || $target_h !~ /^\d+$/ || $target_h < 600;
+$target_w = 1280 if !defined $target_w || $target_w !~ /^\d+$/ || $target_w < 800;
+$target_h = 800 if !defined $target_h || $target_h !~ /^\d+$/ || $target_h < 600;
 
 my $active_tmp;
 END {
@@ -1244,6 +1346,18 @@ sub write_atomic {
     $active_tmp = undef;
 }
 
+# Remove Aspyr's 3 hardcoded synthetic fallback resolutions (1280x720 @ 0x5e517,
+# 1024x768 @ 0x5e54c, 1344x756 @ 0x5e591) inside ASL mode builder 0x10005e400 so
+# the in-game Screen Size dropdown shows ONLY the Mac's single usable native mode
+# exposed by hook_CGDisplayCopyAllDisplayModes (real 1280x720/1024x768 displays
+# remain supported via the SDL_GetDisplayMode loop right above 0x5e4d9).
+my $orig_fb_1280 = pack("H*", "4989c1e8740c0000c745b000040000");
+my $repl_fb_1280 = pack("H*", "4989c19090909090c745b000040000");
+my $orig_fb_1024 = pack("H*", "4c8d4dd0e83f0c00004c89e8");
+my $repl_fb_1024 = pack("H*", "4c8d4dd090909090904c89e8");
+my $orig_fb_1344 = pack("H*", "4c8d4dd0e8fa0b0000488b9d48ffffff");
+my $repl_fb_1344 = pack("H*", "4c8d4dd09090909090488b9d48ffffff");
+
 # Lift ASL resolution filter (0x10005e610..0x10005e618) so all calibrated modes <= 2560x1600
 # remain selectable regardless of current logical desktop size.
 my $orig_asl = pack("H*", "39f17fd04139f87fcb");
@@ -1265,6 +1379,9 @@ my $data = read_raw($exe_path);
 my $changed = 0;
 
 my @opt_patches = (
+    [ "ASL Remove Synthetic 1280x720 (0x5e517)",       [ $orig_fb_1280 ],              $repl_fb_1280 ],
+    [ "ASL Remove Synthetic 1024x768 (0x5e54c)",       [ $orig_fb_1024 ],              $repl_fb_1024 ],
+    [ "ASL Remove Synthetic 1344x756 (0x5e591)",       [ $orig_fb_1344 ],              $repl_fb_1344 ],
     [ "Phase 3 ASL Mode Filter Unlock (0x5e610)",       [ $orig_asl ],                  $repl_asl ],
     [ "Phase 3 Fullscreen Catalog Cap (0x1303243)",    [ $orig_val_p0, $orig_val_p2 ], $repl_val_p3 ],
     [ "Option A Fullscreen Fill (0xa7619)",            [ $orig_stretch ],              $repl_stretch ],
@@ -1482,20 +1599,311 @@ MACHO_PERL
     return 0
 }
 
-main() {
-    echo -e "${CYAN}${BOLD}"
-    echo "========================================================================"
-    echo "  The Sims 2: Super Collection — ProMotion 120Hz & Stability Patch v1.4.0"
-    echo "========================================================================"
-    echo -e "${NC}"
+toggle_debug_mode() {
+    local mode="${1:-toggle}"
+    local log_dir="${SIMS2_LOG_DIR:-$REAL_HOME/Library/Logs/Sims2-Crash-Patch}"
+    local flag_file="$log_dir/.debug_enabled"
+    local action="$mode"
 
-    if ! resolve_real_user; then
-        pause_exit 1
+    if [ "$action" = "toggle" ]; then
+        if [ -f "$flag_file" ]; then
+            action="disable"
+        else
+            action="enable"
+        fi
     fi
 
+    if [ "$action" = "disable" ]; then
+        run_as_real_user rm -f \
+            "$flag_file" \
+            "$log_dir/debug_boot.log" \
+            "$log_dir/debug_boot.previous.log" \
+            "$log_dir/launch_boot.log" \
+            "$log_dir/launch_boot.previous.log" \
+            "$log_dir/trackpad_events.log" \
+            "$log_dir/trackpad_events.previous.log" >/dev/null 2>&1 || true
+        echo -e "${GREEN}[+] Mode debug DÉSACTIVÉ / Debug mode DISABLED.${NC}"
+        echo "    Drapeau .debug_enabled et anciens journaux debug supprimés."
+        echo "    (crash_report.log est conservé s'il existe.)"
+    else
+        run_as_real_user mkdir -p "$log_dir" >/dev/null 2>&1 || true
+        run_as_real_user touch "$flag_file"
+        echo -e "${GREEN}[+] Mode debug ACTIVÉ / Debug mode ENABLED.${NC}"
+        echo "    Drapeau créé : $flag_file"
+        echo "    Lancez Les Sims 2 pour enregistrer debug_boot.log, puis générez le rapport GitHub."
+    fi
+}
+
+inspect_binary_patch_status() {
+    local exe_path="${1:-$EXE_PATH}"
+    local app_path="${2:-$APP_PATH}"
+    local grules_path="${3:-$GRULES_PATH}"
+
+    if [ ! -f "$exe_path" ]; then
+        echo "Jeu introuvable ($exe_path)"
+        return 0
+    fi
+
+    local bin_summary
+    bin_summary="$(/usr/bin/perl - "$exe_path" "$app_path" "$grules_path" <<'SUPPORT_PERL'
+use strict;
+use warnings;
+
+my ($exe_path, $app_path, $grules_path) = @ARGV;
+open(my $fh, "<:raw", $exe_path) or do {
+    print "Erreur lecture binaire: $!\n";
+    exit 0;
+};
+local $/;
+my $data = <$fh>;
+close($fh);
+
+my %checks = (
+    patch1 => [ pack("H*", "41bf3c000000909090904889df"), pack("H*", "f20f1045d0f2440f2cf84889df") ],
+    patch2 => [ pack("H*", "41bf3c00000090909090c70300000000"), pack("H*", "41bf3c000000440f45f8c70300000000") ],
+    fb1280 => [ pack("H*", "4989c19090909090c745b000040000"), pack("H*", "4989c1e8740c0000c745b000040000") ],
+    fb1024 => [ pack("H*", "4c8d4dd090909090904c89e8"), pack("H*", "4c8d4dd0e83f0c00004c89e8") ],
+    fb1344 => [ pack("H*", "4c8d4dd09090909090488b9d48ffffff"), pack("H*", "4c8d4dd0e8fa0b0000488b9d48ffffff") ],
+    asl    => [ pack("H*", "39f190904139f89090"), pack("H*", "39f17fd04139f87fcb") ],
+    val_p3 => [ pack("H*", "3d000a0000771581f940060000770deb4b9090909090909090909090"), pack("H*", "0f57c9f3480f2ac9f3480f2ad0f30f5eca0f2ec10f8538ffffff7b40") ],
+    stretch=> [ pack("H*", "e86277fbff84c0eb108b43183b45f0"), pack("H*", "e86277fbff84c074108b43183b45f0") ],
+);
+
+sub state_of {
+    my ($patched, $orig) = @_;
+    return "APPLIQUE" if index($data, $patched) != -1 && index($data, $orig) == -1;
+    return "NON_APPLIQUE" if index($data, $orig) != -1 && index($data, $patched) == -1;
+    return "AUTRE";
+}
+
+my $p1 = state_of(@{$checks{patch1}});
+my $p2 = state_of(@{$checks{patch2}});
+my $fb1 = state_of(@{$checks{fb1280}});
+my $fb2 = state_of(@{$checks{fb1024}});
+my $fb3 = state_of(@{$checks{fb1344}});
+my $fb_all = ($fb1 eq "APPLIQUE" && $fb2 eq "APPLIQUE" && $fb3 eq "APPLIQUE") ? "APPLIQUE"
+           : ($fb1 eq "NON_APPLIQUE" && $fb2 eq "NON_APPLIQUE" && $fb3 eq "NON_APPLIQUE") ? "NON_APPLIQUE"
+           : "PARTIEL";
+my $asl = state_of(@{$checks{asl}});
+my $vp3 = state_of(@{$checks{val_p3}});
+my $str = state_of(@{$checks{stretch}});
+my $dylib_inj = (index($data, "libsims2_trackpad.dylib") != -1) ? "INJECTE" : "ABSENT";
+my $dylib_file = (-f "$app_path/Contents/MacOS/libsims2_trackpad.dylib") ? "PRESENT" : "ABSENT";
+my $exe_bak = (-f "$exe_path.backup") ? "PRESENT" : "ABSENT";
+
+my $grules_state = "ABSENT";
+if (-f $grules_path && open(my $gfh, "<:raw", $grules_path)) {
+    local $/;
+    my $graw = <$gfh>;
+    close($gfh);
+    $grules_state = (index($graw, "# Patched by sims2-crash-patch") != -1) ? "PATCHE" : "ORIGINE";
+}
+
+print "Patch1_60Hz=$p1 | Patch2_60Hz=$p2 | ASL=$asl | AslSingleNative=$fb_all | CatalogP3=$vp3 | NotchFill=$str\n";
+print "WeakDylib_MachO=$dylib_inj | Dylib_File=$dylib_file | Backup_Exe=$exe_bak | GraphicsRules=$grules_state\n";
+SUPPORT_PERL
+)"
+    printf '%s\n' "$bin_summary"
+    if [ -x /usr/bin/codesign ] && [ -d "$app_path" ]; then
+        local cs_verify
+        cs_verify="$(/usr/bin/codesign --verify --deep --strict "$app_path" 2>&1)"
+        if [ $? -eq 0 ]; then
+            echo "Codesign_Strict=VALIDE"
+        else
+            echo "Codesign_Strict=ERREUR (${cs_verify:-inconnu})"
+        fi
+    fi
+}
+
+read_userprops_display_mode() {
+    local userprops_path="${1:-$REAL_HOME/Library/Application Support/Aspyr/The Sims 2/Config/userProps.xml}"
+    if [ ! -f "$userprops_path" ]; then
+        echo "Absent (fichier inexistant)"
+        return 0
+    fi
+    /usr/bin/perl - "$userprops_path" <<'SUPPORT_PERL'
+use strict;
+use warnings;
+my ($p) = @ARGV;
+open(my $fh, "<:raw", $p) or do {
+    print "Illisible ($!)\n";
+    exit 0;
+};
+local $/;
+my $raw = <$fh>;
+close($fh);
+if ($raw =~ m{<AnyString\b[^>]*\bkey="activeDeviceDisplayMode"[^>]*>([^<]*)</AnyString>}) {
+    my $v = $1;
+    $v =~ s/^\s+|\s+$//g;
+    print($v ne "" ? "$v\n" : "(vide)\n");
+} else {
+    print "Cle activeDeviceDisplayMode absente\n";
+}
+SUPPORT_PERL
+}
+
+anonymize_support_report() {
+    local real_home="${1:-$REAL_HOME}"
+    SIMS2_ANON_HOME="$real_home" /usr/bin/perl -pe '
+        my $h = $ENV{"SIMS2_ANON_HOME"} // "";
+        if (length($h)) { s/\Q$h\E/~/g; }
+        s#/Users/[^/\s"\x27`<>:)]+#~#g;
+    '
+}
+
+generate_github_support_report() {
+    local log_dir="${SIMS2_LOG_DIR:-$REAL_HOME/Library/Logs/Sims2-Crash-Patch}"
+    local report_file="$log_dir/github_support_report.md"
+    local userprops_file="${SIMS2_USERPROPS_OVERRIDE:-$REAL_HOME/Library/Application Support/Aspyr/The Sims 2/Config/userProps.xml}"
+    local debug_flag="$log_dir/.debug_enabled"
+    local crash_log="$log_dir/crash_report.log"
+    local debug_log="$log_dir/debug_boot.log"
+
+    run_as_real_user mkdir -p "$log_dir" >/dev/null 2>&1 || true
+
+    local hw_model cpu_brand arch_name os_prod os_ver os_build
+    hw_model="$(sysctl -n hw.model 2>/dev/null || echo 'unknown')"
+    cpu_brand="$(sysctl -n machdep.cpu.brand_string 2>/dev/null || echo 'unknown')"
+    arch_name="$(uname -m 2>/dev/null || echo 'unknown')"
+    os_prod="$(sw_vers -productName 2>/dev/null || echo 'macOS')"
+    os_ver="$(sw_vers -productVersion 2>/dev/null || echo 'unknown')"
+    os_build="$(sw_vers -buildVersion 2>/dev/null || echo 'unknown')"
+
+    local displays_info="indisponible"
+    if [ "${SIMS2_SKIP_SYSTEM_PROFILER:-0}" != "1" ] && command -v system_profiler >/dev/null 2>&1; then
+        displays_info="$(system_profiler SPDisplaysDataType 2>/dev/null | sed -n '1,80p')"
+        [ -z "$displays_info" ] && displays_info="(aucune sortie system_profiler)"
+    fi
+
+    query_display_modes
+    local app_status="Non installé / Introuvable"
+    if locate_app_bundle >/dev/null 2>&1; then
+        app_status="$(inspect_binary_patch_status "$EXE_PATH" "$APP_PATH" "$GRULES_PATH")"
+    fi
+
+    local userprops_mode
+    userprops_mode="$(read_userprops_display_mode "$userprops_file")"
+    local debug_state="DÉSACTIVÉ"
+    [ -f "$debug_flag" ] && debug_state="ACTIVÉ (.debug_enabled présent)"
+
+    local raw_report
+    raw_report="$(
+        cat <<EOF
+### Rapport de Diagnostic — Sims 2 Crash Patch v${PATCH_VERSION}
+
+- **Version du patch :** \`v${PATCH_VERSION}\`
+- **Modèle Mac (\`hw.model\`) :** \`${hw_model}\`
+- **Puce / Architecture :** \`${cpu_brand}\` (\`${arch_name}\`)
+- **macOS :** \`${os_prod} ${os_ver} (${os_build})\`
+- **Résolution logique active détectée :** \`${DISPLAY_CUR:-inconnue}\` (modes viables : \`${DISPLAY_MODES:-inconnus}\`)
+- **Mode Debug :** \`${debug_state}\`
+- **\`userProps.xml\` (\`activeDeviceDisplayMode\`) :** \`${userprops_mode}\`
+
+#### État des patchs binaires & signature
+\`\`\`text
+${app_status}
+\`\`\`
+
+#### Écrans / Résolutions / ProMotion (\`system_profiler SPDisplaysDataType\`)
+\`\`\`text
+${displays_info}
+\`\`\`
+EOF
+        if [ -f "$crash_log" ]; then
+            echo ""
+            echo '#### Dernier rapport de crash (`crash_report.log`)'
+            echo '```text'
+            tail -n 150 "$crash_log" 2>/dev/null || true
+            echo '```'
+        fi
+        if [ -f "$debug_log" ]; then
+            echo ""
+            echo '#### Journal Debug (`debug_boot.log`)'
+            echo '```text'
+            tail -n 150 "$debug_log" 2>/dev/null || true
+            echo '```'
+        fi
+    )"
+
+    local tmp_report="${report_file}.tmp.$$"
+    printf '%s\n' "$raw_report" | anonymize_support_report "$REAL_HOME" > "$tmp_report"
+    chmod 644 "$tmp_report" >/dev/null 2>&1 || true
+    mv -f "$tmp_report" "$report_file"
+
+    local clip_note="Presse-papier non copié"
+    if [ "${SIMS2_SKIP_PBCOPY:-0}" != "1" ] && command -v pbcopy >/dev/null 2>&1; then
+        if run_as_real_user pbcopy < "$report_file" >/dev/null 2>&1; then
+            clip_note="Copié automatiquement dans le presse-papier (Cmd+V prêt)"
+        fi
+    fi
+
+    echo ""
+    echo -e "${GREEN}[+] Rapport de support GitHub généré :${NC} $report_file"
+    echo -e "${CYAN}[i] ${clip_note}.${NC}"
+    echo "    Les chemins personnels (/Users/<utilisateur>) ont été anonymisés en ~."
+    echo "    Collez le contenu de ce fichier dans votre ticket GitHub."
+}
+
+run_support_menu() {
+    local log_dir="${SIMS2_LOG_DIR:-$REAL_HOME/Library/Logs/Sims2-Crash-Patch}"
+    local flag_file="$log_dir/.debug_enabled"
+
+    case "${SIMS2_SUPPORT_ACTION:-}" in
+        toggle_debug)
+            toggle_debug_mode toggle
+            return 0
+            ;;
+        enable_debug)
+            toggle_debug_mode enable
+            return 0
+            ;;
+        disable_debug)
+            toggle_debug_mode disable
+            return 0
+            ;;
+        report)
+            generate_github_support_report
+            return 0
+            ;;
+    esac
+
+    while true; do
+        local dbg_label="DÉSACTIVÉ"
+        [ -f "$flag_file" ] && dbg_label="ACTIVÉ"
+        echo ""
+        echo -e "${CYAN}${BOLD}--- Diagnostic & Support GitHub (v${PATCH_VERSION}) ---${NC}"
+        echo -e "  Mode debug actuel : ${BOLD}${dbg_label}${NC}"
+        echo "  [1] Activer / Désactiver le mode debug (debug_boot.log)"
+        echo "  [2] Générer le rapport de support GitHub (github_support_report.md + presse-papier)"
+        echo "  [3] Retour / Quitter"
+        echo ""
+        local sub=""
+        if ! read -r -p "Votre choix [1/2/3] : " sub; then
+            echo ""
+            return 0
+        fi
+        case "$sub" in
+            1)
+                toggle_debug_mode toggle
+                ;;
+            2)
+                generate_github_support_report
+                pause_exit 0
+                ;;
+            3|q|Q)
+                return 0
+                ;;
+            *)
+                echo -e "${YELLOW}[!] Choix invalide ($sub). Tapez 1, 2 ou 3.${NC}"
+                ;;
+        esac
+    done
+}
+
+run_install_patch() {
     # 1. Verify application presence (supports /Applications or ~/Applications)
     if ! locate_app_bundle; then
-        init_diagnostic_log "patch_sims2.command v1.4.0"
+        init_diagnostic_log "patch_sims2.command v${PATCH_VERSION}"
         log_diag "ERROR game not found (/Applications or ~/Applications)"
         echo -e "${RED}[-] Erreur / Error:${NC} Jeu introuvable / Game not found at:"
         echo "    /Applications/The Sims 2.app/Contents/MacOS/Sims2XP_Exe"
@@ -1504,7 +1912,7 @@ main() {
         pause_exit 1
     fi
 
-    init_diagnostic_log "patch_sims2.command v1.4.0"
+    init_diagnostic_log "patch_sims2.command v${PATCH_VERSION}"
     local ASPYR_BASE_DIR="$REAL_HOME/Library/Application Support/Aspyr"
     local TARGET_DATA_DIR="$ASPYR_BASE_DIR/The Sims 2"
     log_diag "START active_dir=$TARGET_DATA_DIR sudo_required=$APP_REQUIRES_SUDO"
@@ -1513,7 +1921,7 @@ main() {
     echo ""
 
     # 2. Verify the game is not currently running
-    if pgrep -x "Sims2XP_Exe" >/dev/null 2>&1 || pgrep -x "AppBundleExe" >/dev/null 2>&1; then
+    if [ "${SIMS2_SKIP_RUNNING_CHECK:-0}" != "1" ] && (pgrep -x "Sims2XP_Exe" >/dev/null 2>&1 || pgrep -x "AppBundleExe" >/dev/null 2>&1); then
         echo -e "${YELLOW}[!] Attention / Warning:${NC} Les Sims 2 est actuellement ouvert !"
         echo "    Fermez complètement le jeu (Cmd+Q / vérifiez le Dock) puis relancez ce script."
         echo "    Please quit The Sims 2 completely before running this patch."
@@ -1711,15 +2119,15 @@ PERLEOF
         echo -e "${RED}[-] Impossible d'appliquer les permissions 0755 sur $EXE_PATH.${NC}"
         pause_exit 1
     fi
-    PATCH_STATUS="OK (60 Hz verrouillé + affichage natif 1800x1169 + fill sous encoche)"
+    PATCH_STATUS="OK (60 Hz verrouillé + plein écran natif sous encoche)"
     log_diag "BINARY_PATCH OK"
 
     # 4B. Graphics Rules.sgr optimization & native Trackpad weak dylib injection
     echo ""
     echo -e "${BOLD}[+] Optimisation Graphics Rules.sgr & Module Trackpad natif...${NC}"
     query_display_modes
-    local grules_w="1800"
-    local grules_h="1169"
+    local grules_w="1280"
+    local grules_h="800"
     if [ -n "$DISPLAY_CUR" ]; then
         local dw="${DISPLAY_CUR%%x*}"
         local dh="${DISPLAY_CUR#*x}"
@@ -1761,6 +2169,7 @@ PERLEOF
                 run_privileged "$TRACKPAD_DYLIB_DEST" /usr/bin/xattr -d com.apple.quarantine "$TRACKPAD_DYLIB_DEST" >/dev/null 2>&1 || true
                 echo -e "${GREEN}[+] Module Trackpad installé :${NC} $TRACKPAD_DYLIB_DEST"
                 if inject_weak_dylib_macho "$EXE_PATH" "@executable_path/libsims2_trackpad.dylib"; then
+                    cleanup_obsolete_experimental_prefs "com.aspyr.sims2.appstore"
                     TRACKPAD_STATUS="OK (libsims2_trackpad.dylib installé & injecté)"
                     log_diag "TRACKPAD_DYLIB OK"
                 else
@@ -1974,17 +2383,19 @@ FINDBAK
 
     echo -e "${GREEN}${BOLD}"
     echo "========================================================================"
-    echo "  INSTALLATION TERMINÉE AVEC SUCCÈS / PATCH COMPLETE (v1.4.0) !         "
+    echo "  INSTALLATION TERMINÉE AVEC SUCCÈS / PATCH COMPLETE (v${PATCH_VERSION}) !     "
     echo "========================================================================"
     echo -e "${NC}"
     echo -e "  • ${BOLD}Patch Binaire 120 Hz :${NC} $PATCH_STATUS"
     echo -e "  • ${BOLD}Graphics Rules.sgr   :${NC} $GRULES_STATUS"
-    echo -e "  • ${BOLD}Module Trackpad      :${NC} $TRACKPAD_STATUS"
+    echo -e "  • ${BOLD}Module Trackpad/Aff. :${NC} $TRACKPAD_STATUS"
     echo -e "  • ${BOLD}Sauvegardes / Saves  :${NC} $MIGRATION_STATUS"
     echo -e "  • ${BOLD}Dossier Données/Mods :${NC} ~/Library/Application Support/Aspyr/The Sims 2/"
     echo -e "  • ${BOLD}Purge des Caches     :${NC} $CACHE_STATUS"
     echo -e "  • ${BOLD}Affichage userProps  :${NC} $USERPROPS_STATUS"
     echo -e "  • ${BOLD}CC / Limite macOS    :${NC} $CC_MAXFILES_STATUS"
+    echo -e "  • ${BOLD}Raccourcis Affichage :${NC} ⌘ + Entrée (Plein écran ↔ Fenêtré) | ⌘ + R (Résolution fenêtrée suivante) | Menu Affichage"
+    echo -e "  • ${BOLD}Rapports de crash    :${NC} ~/Library/Logs/Sims2-Crash-Patch/sims2_crash_XXX.log (automatique uniquement en cas de crash)"
     if [ "$MIGRATION_FAILED" -eq 2 ]; then
         echo ""
         echo -e "  ${YELLOW}[i] Note Sandbox :${NC} Vos parties actives dans Application Support sont prêtes et intactes."
@@ -2000,6 +2411,80 @@ FINDBAK
     echo "========================================================================"
 
     pause_exit 0
+}
+
+main() {
+    echo -e "${CYAN}${BOLD}"
+    echo "========================================================================"
+    echo "  The Sims 2: Super Collection — ProMotion 120Hz & Stability Patch v${PATCH_VERSION}"
+    echo "========================================================================"
+    echo -e "${NC}"
+
+    if ! resolve_real_user; then
+        pause_exit 1
+    fi
+
+    if [ "${1:-}" = "--auto" ] || [ "${1:-}" = "--install" ]; then
+        run_install_patch
+        return $?
+    fi
+    if [ "${1:-}" = "--support" ] || [ "${1:-}" = "--diag" ]; then
+        run_support_menu
+        return $?
+    fi
+
+    if [ -n "${SIMS2_MENU_CHOICE:-}" ]; then
+        case "$SIMS2_MENU_CHOICE" in
+            1)
+                run_install_patch
+                return $?
+                ;;
+            2)
+                run_support_menu
+                return $?
+                ;;
+            3)
+                echo "Fermeture / Exiting."
+                return 0
+                ;;
+        esac
+    fi
+
+    if [ "${SIMS2_NONINTERACTIVE:-0}" = "1" ]; then
+        run_install_patch
+        return $?
+    fi
+
+    while true; do
+        echo ""
+        echo -e "${BOLD}Que souhaitez-vous faire ? / What would you like to do?${NC}"
+        echo "  [1] Installer / Mettre à jour le patch 60 Hz & Trackpad (Entrée par défaut)"
+        echo "  [2] Diagnostic & Support GitHub (Mode Debug / Générer un rapport GitHub)"
+        echo "  [3] Quitter / Quit"
+        echo ""
+        local choice=""
+        if ! read -r -p "Votre choix [1/2/3] (Entrée = 1) : " choice; then
+            echo ""
+            return 0
+        fi
+        [ -z "$choice" ] && choice="1"
+        case "$choice" in
+            1)
+                run_install_patch
+                return $?
+                ;;
+            2)
+                run_support_menu
+                ;;
+            3|q|Q)
+                echo "Fermeture / Exiting."
+                return 0
+                ;;
+            *)
+                echo -e "${YELLOW}[!] Choix invalide ($choice). Tapez 1, 2 ou 3.${NC}"
+                ;;
+        esac
+    done
 }
 
 if [ "${SIMS2_LIB_ONLY:-0}" != "1" ]; then

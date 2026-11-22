@@ -12,6 +12,7 @@ from __future__ import annotations
 import os
 from pathlib import Path
 import re
+import shutil
 import struct
 import subprocess
 import sys
@@ -67,6 +68,7 @@ class TestMacScriptsIntegrity(unittest.TestCase):
                         "clean_sims2_cache.command",
                         "restore_sims2.command",
                         "README.txt",
+                        "LICENSE",
                         "trackpad_mod/libsims2_trackpad.dylib",
                         "trackpad_mod/sims2_trackpad.m",
                         "trackpad_mod/build_trackpad.sh",
@@ -395,14 +397,17 @@ class TestMacScriptsIntegrity(unittest.TestCase):
             with tempfile.TemporaryDirectory() as tmp:
                 base = Path(tmp)
 
-                # 1. Missing userProps.xml must succeed without error
+                # 1. Missing userProps.xml must initialize activeDeviceDisplayMode to native resolution without .backup
                 missing_xml = base / "missing.xml"
                 r_missing = self._run_bash_lib(
                     script,
-                    'repair_userprops_xml "$1" "1800x1169" "1800x1169,1280x800" 0',
+                    'repair_userprops_xml "$1" "1800x1169" "1800x1169" 0',
                     missing_xml.as_posix(),
                 )
                 self.assertEqual(r_missing.returncode, 0, r_missing.stderr or r_missing.stdout)
+                self.assertTrue(missing_xml.exists())
+                self.assertIn('key="activeDeviceDisplayMode"', missing_xml.read_text(encoding="utf-8"))
+                self.assertIn("1800x1169x32x60", missing_xml.read_text(encoding="utf-8"))
                 self.assertFalse(missing_xml.with_suffix(".xml.backup").exists())
 
                 # 2. Valid 60 Hz mode in supported list must remain untouched without creating .backup
@@ -467,6 +472,7 @@ class TestMacScriptsIntegrity(unittest.TestCase):
                 self.assertEqual(r_bad.returncode, 0)
                 self.assertIn(">1800x1169x32x60<", bad_xml.read_text(encoding="utf-8"))
 
+                # 6a. Known Sims 2 root XML without activeDeviceDisplayMode gets initialized to native resolution
                 nokey_xml = base / "nokey.xml"
                 nokey_text = '<?xml version="1.0"?><cGZPersistDBSegment></cGZPersistDBSegment>\n'
                 nokey_xml.write_text(nokey_text, encoding="utf-8")
@@ -475,9 +481,25 @@ class TestMacScriptsIntegrity(unittest.TestCase):
                     'repair_userprops_xml "$1" "1800x1169" "1800x1169" 0',
                     nokey_xml.as_posix(),
                 )
-                self.assertEqual(r_nokey.returncode, 0)
-                self.assertEqual(nokey_xml.read_text(encoding="utf-8"), nokey_text)
-                self.assertFalse(Path(str(nokey_xml) + ".backup").exists())
+                self.assertEqual(r_nokey.returncode, 0, r_nokey.stderr or r_nokey.stdout)
+                nokey_updated = nokey_xml.read_text(encoding="utf-8")
+                self.assertIn('key="activeDeviceDisplayMode"', nokey_updated)
+                self.assertIn("1800x1169x32x60", nokey_updated)
+                self.assertTrue(Path(str(nokey_xml) + ".backup").exists())
+                self.assertEqual(Path(str(nokey_xml) + ".backup").read_text(encoding="utf-8"), nokey_text)
+
+                # 6b. Unrecognized XML without known root tag must stay untouched (NO_KEY, no .backup)
+                unknown_xml = base / "unknown.xml"
+                unknown_text = '<?xml version="1.0"?><UnknownRoot></UnknownRoot>\n'
+                unknown_xml.write_text(unknown_text, encoding="utf-8")
+                r_unknown = self._run_bash_lib(
+                    script,
+                    'repair_userprops_xml "$1" "1800x1169" "1800x1169" 0',
+                    unknown_xml.as_posix(),
+                )
+                self.assertEqual(r_unknown.returncode, 0, r_unknown.stderr or r_unknown.stdout)
+                self.assertEqual(unknown_xml.read_text(encoding="utf-8"), unknown_text)
+                self.assertFalse(Path(str(unknown_xml) + ".backup").exists())
 
     def test_v13_count_cc_and_maxfiles_warnings(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -567,7 +589,7 @@ class TestMacScriptsIntegrity(unittest.TestCase):
         clt_tools_rx = re.compile(r"(?<![#\w/.-])(python3|swift|git|clang|xcodebuild|objdump|cc)\b")
         for script_name in ("patch_sims2.command", "clean_sims2_cache.command", "restore_sims2.command"):
             text = (ROOT_DIR / script_name).read_text(encoding="utf-8")
-            self.assertIn("Version: 1.4.0", text)
+            self.assertIn("Version: 1.5.0-rc1", text)
             non_comment = "\n".join(ln for ln in text.splitlines() if not ln.lstrip().startswith("#"))
             # Remove heredoc text/URLs isn't needed if no CLT tool word appears in code lines
             for line in non_comment.splitlines():
@@ -582,10 +604,12 @@ class TestMacScriptsIntegrity(unittest.TestCase):
         readme_md = (ROOT_DIR / "README.md").read_text(encoding="utf-8")
         changelog = (ROOT_DIR / "CHANGELOG.md").read_text(encoding="utf-8")
         for doc_text in (readme_txt, readme_md):
-            self.assertIn("v1.4.0", doc_text)
+            self.assertIn("v1.5.0-rc1", doc_text)
             self.assertIn("Gatekeeper", doc_text)
             self.assertIn("userProps.xml.backup", doc_text)
             self.assertIn("Autoriser", doc_text)
+        self.assertIn("[1.5.0-rc1]", changelog)
+        self.assertIn("[1.4.1]", changelog)
         self.assertIn("[1.4.0]", changelog)
         self.assertIn("[1.3.1]", changelog)
         self.assertIn("[1.3.0]", changelog)
@@ -596,6 +620,7 @@ class TestMacScriptsIntegrity(unittest.TestCase):
             with tempfile.TemporaryDirectory() as tmp:
                 env = dict(os.environ)
                 env["SIMS2_NONINTERACTIVE"] = "1"
+                env["SIMS2_SKIP_RUNNING_CHECK"] = "1"
                 env["SIMS2_LOG_DIR"] = tmp
                 res_quit = subprocess.run(
                     [bash_bin, "./clean_sims2_cache.command"],
@@ -892,7 +917,6 @@ class TestMacScriptsIntegrity(unittest.TestCase):
         self.assertIn("!gCtrlMiddleDragActive", src_m)
         self.assertIn("isRight == gCtrlDragWasRight", src_m)
         self.assertNotIn("gOptionHandPanActive", src_m)
-        self.assertIn("trackpad_events.log", src_m)
         self.assertIn("swizzled_setFullscreenSpace", src_m)
         self.assertIn("swizzled_miniaturize", src_m)
         self.assertIn("swizzled_activateIgnoringOtherApps", src_m)
@@ -907,65 +931,159 @@ class TestMacScriptsIntegrity(unittest.TestCase):
         self.assertIn("gForcedNonInvertedEvent", src_m)
         self.assertIn("resolve_window_listener", src_m)
 
-        # Real hardware CoreGraphics __DATA,__la_symbol_ptr hooks + permanent launch_boot.log + visibleFrame clamp (no synthetic modes)
+        # Real hardware CoreGraphics __DATA,__la_symbol_ptr hooks + dynamic visibleFrame clamp (no synthetic modes or experimental hooks)
         self.assertNotIn("Sims2SyntheticDisplayMode", src_m)
         self.assertIn("hook_coregraphics_la_symbol_ptrs", src_m)
         self.assertIn("S_LAZY_SYMBOL_POINTERS", src_m)
         self.assertIn("--------RRRRRRRRGGGGGGGGBBBBBBBB", src_m)
-        self.assertIn("launch_boot.log", src_m)
-        self.assertIn("bootlog_userprops", src_m)
-        self.assertIn("refresh_userprops_target_resolution", src_m)
-        self.assertIn("set_target_render_resolution", src_m)
         self.assertIn("clamp_fullscreen_window_to_visible_frame", src_m)
-        self.assertIn("hook_CGDisplayFade", src_m)
-        self.assertIn("hook_CGDisplaySetDisplayMode", src_m)
-        for hooked_sym in (
-            "_CGDisplayCopyAllDisplayModes",
+        self.assertIn("update_cached_screen_geometry", src_m)
+        self.assertIn("SIMS2_PATCH_VERSION \"1.5.0-rc1\"", src_m)
+        self.assertIn("_CGDisplayCopyAllDisplayModes", src_m)
+        self.assertIn("_CGDisplayCopyDisplayMode", src_m)
+        self.assertIn("_CGDisplayModeGetHeight", src_m)
+        self.assertIn("_CGDisplayModeGetPixelHeight", src_m)
+        self.assertIn("_CGDisplayPixelsHigh", src_m)
+        self.assertIn("_CGDisplayBounds", src_m)
+        self.assertIn("_sscanf", src_m)
+        self.assertIn("___cxa_throw", src_m)
+
+        # Experimental hot-resolution hooks, Upscaling, Option display shortcuts, direct userProps.xml / cross-container access & GL viewport/scissor hooks must be completely absent
+        for removed_sym in (
             "_CGAcquireDisplayFadeReservation",
             "_CGDisplayFade",
             "_CGReleaseDisplayFadeReservation",
             "_CGConfigureDisplayFadeEffect",
             "_CGDisplaySetDisplayMode",
-            "___cxa_throw",
             "_glViewport",
             "_glScissor",
             "_CGLSetParameter",
             "_CGLEnable",
             "_CGLDisable",
+            "refresh_userprops_target_resolution",
+            "sync_userprops_display_mode_for_next_launch",
+            "userProps.xml",
+            "Library/Containers",
+            "initWithSuiteName:",
+            "gTargetRenderWidth",
+            "gTargetRenderHeight",
+            "launch_boot.log",
+            "trackpad_events.log",
+            "fallback-1800x1169",
+            "1800x1130",
+            "S2PatchFullscreenUpscaling",
+            "gFullscreenUpscaling",
+            "gFullscreenUpscalingEnabled",
+            "toggle_fullscreen_upscaling",
+            "toggle_fullscreen_upscaling_ex",
+            "onToggleFullscreenUpscaling",
+            "gSims2UpscaleMenuItem",
+            "Upscaling",
+            "S2PatchWindowedMode",
+            "S2PatchTargetWidth",
+            "S2PatchTargetHeight",
+            "S2PatchPrefsConfigured",
+            "Option + Return",
+            "Option + R",
+            "Option + U",
+            "kc == 32",
+            "cleanMods == NSEventModifierFlagOption",
+            "setKeyEquivalentModifierMask:NSEventModifierFlagOption",
         ):
-            self.assertIn(hooked_sym, src_m)
-        for cat_pair in (
-            "{ 1280,  800 }",
-            "{ 1440,  900 }",
-            "{ 1512,  982 }",
-            "{ 1680, 1050 }",
-            "{ 1800, 1169 }",
-            "{ 2048, 1280 }",
-            "{ 2560, 1600 }",
-            "{ 1728, 1080 }",
-            "{ 1920, 1080 }",
-            "{ 1920, 1200 }",
-            "{ 2560, 1440 }",
-        ):
-            self.assertIn(cat_pair, src_m)
+            self.assertNotIn(removed_sym, src_m)
 
-        # Metal SIGABRT guard: target init/validation, drawable check, no CGLEnable inside hook_CGLSetParameter
-        self.assertIn("w >= 800 && h >= 600 && w <= 4096 && h <= 4096", src_m)
-        self.assertIn("ensure_target_render_resolution_initialized", src_m)
-        self.assertIn("fallback-1800x1169", src_m)
-        self.assertIn("cgl_context_has_attached_drawable", src_m)
-        self.assertIn("CGLGetSurface", src_m)
-        self.assertIn("NSOpenGLContext", src_m)
-        self.assertIn("tInCGLHook", src_m)
-        cgl_set_match = re.search(
-            r"static int hook_CGLSetParameter\(.*?\n\}\n",
-            src_m,
-            flags=re.DOTALL,
-        )
-        self.assertIsNotNone(cgl_set_match)
-        cgl_set_body = cgl_set_match.group(0)
-        self.assertNotIn("gRealCGLEnable", cgl_set_body)
-        self.assertNotIn("CGLEnable(", cgl_set_body)
+        # Silent default logging + automatic crash_report.log + on-demand debug_boot.log
+        for crash_tok in (
+            "crash_report.log",
+            "debug_boot.log",
+            ".debug_enabled",
+            "SIMS2_DEBUG",
+            "SIGSEGV",
+            "SIGABRT",
+            "SIGBUS",
+            "SIGILL",
+            "SIGFPE",
+            "_ZSt13set_terminatePFvvE",
+            "backtrace_symbols_fd",
+            "hw.model",
+        ):
+            self.assertIn(crash_tok, src_m)
+
+        # Autonomous minimal single-native display mode selection + strict SDLWindow borderless/windowed state machine
+        self.assertNotIn("kSims2ResolutionWhitelist", src_m)
+        for guard_tok in (
+            "find_optimal_mode_in_array",
+            "is_better_display_mode",
+            "hook_sscanf",
+            "va_copy",
+            "vsscanf",
+            "gLastExposedModeWidth",
+            "gLastExposedModeHeight",
+            "swizzle_target_class_method",
+            "swizzled_sdlSetStyleMask",
+            "swizzled_sdlSetLevel",
+            "swizzled_sdlSetFrameDisplay",
+            "swizzled_sdlSetFrameOrigin",
+            "swizzled_sdlSetFrameTopLeftPoint",
+            "sanitize_sdl_style_mask",
+            "sanitize_mission_control_collection_behavior",
+            "NSNormalWindowLevel",
+            "NSWindowCollectionBehaviorManaged",
+            "NSWindowCollectionBehaviorParticipatesInCycle",
+            "NSWindowStyleMaskBorderless",
+            "NSWindowStyleMaskTitled",
+            "NSWindowStyleMaskClosable",
+            "NSWindowStyleMaskMiniaturizable",
+            "NSWindowTitleVisible",
+            "setTitlebarAppearsTransparent:NO",
+            "apply_borderless_presentation_options",
+            "compute_primary_game_frame",
+            "safeAreaInsets.top",
+            "gNotchTopInset",
+            "gModeTransitionInProgress",
+            "sync_content_view_to_window_bounds",
+            "enforce_primary_window_borderless_fullscreen",
+            "restore_game_window_focus_and_input",
+            "makeFirstResponder:",
+            "setAcceptsMouseMovedEvents:YES",
+            "NSWindowDidBecomeMainNotification",
+            "NSWorkspaceActiveSpaceDidChangeNotification",
+            "NSWindowWillMoveNotification",
+            "swizzled_mouseLocationOutsideOfEventStream",
+            "sync_sdl_cursor_position_before_click",
+            "Command + Return",
+            "Command + R",
+            "cleanMods == NSEventModifierFlagCommand",
+            "setKeyEquivalentModifierMask:NSEventModifierFlagCommand",
+            "kc == 36 || kc == 76 || kc == 15",
+            "NSMenu",
+            "NSUserDefaults",
+            "standardUserDefaults",
+            "NSApplicationDidBecomeActiveNotification",
+            "frameRectForContentRect:",
+            "contentRectForFrameRect:",
+            "convertPoint:rawLoc fromView:nil",
+            "tProjectMouseLocationForSDL",
+            "swizzled_nsglSetView",
+            "gGameOpenGLContext",
+            "CGLContextObj",
+            "CGLLockContext",
+            "kCGLCPSurfaceBackingSize",
+            "S2PatchWindowedWidth",
+            "S2PatchWindowedHeight",
+            "build_windowed_resolution_list",
+            "NSControlStateValueOn",
+            "NSControlStateValueOff",
+            "setHasShadow:YES",
+            "Les Sims™ 2 : Super Collection",
+        ):
+            self.assertIn(guard_tok, src_m)
+
+        # Verify Windowed -> Fullscreen order: setStyleMask:NSWindowStyleMaskBorderless BEFORE setFrame:display:
+        fs_section = src_m.split("/* === BORDERLESS FULLSCREEN (gWindowedModeActive == NO) ===")[1]
+        style_idx = fs_section.index("setStyleMask:")
+        frame_idx = fs_section.index("setFrame:display:")
+        self.assertLess(style_idx, frame_idx, "Borderless styleMask must be applied before setFrame:display:")
 
         # Compiled dylib header check (Mach-O 64-bit x86_64 MH_DYLIB)
         raw = dylib.read_bytes()
@@ -975,29 +1093,1193 @@ class TestMacScriptsIntegrity(unittest.TestCase):
         self.assertEqual(filetype, 6)
         for cg_sym in (
             b"CGDisplayCopyAllDisplayModes",
+            b"CGDisplayCopyDisplayMode",
             b"CGDisplayModeCopyPixelEncoding",
             b"CGDisplayModeGetWidth",
             b"CGDisplayModeGetHeight",
             b"CGDisplayModeGetPixelWidth",
             b"CGDisplayModeGetPixelHeight",
             b"CGDisplayModeGetRefreshRate",
-            b"launch_boot.log",
+            b"CGDisplayPixelsHigh",
+            b"CGDisplayBounds",
+            b"vsscanf",
+            b"S2PatchWindowedWidth",
+            b"S2PatchWindowedHeight",
+            b"__cxa_throw",
+            b"backtrace_symbols_fd",
+            b"crash_report.log",
+            b"debug_boot.log",
+        ):
+            self.assertIn(cg_sym, raw)
+        for absent_bin_sym in (
+            b"Sims2SyntheticDisplayMode",
             b"CGDisplayFade",
             b"CGAcquireDisplayFadeReservation",
             b"CGDisplaySetDisplayMode",
-            b"CGLSetParameter",
-            b"CGLGetParameter",
-            b"CGLGetSurface",
-            b"CGLDisable",
             b"glScissor",
-            b"__cxa_throw",
             b"glViewport",
+            b"userProps.xml",
+            b"Library/Containers",
+            b"launch_boot.log",
+            b"trackpad_events.log",
+            b"S2PatchFullscreenUpscaling",
+            b"S2PatchWindowedMode",
+            b"S2PatchTargetWidth",
+            b"S2PatchTargetHeight",
+            b"S2PatchPrefsConfigured",
         ):
-            self.assertIn(cg_sym, raw)
-        self.assertNotIn(b"Sims2SyntheticDisplayMode", raw)
+            self.assertNotIn(absent_bin_sym, raw)
         if sys.platform == "darwin":
             cs = subprocess.run(["codesign", "--verify", "--strict", dylib.as_posix()], capture_output=True, text=True)
             self.assertEqual(cs.returncode, 0, cs.stderr)
+
+    def test_window_mode_mouse_projection_zero_error(self) -> None:
+        def project_mouse_for_sdl(
+            raw_x: float,
+            raw_y: float,
+            content_w: float,
+            content_h: float,
+            fb_w: float,
+            fb_h: float,
+            windowed: bool = False,
+            sdl_w: float | None = None,
+            sdl_h: float | None = None,
+        ) -> tuple[float, float, bool]:
+            eff_sdl_w = fb_w if sdl_w is None else sdl_w
+            eff_sdl_h = fb_h if sdl_h is None else sdl_h
+            # 1. Immediate integral pass-through in 1:1 Native Fullscreen
+            if (
+                not windowed
+                and abs(content_w - fb_w) <= 2.0
+                and abs(content_h - fb_h) <= 2.0
+                and abs(eff_sdl_w - fb_w) <= 2.0
+                and abs(eff_sdl_h - fb_h) <= 2.0
+            ):
+                return (raw_x, raw_y, False)
+            # 2. convertPoint:fromView:nil with contentView at (0, 0, content_w, content_h)
+            pt_x, pt_y = raw_x, raw_y
+            # Pass-through on titlebar or outside contentView
+            if pt_y >= content_h or pt_y < 0.0 or pt_x < 0.0 or pt_x > content_w:
+                return (raw_x, raw_y, True)
+            # 3. Inside contentView: proportional projection to SDL/engine framebuffer (fb_w, fb_h)
+            x_sdl = pt_x * (fb_w / content_w)
+            y_sdl = (eff_sdl_h - fb_h) + pt_y * (fb_h / content_h)
+            return (x_sdl, y_sdl, False)
+
+        # 0. Usable native height on notched MacBook (1800x1169 with 38 px safeAreaInsets.top -> 1800x1131)
+        #    and on non-notched / external display (1920x1080 with 0 px safeAreaInsets.top -> 1920x1080)
+        notch_raw_w, notch_raw_h, safe_top_inset = 1800.0, 1169.0, 38.0
+        native_w, native_h = notch_raw_w, notch_raw_h - safe_top_inset
+        self.assertEqual((native_w, native_h), (1800.0, 1131.0))
+        ext_w, ext_h = 1920.0, 1080.0 - 0.0
+        self.assertEqual((ext_w, ext_h), (1920.0, 1080.0))
+
+        # 1. Native Fullscreen 1:1 (including <= 2 pt notch menu bar rounding 1130 vs 1131): 0.0 px error
+        for space_h in (native_h, native_h - 1.0):
+            for px, py in ((0.0, 0.0), (900.0, 565.5), (1799.0, 1129.0)):
+                xs, ys, passthrough_outside = project_mouse_for_sdl(px, py, native_w, space_h, native_w, native_h, windowed=False)
+                self.assertFalse(passthrough_outside)
+                self.assertEqual(abs(xs - px), 0.0)
+                self.assertEqual(abs(ys - py), 0.0)
+
+        # 2. Centered Windowed mode with 28 px titlebar and GPU downscale 1800x1131 -> 1280x800
+        titlebar_height = 28.0
+        outer_w, outer_h = 1280.0, 800.0 + titlebar_height
+        vis_w, vis_h = native_w, native_h
+        centered_x = (vis_w - outer_w) // 2
+        centered_y = (vis_h - outer_h) // 2
+        self.assertGreater(centered_x, 0.0)
+        self.assertGreater(centered_y, 0.0)
+        self.assertLessEqual(centered_y + outer_h, vis_h)
+        self.assertEqual(outer_h - titlebar_height, 800.0)
+
+        # Content points in 1280x800 (4 corners + center + bottom-left Options panel + top-left Montsimpa icons)
+        # project with exact 0.0 px error onto 1800x1131 engine framebuffer
+        windowed_samples = (
+            # Bottom-left corner
+            ((0.0, 0.0), (0.0, 0.0)),
+            # Bottom-left Options (...) button panel
+            ((64.0, 40.0), (90.0, 56.55)),
+            # Top-left Montsimpa icons
+            ((64.0, 760.0), (90.0, 1074.45)),
+            # Center
+            ((640.0, 400.0), (900.0, 565.5)),
+            # Bottom-right corner
+            ((1280.0, 0.0), (1800.0, 0.0)),
+            # Top-right inside contentView (y = 799)
+            ((1280.0, 799.0), (1800.0, 799.0 * (1131.0 / 800.0))),
+        )
+        for (raw_x, raw_y), (exp_x, exp_y) in windowed_samples:
+            xs, ys, in_titlebar = project_mouse_for_sdl(raw_x, raw_y, 1280.0, 800.0, native_w, native_h, windowed=True)
+            self.assertFalse(in_titlebar)
+            self.assertAlmostEqual(xs, exp_x, places=9)
+            self.assertAlmostEqual(ys, exp_y, places=9)
+            # Verify SDL top-down conversion (sdl_h - ys) matches exact normalized engine Y with 0.0 px error
+            sdl_top_down_y = native_h - ys
+            expected_top_down_y = (1.0 - (raw_y / 800.0)) * native_h
+            self.assertAlmostEqual(abs(sdl_top_down_y - expected_top_down_y), 0.0, places=9)
+
+        # Even if SDL window->h temporarily drifted to 800 while engine FB is 1800x1131,
+        # SDL top-down Y (sdl_h - ys) must still equal expected engine Y with 0.0 px error
+        for (raw_x, raw_y), _ in (((64.0, 40.0), None), ((64.0, 760.0), None), ((640.0, 400.0), None)):
+            xs, ys, in_titlebar = project_mouse_for_sdl(
+                raw_x, raw_y, 1280.0, 800.0, native_w, native_h, windowed=True, sdl_w=1280.0, sdl_h=800.0
+            )
+            self.assertFalse(in_titlebar)
+            self.assertAlmostEqual(xs, raw_x * (native_w / 1280.0), places=9)
+            self.assertAlmostEqual(800.0 - ys, (1.0 - (raw_y / 800.0)) * native_h, places=9)
+
+        # Click inside the 28 px titlebar (y in [800, 828]) must pass through untouched to Cocoa
+        for tb_y in (800.0, 814.0, 828.0):
+            xs, ys, in_titlebar = project_mouse_for_sdl(640.0, tb_y, 1280.0, 800.0, native_w, native_h, windowed=True)
+            self.assertTrue(in_titlebar)
+            self.assertEqual((xs, ys), (640.0, tb_y))
+
+    def test_exp_boot_sigsegv_fix_native_fullscreen_command_shortcuts_and_diag_telemetry(self) -> None:
+        src_m = (ROOT_DIR / "trackpad_mod" / "sims2_trackpad.m").read_text(encoding="utf-8")
+
+        # 1. Boot SIGSEGV (0x1006ea404 / nGZGraphic::cError) fix: safe variadic _sscanf wrapper
+        #    using va_start + va_copy + vsscanf + va_end, strictly gated on ret == 4, non-NULL pointers,
+        #    and gLastExposedModeWidth > 0 && gLastExposedModeHeight > 0.
+        sscanf_section = src_m.split("static int hook_sscanf(const char *str, const char *fmt, ...) {")[1].split("typedef void (*Sims2CxaThrowFn)")[0]
+        for tok in (
+            "va_start(ap, fmt);",
+            "va_copy(apScan, ap);",
+            "int ret = vsscanf(str, fmt, apScan);",
+            "va_end(apScan);",
+            "ret == 4",
+            'strcmp(fmt, "%ux%ux%ux%u") == 0',
+            "gLastExposedModeWidth > 0 && gLastExposedModeHeight > 0",
+            "va_copy(apExtract, ap);",
+            "outW && outH && outBpp && outHz",
+            "va_end(apExtract);",
+            "va_end(ap);",
+        ):
+            self.assertIn(tok, sscanf_section)
+        self.assertIn('{ "_sscanf",                       (void *)hook_sscanf },', src_m)
+
+        # 2. Always boot in native macOS Fullscreen Space (never auto-launch windowed)
+        load_prefs_section = src_m.split("static void load_display_preferences_from_defaults(void) {")[1].split("static size_t build_windowed_resolution_list")[0]
+        self.assertIn("gWindowedModeActive = NO;", load_prefs_section)
+        self.assertNotIn("gWindowedModeActive = [defaults boolForKey:", load_prefs_section)
+        self.assertIn("kSims2PrefWindowedWidthKey", load_prefs_section)
+        self.assertIn("kSims2PrefWindowedHeightKey", load_prefs_section)
+
+        # 3. 48s boot freeze fix & native macOS Fullscreen Space
+        beh_section = src_m.split("static NSWindowCollectionBehavior sanitize_mission_control_collection_behavior(NSWindowCollectionBehavior behavior) {")[1].split("return clean;")[0]
+        self.assertIn("NSWindowCollectionBehaviorFullScreenPrimary", beh_section)
+        clean_or_part = beh_section.split("clean |=")[1]
+        self.assertIn("NSWindowCollectionBehaviorFullScreenPrimary", clean_or_part)
+        self.assertNotIn("NSWindowCollectionBehaviorFullScreenNone", clean_or_part)
+        self.assertIn("Skipped setFullscreenSpace:YES", src_m)
+        self.assertIn("swizzled_windowDidFailToEnterFullScreen", src_m)
+        self.assertIn('setenv("SDL_ALLOW_TOPMOST", "0", 1);', src_m)
+        self.assertIn("NSWindowStyleMaskResizable", src_m)
+        self.assertIn("swizzled_sdlValidateMenuItem", src_m)
+        self.assertIn("try_accept_shortcut_trigger", src_m)
+        exit_fs_section = src_m.split("static void swizzled_windowDidExitFullScreen")[1].split("static BOOL swizzled_setFullscreenSpace")[0]
+        self.assertNotIn("gPrimaryFullscreenWindow = nil;", exit_fs_section)
+
+        # 4. Strictly separated Command shortcuts (Cmd+Return toggles Fullscreen<->Windowed,
+        #    Cmd+R cycles windowed resolutions ONLY and is a strict no-op + disabled menu item in Fullscreen,
+        #    zero Option display shortcuts, zero interference with Cmd+Q/H/M/W/Tab).
+        next_ev_section = src_m.split("static NSEvent *swizzled_nextEventMatchingMask")[1].split("static void swizzled_scrollWheel")[0]
+        self.assertIn("BOOL isOurShortcutKey = (kc == 36 || kc == 76 || kc == 15);", next_ev_section)
+        self.assertIn("if (isOurShortcutKey && cleanMods == NSEventModifierFlagCommand)", next_ev_section)
+        self.assertIn("Command + R ignored in Fullscreen", next_ev_section)
+        self.assertNotIn("cleanMods == NSEventModifierFlagOption", next_ev_section)
+        cycle_section = src_m.split("static void cycle_next_resolution_ex(NSTimeInterval eventTs, const char *source) {")[1].split("static void cycle_next_resolution(void)")[0]
+        self.assertIn("if (!gWindowedModeActive)", cycle_section)
+        self.assertIn("build_windowed_resolution_list", cycle_section)
+        self.assertNotIn("gNativeScreenWidth", cycle_section)
+        self.assertNotIn("toggleFullScreen", cycle_section)
+        validate_section = src_m.split("- (BOOL)validateMenuItem:(NSMenuItem *)menuItem {")[1].split("- (void)onToggleWindowedMode:")[0]
+        self.assertIn("@selector(onCycleResolution:)", validate_section)
+        self.assertIn("return gWindowedModeActive;", validate_section)
+
+        # 5. 1280x800 mouse/trackpad/keyboard controls alignment & responder chain
+        for tok in (
+            "ensure_sdl_responder_chain",
+            "safe_set_sdl_window_style_mask",
+            "sync_sdl_window_logical_size_to_engine_fb",
+            "tInMouseDownHandler",
+            "tInMouseUpHandler",
+            "tInMouseMotionHandler",
+            "swizzled_sdlViewMouseDownCanMoveWindow",
+            "flush_stuck_modifier_state_to_sdl",
+            "NSMenuDidEndTrackingNotification",
+            "describe_keyboard_source",
+            "x_sdl > sdlW - 1.0",
+            "y_sdl < 1.0",
+            "<NSMenuDelegate>",
+            "menuNeedsUpdate:",
+            "menuDidClose:",
+            "CFPreferencesAppSynchronize",
+            "S2PatchDiagLog",
+            "NSApplicationWillTerminateNotification",
+        ):
+            self.assertIn(tok, src_m)
+
+        # 6. Atomic display transition generation guard, Space geometry check & dynamic multi-screen tolerance
+        for tok in (
+            "gDisplayTransitionGen",
+            "bump_display_transition_gen",
+            "current_display_transition_gen",
+            "compute_expected_fullscreen_space_frame",
+            "ensure_fullscreen_space_geometry",
+            "should_clamp_stale_windowed_frame_during_fullscreen",
+            "safeAreaInsets.top",
+            "return sf;",
+            "1024, 640",
+            "abs(curW - targetW) <= 2 && abs(curH - targetH) <= 2",
+        ):
+            self.assertIn(tok, src_m)
+
+        # 7. Anti-glitch idempotent CGL backing check + opt-in sandbox-safe diagnostic telemetry
+        for tok in (
+            "CGLIsEnabled",
+            "CGLGetParameter",
+            "apply_opengl_surface_backing_size_ex",
+            "sims2_patch_diag.log",
+            "sims2_patch_diag.prev.log",
+            "SIMS2_DIAG_LOG",
+            "SIMS2_DIAG_OSLOG",
+            "kSims2DiagLogMaxBytes",
+            "CLOCK_UPTIME_RAW",
+            "os_log_create",
+        ):
+            self.assertIn(tok, src_m)
+
+        # 8. Runtime tests on macOS:
+        #    (a) opt-in diagnostic telemetry OFF by default, ON with SIMS2_DIAG_LOG=1, OFF with SIMS2_DIAG_LOG=0
+        #    (b) live x86_64 hook_sscanf ABI & normalization check (before/after CGDisplayCopyAllDisplayModes,
+        #        ret != 4 untouched, non-matching variadic formats with ints/doubles/strings untouched)
+        if sys.platform == "darwin" and shutil.which("clang"):
+            with tempfile.TemporaryDirectory() as tmp:
+                tmp_p = Path(tmp)
+                src_c = tmp_p / "diag_probe.c"
+                exe = tmp_p / "diag_probe"
+                src_c.write_text("int main(void) { return 0; }\n", encoding="utf-8")
+                rc = subprocess.run(
+                    ["clang", "-arch", "x86_64", "-O0", str(src_c), "-o", str(exe)],
+                    capture_output=True,
+                    text=True,
+                )
+                if rc.returncode == 0:
+                    dylib_path = (ROOT_DIR / "trackpad_mod" / "libsims2_trackpad.dylib").as_posix()
+
+                    # 1. Default OFF (opt-in only -> zero disk I/O during normal gameplay)
+                    h0 = tmp_p / "h0"
+                    t0 = tmp_p / "t0"
+                    h0.mkdir()
+                    t0.mkdir()
+                    env0 = {
+                        **os.environ,
+                        "HOME": str(h0),
+                        "SIMS2_DIAG_LOG_DIR": str(t0),
+                        "DYLD_INSERT_LIBRARIES": dylib_path,
+                    }
+                    env0.pop("SIMS2_DEBUG", None)
+                    env0.pop("SIMS2_DIAG_LOG", None)
+                    r0 = subprocess.run([str(exe)], env=env0, capture_output=True, text=True)
+                    self.assertEqual(r0.returncode, 0, r0.stderr)
+                    self.assertFalse((t0 / "sims2_patch_diag.log").exists(), "Diag log must be opt-in (OFF by default)")
+                    self.assertFalse((h0 / "Library" / "Logs" / "Sims2-Crash-Patch").exists())
+
+                    # 2. Explicitly enabled via SIMS2_DIAG_LOG=1
+                    h1 = tmp_p / "h1"
+                    t1 = tmp_p / "t1"
+                    h1.mkdir()
+                    t1.mkdir()
+                    env1 = {
+                        **os.environ,
+                        "HOME": str(h1),
+                        "SIMS2_DIAG_LOG_DIR": str(t1),
+                        "SIMS2_DIAG_LOG": "1",
+                        "DYLD_INSERT_LIBRARIES": dylib_path,
+                    }
+                    env1.pop("SIMS2_DEBUG", None)
+                    r1 = subprocess.run([str(exe)], env=env1, capture_output=True, text=True)
+                    self.assertEqual(r1.returncode, 0, r1.stderr)
+                    diag_log = t1 / "sims2_patch_diag.log"
+                    self.assertTrue(diag_log.is_file(), "Expected sims2_patch_diag.log when SIMS2_DIAG_LOG=1")
+                    diag_txt = diag_log.read_text(encoding="utf-8")
+                    self.assertIn("[BOOT]", diag_txt)
+                    self.assertIn("v1.5.0-rc1", diag_txt)
+                    self.assertIn("[INIT]", diag_txt)
+                    self.assertIn("[+0", diag_txt)
+                    self.assertFalse((h1 / "Library" / "Logs" / "Sims2-Crash-Patch").exists())
+
+                    # 3. Explicitly disabled via SIMS2_DIAG_LOG=0
+                    h2 = tmp_p / "h2"
+                    t2 = tmp_p / "t2"
+                    h2.mkdir()
+                    t2.mkdir()
+                    env2 = {
+                        **os.environ,
+                        "HOME": str(h2),
+                        "SIMS2_DIAG_LOG_DIR": str(t2),
+                        "SIMS2_DIAG_LOG": "0",
+                        "DYLD_INSERT_LIBRARIES": dylib_path,
+                    }
+                    env2.pop("SIMS2_DEBUG", None)
+                    r2 = subprocess.run([str(exe)], env=env2, capture_output=True, text=True)
+                    self.assertEqual(r2.returncode, 0, r2.stderr)
+                    self.assertFalse((t2 / "sims2_patch_diag.log").exists())
+                    self.assertFalse((h2 / "Library" / "Logs" / "Sims2-Crash-Patch").exists())
+
+                # 4. Dedicated live runtime unit test for hook_sscanf (variadic va_copy ABI + stale mode normalization)
+                sscanf_c = tmp_p / "sscanf_probe.c"
+                sscanf_exe = tmp_p / "sscanf_probe"
+                sscanf_c.write_text(
+                    "#include <CoreGraphics/CoreGraphics.h>\n"
+                    "#include <math.h>\n"
+                    "#include <stdio.h>\n"
+                    "#include <string.h>\n"
+                    "int main(void) {\n"
+                    "    unsigned int w = 0, h = 0, bpp = 0, hz = 0;\n"
+                    "    /* Before CGDisplayCopyAllDisplayModes: gLastExposedModeWidth == 0 -> must NOT overwrite */\n"
+                    "    int r_pre = sscanf(\"1512x982x32x120\", \"%ux%ux%ux%u\", &w, &h, &bpp, &hz);\n"
+                    "    if (r_pre != 4 || w != 1512 || h != 982 || bpp != 32 || hz != 120) return 10;\n"
+                    "\n"
+                    "    /* Populate gLastExposedModeWidth/Height via hooked CGDisplayCopyAllDisplayModes */\n"
+                    "    CFArrayRef modes = CGDisplayCopyAllDisplayModes(CGMainDisplayID(), NULL);\n"
+                    "    if (!modes || CFArrayGetCount(modes) < 1) return 11;\n"
+                    "    CGDisplayModeRef m = (CGDisplayModeRef)CFArrayGetValueAtIndex(modes, 0);\n"
+                    "    unsigned int expW = (unsigned int)CGDisplayModeGetWidth(m);\n"
+                    "    unsigned int expH = (unsigned int)CGDisplayModeGetHeight(m);\n"
+                    "    CFRelease(modes);\n"
+                    "    if (expW < 800 || expH < 600) return 12;\n"
+                    "\n"
+                    "    /* After exposure: stale activeDeviceDisplayMode (ret == 4) must normalize to exposed native mode */\n"
+                    "    w = h = bpp = hz = 0;\n"
+                    "    int r_stale = sscanf(\"1512x982x32x120\", \"%ux%ux%ux%u\", &w, &h, &bpp, &hz);\n"
+                    "    if (r_stale != 4 || w != expW || h != expH || bpp != 32 || hz != 60) return 13;\n"
+                    "\n"
+                    "    /* Partial scan (ret != 4) must NOT overwrite parsed values */\n"
+                    "    w = h = 0; bpp = 77; hz = 88;\n"
+                    "    int r_part = sscanf(\"1440x900\", \"%ux%ux%ux%u\", &w, &h, &bpp, &hz);\n"
+                    "    if (r_part != 2 || w != 1440 || h != 900 || bpp != 77 || hz != 88) return 14;\n"
+                    "\n"
+                    "    /* Non-display variadic scan with int, double (XMM), string, int -> proves zero x86_64 ABI corruption */\n"
+                    "    int a = 0, b = 0; double dv = 0.0; char tok[32] = {0};\n"
+                    "    int r_var = sscanf(\"42 3.25 sims2 -7\", \"%d %lf %31s %d\", &a, &dv, tok, &b);\n"
+                    "    if (r_var != 4 || a != 42 || fabs(dv - 3.25) > 1e-9 || strcmp(tok, \"sims2\") != 0 || b != -7) return 15;\n"
+                    "    printf(\"OK:%ux%u\\n\", expW, expH);\n"
+                    "    return 0;\n"
+                    "}\n",
+                    encoding="utf-8",
+                )
+                rc_ss = subprocess.run(
+                    [
+                        "clang",
+                        "-arch",
+                        "x86_64",
+                        "-mmacosx-version-min=10.13",
+                        "-O0",
+                        "-framework",
+                        "CoreGraphics",
+                        "-framework",
+                        "CoreFoundation",
+                        str(sscanf_c),
+                        "-o",
+                        str(sscanf_exe),
+                    ],
+                    capture_output=True,
+                    text=True,
+                )
+                self.assertEqual(rc_ss.returncode, 0, rc_ss.stderr)
+                h_ss = tmp_p / "h_ss"
+                h_ss.mkdir()
+                env_ss = {
+                    **os.environ,
+                    "HOME": str(h_ss),
+                    "SIMS2_DIAG_LOG": "0",
+                    "DYLD_INSERT_LIBRARIES": (ROOT_DIR / "trackpad_mod" / "libsims2_trackpad.dylib").as_posix(),
+                }
+                env_ss.pop("SIMS2_DEBUG", None)
+                r_ss = subprocess.run([str(sscanf_exe)], env=env_ss, capture_output=True, text=True)
+                self.assertEqual(r_ss.returncode, 0, f"sscanf_probe failed rc={r_ss.returncode} out={r_ss.stdout} err={r_ss.stderr}")
+                self.assertIn("OK:", r_ss.stdout)
+
+    def test_exp_windowed_inverse_warp_sdl_origin_resync_and_camera_guards(self) -> None:
+        src_m = (ROOT_DIR / "trackpad_mod" / "sims2_trackpad.m").read_text(encoding="utf-8")
+        dylib_raw = (ROOT_DIR / "trackpad_mod" / "libsims2_trackpad.dylib").read_bytes()
+
+        # 1. Pure mathematical verification of inverse WarpMouse projection (fb -> content -> real CG screen)
+        #    and SDL_Window->x/y resync across centered, displaced-left, notched Fullscreen, and non-notched displays.
+        def compute_sdl_origin(content_x: float, content_y: float, content_h: float, hooked_display_h: float) -> tuple[int, int]:
+            return (round(content_x), round(hooked_display_h - (content_y + content_h)))
+
+        def compute_inverse_warp(
+            sdl_global_x: float,
+            sdl_global_y: float,
+            sdl_win_x: float,
+            sdl_win_y: float,
+            fb_w: float,
+            fb_h: float,
+            content_x: float,
+            content_y: float,
+            content_w: float,
+            content_h: float,
+            raw_primary_h: float,
+        ) -> tuple[float, float, float, float]:
+            fb_x = max(0.0, min(fb_w - 1.0, sdl_global_x - sdl_win_x))
+            fb_y = max(0.0, min(fb_h - 1.0, sdl_global_y - sdl_win_y))
+            half_x = 0.5 if content_w < fb_w - 2.0 else 0.0
+            half_y = 0.5 if content_h < fb_h - 2.0 else 0.0
+            cx = max(0.0, min(content_w - 1.0, (fb_x + half_x) * (content_w / fb_w)))
+            cy_td = max(0.0, min(content_h - 1.0, (fb_y + half_y) * (content_h / fb_h)))
+            cg_origin_x = content_x
+            cg_origin_y = raw_primary_h - (content_y + content_h)
+            return (cg_origin_x + cx, cg_origin_y + cy_td, cx, cy_td)
+
+        # Case A: Pie menu click on chair at right side of 1280x800 centered window on notched MBP (1800x1169, notch=38 -> 1800x1131)
+        fb_w, fb_h = 1800.0, 1131.0
+        raw_h, hooked_h = 1169.0, 1131.0
+        sdl_x, sdl_y = compute_sdl_origin(260.0, 150.0, 800.0, hooked_h)
+        self.assertEqual((sdl_x, sdl_y), (260, 181))
+        # Engine requests SetCursorPos(1450, 707) -> Cocoa_WarpMouse adds (260, 181) = (1710, 888) (170 pt OUTSIDE window!)
+        cg_x, cg_y, cx, cy_td = compute_inverse_warp(
+            sdl_x + 1450.0, sdl_y + 707.0, sdl_x, sdl_y, fb_w, fb_h, 260.0, 150.0, 1280.0, 800.0, raw_h
+        )
+        # Physical cursor MUST remain strictly inside contentScreenRect [260, 1540) x [219, 1019)
+        self.assertGreaterEqual(cg_x, 260.0)
+        self.assertLess(cg_x, 260.0 + 1280.0)
+        self.assertGreaterEqual(cg_y, raw_h - (150.0 + 800.0))
+        self.assertLess(cg_y, raw_h - 150.0)
+        # Forward projection back into SDL/engine coords must round-trip with 0 px error on 2x Retina (0.5 pt grid)
+        cx_snap = round(cx * 2.0) / 2.0
+        cy_snap = round(cy_td * 2.0) / 2.0
+        self.assertEqual(int(cx_snap * (fb_w / 1280.0)), 1450)
+        self.assertEqual(int(cy_snap * (fb_h / 800.0)), 707)
+
+        # Case B: Window dragged far left on Desktop to (20, 120) -> sdlWin->x/y resync + Option/Control camera anchor roundtrip
+        moved_sdl_x, moved_sdl_y = compute_sdl_origin(20.0, 120.0, 800.0, hooked_h)
+        self.assertEqual((moved_sdl_x, moved_sdl_y), (20, 211))
+        cg_x2, cg_y2, cx2, cy2_td = compute_inverse_warp(
+            moved_sdl_x + 900.0, moved_sdl_y + 565.0, moved_sdl_x, moved_sdl_y, fb_w, fb_h, 20.0, 120.0, 1280.0, 800.0, raw_h
+        )
+        self.assertAlmostEqual(cg_x2 - 20.0, cx2, places=9)
+        self.assertAlmostEqual(cg_y2 - (raw_h - 920.0), cy2_td, places=9)
+        self.assertEqual(int((round(cx2 * 2.0) / 2.0) * (fb_w / 1280.0)), 900)
+        self.assertEqual(int((round(cy2_td * 2.0) / 2.0) * (fb_h / 800.0)), 565)
+
+        # Case C: Exhaustive 0-drift 2x Retina roundtrip across all Y pixels in 1512x982, 1440x900, 1280x800 & 1800x1131
+        for cw, ch in ((1512.0, 982.0), (1440.0, 900.0), (1280.0, 800.0), (1800.0, 1131.0)):
+            sx, sy = compute_sdl_origin(80.0, 60.0, ch, hooked_h)
+            for fb_y_i in range(0, int(fb_h), 7):
+                _, _, _, c_td = compute_inverse_warp(
+                    sx + 900.0, sy + float(fb_y_i), sx, sy, fb_w, fb_h, 80.0, 60.0, cw, ch, raw_h
+                )
+                snapped = round(c_td * 2.0) / 2.0
+                self.assertEqual(int(snapped * (fb_h / ch)), fb_y_i, f"drift at {cw}x{ch} fbY={fb_y_i}")
+
+        # Case D: Native Fullscreen Space on notched MacBook (1800x1131 below 38pt notch): cgY includes +38pt notch offset
+        fs_sx, fs_sy = compute_sdl_origin(0.0, 0.0, 1131.0, hooked_h)
+        self.assertEqual((fs_sx, fs_sy), (0, 0))
+        fs_cg_x, fs_cg_y, _, _ = compute_inverse_warp(
+            900.0, 565.0, fs_sx, fs_sy, fb_w, fb_h, 0.0, 0.0, 1800.0, 1131.0, raw_h
+        )
+        self.assertEqual((fs_cg_x, fs_cg_y), (900.0, 38.0 + 565.0))
+
+        # 2. Source & Mach-O symbol verification: inverse WarpMouse hooks + SDL_Window origin resync
+        for tok in (
+            "compute_inverse_warp_point",
+            "resolve_inverse_warp_target_cg_point",
+            "hook_CGWarpMouseCursorPosition",
+            "hook_CGDisplayMoveCursorToPoint",
+            '{ "_CGWarpMouseCursorPosition",    (void *)hook_CGWarpMouseCursorPosition },',
+            '{ "_CGDisplayMoveCursorToPoint",   (void *)hook_CGDisplayMoveCursorToPoint },',
+            "query_window_content_screen_rect",
+            "sync_sdl_window_origin_to_frame",
+            "raw_event_location_in_window",
+            "tClampDragProjectionForSDL",
+            "gNativeOptionCamHeld",
+            "gPostingSyntheticFlagsEvent",
+            "[NSApp postEvent:flagsEv atStart:YES]",
+            'debuglog_write("WARP",',
+            'debuglog_write("CTRL_ORBIT",',
+            'debuglog_write("OPTION_CAM",',
+            '"DidMove winFrame=',
+            "matchesReducedWindowedTarget",
+            "nsglSetView-async",
+            "nsglMakeCurrent-async",
+        ):
+            self.assertIn(tok, src_m)
+
+        # Ensure flush_stuck_modifier_state_to_sdl no longer calls the empty SDL2 no-op [listener flagsChanged:]
+        flush_section = src_m.split("static void flush_stuck_modifier_state_to_sdl(NSWindow *win, const char *reason) {")[1].split("static BOOL try_accept_shortcut_trigger(")[0]
+        self.assertNotIn("[listener flagsChanged:", flush_section)
+        self.assertIn("[NSApp postEvent:flagsEv atStart:YES]", flush_section)
+
+        # Ensure handle_camera_mouse_up handles Control+click left/right polarity mismatch cleanly
+        up_section = src_m.split("static void handle_camera_mouse_up(")[1].split("static void swizzled_mouseDown(")[0]
+        self.assertIn("isRight == gCtrlDragWasRight || ([NSEvent pressedMouseButtons] & 0x3) == 0", up_section)
+
+        # Ensure NSWindowDidMoveNotification always syncs SDL_Window origin in windowed mode
+        did_move_section = src_m.split("NSWindowDidMoveNotification")[1].split("NSWindowDidEnterFullScreenNotification")[0]
+        self.assertIn('sync_sdl_window_origin_to_frame(win, "didMove");', did_move_section)
+        self.assertLess(
+            did_move_section.index("sync_sdl_window_origin_to_frame"),
+            did_move_section.index("if (gWindowedModeActive)"),
+        )
+
+        # Compiled Mach-O dylib contains both hooked CoreGraphics cursor warp symbols
+        self.assertIn(b"CGWarpMouseCursorPosition", dylib_raw)
+        self.assertIn(b"CGDisplayMoveCursorToPoint", dylib_raw)
+
+    def test_exp_boot_init_guard_and_numbered_crash_diag_reporter(self) -> None:
+        src_m = (ROOT_DIR / "trackpad_mod" / "sims2_trackpad.m").read_text(encoding="utf-8")
+
+        # 1. Anti-crash boot protection during -[NSWindow initWithContentRect:...] (0x1001019c3)
+        self.assertNotIn("@selector(findSDLWindow)", src_m)
+        for tok in (
+            "is_sdl_window_fully_attached",
+            "safe_get_sdl_window_for_nswindow",
+            'class_getInstanceVariable(listenerCls, "_data")',
+            "if (!driverData)",
+            "boundWin != (__bridge const void *)win",
+        ):
+            self.assertIn(tok, src_m)
+        for swz in (
+            "swizzled_sdlSetStyleMask",
+            "swizzled_sdlSetLevel",
+            "swizzled_sdlSetCollectionBehavior",
+            "swizzled_sdlConstrainFrameRect",
+            "swizzled_sdlSetFrameOrigin",
+            "swizzled_sdlSetFrameTopLeftPoint",
+            "swizzled_sdlSetFrameDisplay",
+            "swizzled_sdlSetFrameDisplayAnimate",
+            "swizzled_sdlSetContentSize",
+        ):
+            fn_body = src_m.split(f"{swz}(")[1][:420]
+            self.assertIn("if (!win || ![win delegate])", fn_body, f"Missing early-init delegate guard in {swz}")
+
+        # 2. Automatic crash reporter: sigaltstack, SA_ONSTACK|SA_NODEFER, dladdr, NSSetUncaughtExceptionHandler,
+        #    SIG_DFL restoration without _exit() so macOS ReportCrash still generates native .ips reports.
+        for tok in (
+            "sigaltstack(&altStack, NULL)",
+            "SA_SIGINFO | SA_ONSTACK | SA_NODEFER",
+            "NSSetUncaughtExceptionHandler(&sims2_uncaught_objc_exception_handler)",
+            "dladdr(frames[i], &dli)",
+            "--- Symbolized Backtrace ---",
+            "Signal Code   : ",
+            "Patch State   : windowed=",
+            "kSims2MaxNumberedLogs = 20",
+            "scan_and_prune_numbered_logs",
+            "sims2_crash_%03d.log",
+            "sims2_patch_diag_%03d.log",
+            "fsync(fd);",
+        ):
+            self.assertIn(tok, src_m)
+        sig_handler_section = src_m.split("static void sims2_crash_signal_handler(")[1].split("static void sims2_uncaught_objc_exception_handler(")[0]
+        self.assertIn("dfl.sa_handler = SIG_DFL;", sig_handler_section)
+        self.assertIn("sigprocmask(SIG_UNBLOCK, &unblock, NULL);", sig_handler_section)
+        self.assertIn("raise(sig);", sig_handler_section)
+        self.assertNotIn("_exit(", sig_handler_section)
+
+        # 3. Live x86_64 runtime tests on macOS:
+        #    (a) Early -[SDLWindow initWithContentRect:...] with delegate == nil & crashing findSDLWindow -> exit 0
+        #    (b) Cumulative numbered crash logs (sims2_crash_001.log -> sims2_crash_002.log + crash_report.log symlink +
+        #        SIG_DFL signal exit code -11 for .ips + symbolized dladdr frames + fault address 0x8 + 20-file soft-prune)
+        #    (c) Cumulative numbered opt-in diag logs (OFF by default; sims2_patch_diag_001.log -> 002.log + symlink + cap 20)
+        if sys.platform == "darwin" and shutil.which("clang"):
+            import signal as py_signal
+
+            dylib_path = (ROOT_DIR / "trackpad_mod" / "libsims2_trackpad.dylib").as_posix()
+            with tempfile.TemporaryDirectory() as tmp:
+                tmp_p = Path(tmp)
+
+                # (a) Live ObjC probe simulating SDLWindow initWithContentRect: before delegate/driverdata attachment
+                init_m = tmp_p / "init_probe.m"
+                init_exe = tmp_p / "init_probe"
+                init_m.write_text(
+                    "#import <Cocoa/Cocoa.h>\n"
+                    "@interface SDLWindow : NSWindow\n"
+                    "- (void *)findSDLWindow;\n"
+                    "@end\n"
+                    "@implementation SDLWindow\n"
+                    "- (void *)findSDLWindow {\n"
+                    "    volatile char *bad = (volatile char *)0x8;\n"
+                    "    return (void *)(uintptr_t)(*bad);\n"
+                    "}\n"
+                    "@end\n"
+                    "int main(void) {\n"
+                    "    @autoreleasepool {\n"
+                    "        [NSApplication sharedApplication];\n"
+                    "        SDLWindow *w = [[SDLWindow alloc] initWithContentRect:NSMakeRect(100, 100, 800, 600)\n"
+                    "                                                    styleMask:(NSWindowStyleMaskTitled | NSWindowStyleMaskClosable)\n"
+                    "                                                      backing:NSBackingStoreBuffered\n"
+                    "                                                        defer:NO];\n"
+                    "        [w setReleasedWhenClosed:NO];\n"
+                    "        [w setFrameOrigin:NSMakePoint(120, 120)];\n"
+                    "        [w setContentSize:NSMakeSize(800, 600)];\n"
+                    "        [w close];\n"
+                    "    }\n"
+                    "    return 0;\n"
+                    "}\n",
+                    encoding="utf-8",
+                )
+                rc_init = subprocess.run(
+                    ["clang", "-arch", "x86_64", "-mmacosx-version-min=10.13", "-fobjc-arc", "-framework", "Cocoa", str(init_m), "-o", str(init_exe)],
+                    capture_output=True,
+                    text=True,
+                )
+                self.assertEqual(rc_init.returncode, 0, rc_init.stderr)
+                h_init = tmp_p / "h_init"
+                d_init = tmp_p / "d_init"
+                h_init.mkdir()
+                d_init.mkdir()
+                env_init = {
+                    **os.environ,
+                    "HOME": str(h_init),
+                    "SIMS2_DIAG_LOG_DIR": str(d_init),
+                    "DYLD_INSERT_LIBRARIES": dylib_path,
+                }
+                env_init.pop("SIMS2_DEBUG", None)
+                env_init.pop("SIMS2_DIAG_LOG", None)
+                r_init = subprocess.run([str(init_exe)], env=env_init, capture_output=True, text=True)
+                self.assertEqual(r_init.returncode, 0, f"SDLWindow init crashed rc={r_init.returncode} err={r_init.stderr}")
+                self.assertFalse((h_init / "Library" / "Logs" / "Sims2-Crash-Patch").exists())
+
+                # (b) & (c) Live crash & diag numbering probe
+                probe_c = tmp_p / "crash_diag_probe.c"
+                probe_exe = tmp_p / "crash_diag_probe"
+                probe_c.write_text(
+                    "#include <string.h>\n"
+                    "__attribute__((noinline)) static int trigger_segv_at_0x8(void) {\n"
+                    "    volatile unsigned long *p = (volatile unsigned long *)0x8;\n"
+                    "    return (int)(*p);\n"
+                    "}\n"
+                    "int main(int argc, char **argv) {\n"
+                    "    if (argc > 1 && strcmp(argv[1], \"segv8\") == 0) return trigger_segv_at_0x8();\n"
+                    "    return 0;\n"
+                    "}\n",
+                    encoding="utf-8",
+                )
+                rc_p = subprocess.run(
+                    ["clang", "-arch", "x86_64", "-O0", str(probe_c), "-o", str(probe_exe)],
+                    capture_output=True,
+                    text=True,
+                )
+                self.assertEqual(rc_p.returncode, 0, rc_p.stderr)
+
+                h_cr = tmp_p / "h_cr"
+                d_cr = tmp_p / "d_cr"
+                h_cr.mkdir()
+                d_cr.mkdir()
+                crash_dir = h_cr / "Library" / "Logs" / "Sims2-Crash-Patch"
+                base_env = {
+                    **os.environ,
+                    "HOME": str(h_cr),
+                    "SIMS2_DIAG_LOG_DIR": str(d_cr),
+                    "DYLD_INSERT_LIBRARIES": dylib_path,
+                }
+                base_env.pop("SIMS2_DEBUG", None)
+                base_env.pop("SIMS2_DIAG_LOG", None)
+
+                # Crash #1 -> sims2_crash_001.log + symlink crash_report.log + SIG_DFL death (-SIGSEGV)
+                r_c1 = subprocess.run([str(probe_exe), "segv8"], env=base_env, capture_output=True, text=True)
+                self.assertEqual(r_c1.returncode, -int(py_signal.SIGSEGV), f"Expected SIG_DFL death (-SIGSEGV), got rc={r_c1.returncode}")
+                c1 = crash_dir / "sims2_crash_001.log"
+                clink = crash_dir / "crash_report.log"
+                self.assertTrue(c1.is_file(), "Missing sims2_crash_001.log")
+                self.assertTrue(clink.is_symlink(), "crash_report.log should be a symlink to latest numbered crash log")
+                self.assertEqual(os.readlink(clink), "sims2_crash_001.log")
+                c1_txt = c1.read_text(encoding="utf-8")
+                for expected in (
+                    "Timestamp     :",
+                    "Crash Log #   : 1 ",
+                    "Patch Version : 1.5.0-rc1",
+                    "SIGSEGV",
+                    "Signal Code   :",
+                    "Fault Address : 0x8",
+                    "Patch State   : windowed=",
+                    "--- Symbolized Backtrace ---",
+                    "#0  0x",
+                    " + 0x",
+                ):
+                    self.assertIn(expected, c1_txt)
+
+                # Crash #2 -> sims2_crash_002.log without overwriting sims2_crash_001.log
+                r_c2 = subprocess.run([str(probe_exe), "segv8"], env=base_env, capture_output=True, text=True)
+                self.assertEqual(r_c2.returncode, -int(py_signal.SIGSEGV))
+                c2 = crash_dir / "sims2_crash_002.log"
+                self.assertTrue(c1.is_file(), "sims2_crash_001.log must never be overwritten")
+                self.assertTrue(c2.is_file(), "Missing sims2_crash_002.log")
+                self.assertEqual(os.readlink(clink), "sims2_crash_002.log")
+                self.assertIn("Crash Log #   : 2 ", c2.read_text(encoding="utf-8"))
+
+                # Soft-prune cap 20 on crash logs: create 003..022 (total 22), boot clean -> prunes 001 & 002 to 20
+                for idx in range(3, 23):
+                    (crash_dir / f"sims2_crash_{idx:03d}.log").write_text(f"dummy {idx}\n", encoding="utf-8")
+                r_prune = subprocess.run([str(probe_exe)], env=base_env, capture_output=True, text=True)
+                self.assertEqual(r_prune.returncode, 0)
+                remaining_crashes = sorted(p.name for p in crash_dir.glob("sims2_crash_*.log"))
+                self.assertEqual(len(remaining_crashes), 20)
+                self.assertEqual(remaining_crashes[0], "sims2_crash_003.log")
+                self.assertEqual(remaining_crashes[-1], "sims2_crash_022.log")
+
+                # Opt-in diag logs: OFF by default -> 0 files
+                self.assertEqual(list(d_cr.glob("sims2_patch_diag*.log")), [])
+
+                # Opt-in diag logs ON: Run 1 -> sims2_patch_diag_001.log, Run 2 -> sims2_patch_diag_002.log + symlink
+                env_diag = {**base_env, "SIMS2_DIAG_LOG": "1"}
+                self.assertEqual(subprocess.run([str(probe_exe)], env=env_diag, capture_output=True, text=True).returncode, 0)
+                d1 = d_cr / "sims2_patch_diag_001.log"
+                dlink = d_cr / "sims2_patch_diag.log"
+                self.assertTrue(d1.is_file())
+                self.assertTrue(dlink.is_symlink())
+                self.assertEqual(os.readlink(dlink), "sims2_patch_diag_001.log")
+
+                self.assertEqual(subprocess.run([str(probe_exe)], env=env_diag, capture_output=True, text=True).returncode, 0)
+                d2 = d_cr / "sims2_patch_diag_002.log"
+                self.assertTrue(d1.is_file(), "sims2_patch_diag_001.log must be preserved")
+                self.assertTrue(d2.is_file(), "Missing sims2_patch_diag_002.log")
+                self.assertEqual(os.readlink(dlink), "sims2_patch_diag_002.log")
+
+                # Cap 20 on diag logs: create 003..022, run with SIMS2_DIAG_LOG=1 -> creates 023 and prunes to <= 20
+                for idx in range(3, 23):
+                    (d_cr / f"sims2_patch_diag_{idx:03d}.log").write_text(f"diag {idx}\n", encoding="utf-8")
+                self.assertEqual(subprocess.run([str(probe_exe)], env=env_diag, capture_output=True, text=True).returncode, 0)
+                remaining_diags = sorted(p.name for p in d_cr.glob("sims2_patch_diag_*.log"))
+                self.assertEqual(len(remaining_diags), 20)
+                self.assertEqual(remaining_diags[0], "sims2_patch_diag_004.log")
+                self.assertEqual(remaining_diags[-1], "sims2_patch_diag_023.log")
+                self.assertEqual(os.readlink(dlink), "sims2_patch_diag_023.log")
+
+    def test_exp_rc1_fail_enter_fullscreen_multiscreen_and_installer(self) -> None:
+        src_m = (ROOT_DIR / "trackpad_mod" / "sims2_trackpad.m").read_text(encoding="utf-8")
+        patch_sh = (ROOT_DIR / "patch_sims2.command").read_text(encoding="utf-8")
+
+        # 1. Source guards: NSWindow* delegate extractor, _objc_msgForward guard, failEnter/failExit swizzles,
+        #    deferred Affichage menu dispatch, multi-screen screens[0] CG height, live screen params observer,
+        #    compact screen presets, and external mouse wheel bypass.
+        for sym in (
+            '#import <objc/message.h>',
+            'SIMS2_PATCH_VERSION "1.5.0-rc1"',
+            "extract_nswindow_from_delegate_arg",
+            "is_callable_orig_imp",
+            "_objc_msgForward",
+            "swizzled_windowDidFailToEnterFullScreen",
+            "swizzled_windowDidFailToExitFullScreen",
+            "gOrigWindowDidFailToExitFullScreenIMP",
+            "failEnterFullScreenRollback",
+            "query_primary_screen_height_for_cg",
+            "NSApplicationDidChangeScreenParametersNotification",
+            "rebuild_sims2_display_menu_resolution_items",
+            "hasPreciseScrollingDeltas",
+            "gCtrlMiddleDragActive",
+        ):
+            self.assertIn(sym, src_m, f"Missing v1.5.0-rc1 safeguard in sims2_trackpad.m: {sym}")
+
+        # Deferred dispatch inside Affichage menu actions so NSMenu exits tracking before toggleFullScreen:
+        impl_idx = src_m.find("@implementation Sims2DisplayMenuHandler")
+        self.assertNotEqual(impl_idx, -1, "Missing @implementation Sims2DisplayMenuHandler")
+        for menu_sel in ("- (void)onToggleWindowedMode:", "- (void)onCycleResolution:", "- (void)onSelectResolution:"):
+            idx = src_m.find(menu_sel, impl_idx)
+            self.assertNotEqual(idx, -1, f"Missing {menu_sel} in @implementation Sims2DisplayMenuHandler")
+            body = src_m[idx : idx + 600]
+            self.assertIn("dispatch_async(dispatch_get_main_queue()", body, f"{menu_sel} must defer action via dispatch_async")
+
+        # 2. Multi-screen & non-Retina math: secondary monitor at origin=(1800, 0), size 1920x1080 (scale=1.0, safeTop=0)
+        #    next to notched primary screens[0] 1800x1169 -> CoreGraphics Y MUST use screens[0] height (1169), not 1080.
+        primary_h = 1169.0
+        sec_origin_x, sec_origin_y, sec_w, sec_h = 1800.0, 0.0, 1920.0, 1080.0
+        win_w, win_h = 1280.0, 800.0
+        content_x = sec_origin_x + (sec_w - win_w) / 2.0  # 2120
+        content_y = sec_origin_y + (sec_h - win_h) / 2.0  # 140
+        cg_origin_y = primary_h - (content_y + win_h)     # 1169 - 940 = 229
+        self.assertEqual(cg_origin_y, 229.0)
+        self.assertNotEqual(cg_origin_y, sec_h - (content_y + win_h))
+        # Center of 1280x800 content maps cleanly inside secondary monitor CG rect
+        warp_cg_x = content_x + (win_w / 2.0)
+        warp_cg_y = cg_origin_y + (win_h / 2.0)
+        self.assertEqual((warp_cg_x, warp_cg_y), (2760.0, 629.0))
+        self.assertTrue(content_x <= warp_cg_x <= content_x + win_w)
+        self.assertTrue(cg_origin_y <= warp_cg_y <= cg_origin_y + win_h)
+
+        # 3. Small screens (1512x982 default MBP14 scale, 1440x900, 1280x800) must always get >= 2 valid windowed presets
+        base_presets = [
+            (2048, 1280), (1920, 1200), (1920, 1080), (1728, 1080),
+            (1680, 1050), (1600, 1000), (1512, 982), (1440, 900), (1280, 800),
+        ]
+        small_presets = [(1152, 720), (1024, 640), (960, 600)]
+        for vis_w, vis_h in ((1512, 949), (1440, 868), (1280, 768)):
+            max_w = max(800, vis_w - 24)
+            max_h = max(600, vis_h - 40)
+            choices = [(w, h) for (w, h) in base_presets if w <= max_w and h <= max_h]
+            if len(choices) < 2:
+                for (w, h) in small_presets:
+                    if w <= max_w and h <= max_h and (w, h) not in choices:
+                        choices.append((w, h))
+            self.assertGreaterEqual(len(choices), 2, f"Expected >= 2 windowed presets for visibleFrame {vis_w}x{vis_h}")
+            for (w, h) in choices:
+                self.assertLessEqual(w, vis_w)
+                self.assertLessEqual(h, vis_h)
+
+        # 4. patch_sims2.command v1.5.0-rc1 checks: version, obsolete prefs cleanup, ad-hoc sign WITHOUT --deep,
+        #    strict --verify --deep --strict, Command shortcuts, crash log path, zero Upscaling / Option+U / Option+R.
+        self.assertIn('PATCH_VERSION="1.5.0-rc1"', patch_sh)
+        self.assertIn("cleanup_obsolete_experimental_prefs", patch_sh)
+        for obsolete_key in (
+            "S2PatchFullscreenUpscaling",
+            "S2PatchWindowedMode",
+            "S2PatchTargetWidth",
+            "S2PatchTargetHeight",
+            "S2PatchPrefsConfigured",
+        ):
+            self.assertIn(obsolete_key, patch_sh, f"Missing obsolete pref cleanup for {obsolete_key}")
+        self.assertIn("xattr -cr", patch_sh)
+        self.assertIn("codesign --force --sign -", patch_sh)
+        self.assertNotIn("codesign --force --deep", patch_sh, "Signing must NOT use deprecated --deep flag")
+        self.assertIn("codesign --verify --deep --strict", patch_sh)
+        # sign_and_verify_app must sign inside-out: dylib -> Sims2XP_Exe -> .app bundle (because CFBundleExecutable is the Aspyr launcher)
+        sv_idx = patch_sh.find("sign_and_verify_app() {")
+        self.assertNotEqual(sv_idx, -1)
+        sv_body = patch_sh[sv_idx : sv_idx + 1800]
+        pos_dylib = sv_body.find('codesign --force --sign - "$target_dylib"')
+        pos_bin = sv_body.find('codesign --force --sign - "$target_bin"')
+        pos_app = sv_body.find('codesign --force --sign - "$target_app"')
+        self.assertIn('target_bin="$target_app/Contents/MacOS/Sims2XP_Exe"', sv_body)
+        self.assertTrue(0 <= pos_dylib < pos_bin < pos_app, "Must sign dylib -> Sims2XP_Exe -> .app inside-out")
+        if sys.platform == "darwin":
+            with tempfile.TemporaryDirectory() as tmp_cs:
+                sub_app = Path(tmp_cs) / "SimsLauncherTest.app"
+                sub_macos = sub_app / "Contents" / "MacOS"
+                sub_macos.mkdir(parents=True)
+                launcher = sub_macos / "The Sims 2"
+                launcher.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+                launcher.chmod(0o755)
+                sub_exe = sub_macos / "Sims2XP_Exe"
+                sub_exe.write_text("#!/bin/sh\n# v1\nexit 0\n", encoding="utf-8")
+                sub_exe.chmod(0o755)
+                shutil.copy2(ROOT_DIR / "trackpad_mod" / "libsims2_trackpad.dylib", sub_macos / "libsims2_trackpad.dylib")
+                (sub_app / "Contents" / "Info.plist").write_text(
+                    '<?xml version="1.0" encoding="UTF-8"?>\n'
+                    '<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" '
+                    '"http://www.apple.com/DTDs/PropertyList-1.0.dtd">\n'
+                    '<plist version="1.0"><dict>'
+                    '<key>CFBundleExecutable</key><string>The Sims 2</string>'
+                    '<key>CFBundleIdentifier</key><string>com.example.sims2test</string>'
+                    '</dict></plist>\n',
+                    encoding="utf-8",
+                )
+                r_s1 = self._run_bash_lib("patch_sims2.command", 'sign_and_verify_app "$1"', sub_app.as_posix())
+                self.assertEqual(r_s1.returncode, 0, r_s1.stderr or r_s1.stdout)
+                # Modify Sims2XP_Exe subcomponent (like a binary patch) -> sign_and_verify_app must re-sign it cleanly without --deep
+                sub_exe.write_text("#!/bin/sh\n# v2 patched\nexit 0\n", encoding="utf-8")
+                sub_exe.chmod(0o755)
+                r_s2 = self._run_bash_lib("patch_sims2.command", 'sign_and_verify_app "$1"', sub_app.as_posix())
+                self.assertEqual(r_s2.returncode, 0, r_s2.stderr or r_s2.stdout)
+                v_sub = subprocess.run(
+                    ["/usr/bin/codesign", "--verify", "--deep", "--strict", str(sub_app)],
+                    capture_output=True,
+                    text=True,
+                )
+                self.assertEqual(v_sub.returncode, 0, v_sub.stderr)
+        for summary_tok in ("⌘ + Entrée", "⌘ + R", "Affichage", "sims2_crash_XXX.log"):
+            self.assertIn(summary_tok, patch_sh)
+        patch_sh_without_cleanup_key = patch_sh.replace("S2PatchFullscreenUpscaling", "")
+        for forbidden_tok in ("Upscaling", "Option + U", "Option + R"):
+            self.assertNotIn(forbidden_tok, patch_sh_without_cleanup_key)
+
+        # 5. Live x86_64 ObjC runtime test: invoke windowDidFailToEnterFullScreen:(NSWindow *) directly
+        #    on swizzled Cocoa_WindowListener with a real SDLWindow* (NOT NSNotification*) -> zero exception,
+        #    original IMP invoked, and clean rollback to windowed=1 / inSpace=0.
+        if sys.platform == "darwin" and vp.find_unix_tool("clang", ()):
+            dylib_path = (ROOT_DIR / "trackpad_mod" / "libsims2_trackpad.dylib").as_posix()
+            with tempfile.TemporaryDirectory() as tmp:
+                tmp_p = Path(tmp)
+                probe_m = tmp_p / "fail_fs_probe.m"
+                probe_exe = tmp_p / "fail_fs_probe"
+                probe_m.write_text(
+                    "#import <Cocoa/Cocoa.h>\n"
+                    "#import <stdio.h>\n"
+                    "static int gOrigEnterFailCalls = 0;\n"
+                    "static int gOrigExitFailCalls = 0;\n"
+                    "@interface SDLWindow : NSWindow\n"
+                    "@end\n"
+                    "@implementation SDLWindow\n"
+                    "@end\n"
+                    "@interface Cocoa_WindowListener : NSObject <NSWindowDelegate>\n"
+                    "@end\n"
+                    "@implementation Cocoa_WindowListener\n"
+                    "- (void)windowDidFailToEnterFullScreen:(NSWindow *)window {\n"
+                    "    if ([window isKindOfClass:[NSWindow class]]) gOrigEnterFailCalls++;\n"
+                    "}\n"
+                    "- (void)windowDidFailToExitFullScreen:(NSWindow *)window {\n"
+                    "    if ([window isKindOfClass:[NSWindow class]]) gOrigExitFailCalls++;\n"
+                    "}\n"
+                    "@end\n"
+                    "int main(void) {\n"
+                    "    @autoreleasepool {\n"
+                    "        [NSApplication sharedApplication];\n"
+                    "        Cocoa_WindowListener *listener = [[Cocoa_WindowListener alloc] init];\n"
+                    "        SDLWindow *w = [[SDLWindow alloc] initWithContentRect:NSMakeRect(100, 100, 1280, 800)\n"
+                    "                                                    styleMask:(NSWindowStyleMaskTitled | NSWindowStyleMaskClosable)\n"
+                    "                                                      backing:NSBackingStoreBuffered\n"
+                    "                                                        defer:NO];\n"
+                    "        [w setReleasedWhenClosed:NO];\n"
+                    "        [w setDelegate:listener];\n"
+                    "        /* Trigger exact AppKit NSWindowDelegate signature: NSWindow* (NOT NSNotification*) */\n"
+                    "        [listener windowDidFailToEnterFullScreen:w];\n"
+                    "        [[NSRunLoop currentRunLoop] runUntilDate:[NSDate dateWithTimeIntervalSinceNow:0.05]];\n"
+                    "        [listener windowDidFailToExitFullScreen:w];\n"
+                    "        [[NSRunLoop currentRunLoop] runUntilDate:[NSDate dateWithTimeIntervalSinceNow:0.05]];\n"
+                    "        [w setDelegate:nil];\n"
+                    "        [w close];\n"
+                    "        printf(\"enterFail=%d exitFail=%d\\n\", gOrigEnterFailCalls, gOrigExitFailCalls);\n"
+                    "        return (gOrigEnterFailCalls == 1 && gOrigExitFailCalls == 1) ? 0 : 42;\n"
+                    "    }\n"
+                    "}\n",
+                    encoding="utf-8",
+                )
+                rc_build = subprocess.run(
+                    ["clang", "-arch", "x86_64", "-mmacosx-version-min=10.13", "-fobjc-arc", "-framework", "Cocoa", str(probe_m), "-o", str(probe_exe)],
+                    capture_output=True,
+                    text=True,
+                )
+                self.assertEqual(rc_build.returncode, 0, rc_build.stderr)
+
+                h_fs = tmp_p / "h_fs"
+                d_fs = tmp_p / "d_fs"
+                h_fs.mkdir()
+                d_fs.mkdir()
+                env_fs = {
+                    **os.environ,
+                    "HOME": str(h_fs),
+                    "SIMS2_DIAG_LOG_DIR": str(d_fs),
+                    "SIMS2_DIAG_LOG": "1",
+                    "DYLD_INSERT_LIBRARIES": dylib_path,
+                }
+                env_fs.pop("SIMS2_DEBUG", None)
+                r_fs = subprocess.run([str(probe_exe)], env=env_fs, capture_output=True, text=True)
+                self.assertEqual(r_fs.returncode, 0, f"windowDidFailToEnterFullScreen probe failed rc={r_fs.returncode} out={r_fs.stdout} err={r_fs.stderr}")
+                self.assertIn("enterFail=1 exitFail=1", r_fs.stdout)
+                self.assertNotIn("doesNotRecognizeSelector", r_fs.stderr)
+                self.assertFalse((h_fs / "Library" / "Logs" / "Sims2-Crash-Patch").exists(), "Zero crash log should be written")
+                diag_txt = (d_fs / "sims2_patch_diag.log").read_text(encoding="utf-8")
+                self.assertIn("windowDidFailToEnterFullScreen win=0x", diag_txt)
+                self.assertIn("windowDidFailToExitFullScreen win=0x", diag_txt)
+                self.assertIn("stillInSpace=0 windowed=1", diag_txt)
+
+    def test_exp_rc1_single_native_resolution_catalog_no_800x600(self) -> None:
+        src_m = (ROOT_DIR / "trackpad_mod" / "sims2_trackpad.m").read_text(encoding="utf-8")
+        patch_sh = (ROOT_DIR / "patch_sims2.command").read_text(encoding="utf-8")
+
+        # 1. Dylib hook_CGDisplayCopyAllDisplayModes exposes strictly 1 usable native mode (never multiple lower presets)
+        #    and hook_sscanf rewrites saved activeDeviceDisplayMode ("%ux%ux%ux%u") to match it (zero 800x600 fallback).
+        cg_idx = src_m.find("static CFArrayRef hook_CGDisplayCopyAllDisplayModes(")
+        self.assertNotEqual(cg_idx, -1)
+        cg_body = src_m[cg_idx : cg_idx + 2800]
+        self.assertIn("CFArrayCreateMutable(kCFAllocatorDefault, 1, &kCFTypeArrayCallBacks)", cg_body)
+        self.assertEqual(cg_body.count("CFArrayAppendValue(result,"), 1)
+        self.assertIn("gLastExposedModeWidth = exposedW;", cg_body)
+        self.assertIn("gLastExposedModeHeight = exposedH;", cg_body)
+
+        # Verify usable native height calculation for both MBP 14" scales (1512x982 -> 1512x950, 1800x1169 -> 1800x1131)
+        # and non-notched displays (1920x1080 -> 1920x1080)
+        for full_w, full_h, notch_top, expected_usable_h in (
+            (1512, 982, 32, 950),
+            (1800, 1169, 38, 1131),
+            (1920, 1080, 0, 1080),
+        ):
+            usable_h = full_h - notch_top if notch_top > 0 else full_h
+            self.assertEqual(usable_h, expected_usable_h)
+            self.assertTrue(800 <= full_w <= 2560 and 600 <= usable_h <= 1600)
+
+        # hook_sscanf guard against 800x600 fallback / 0x1006ea404 SIGSEGV
+        ss_idx = src_m.find("static int hook_sscanf(")
+        self.assertNotEqual(ss_idx, -1)
+        ss_body = src_m[ss_idx : ss_idx + 1800]
+        self.assertIn("va_copy(", ss_body)
+        self.assertIn("vsscanf(", ss_body)
+        self.assertIn('"%ux%ux%ux%u"', ss_body)
+        self.assertIn("gLastExposedModeWidth > 0 && gLastExposedModeHeight > 0", ss_body)
+
+        # 2. patch_sims2.command removes Aspyr's 3 hardcoded synthetic fallbacks (1280x720, 1024x768, 1344x756)
+        for label in (
+            "ASL Remove Synthetic 1280x720 (0x5e517)",
+            "ASL Remove Synthetic 1024x768 (0x5e54c)",
+            "ASL Remove Synthetic 1344x756 (0x5e591)",
+            "AslSingleNative=",
+        ):
+            self.assertIn(label, patch_sh)
+
+        # Verify on synthetic binary that restore_sims2.command rejects any partially patched fallback call
+        perl_bin = vp.find_perl()
+        if perl_bin:
+            with tempfile.TemporaryDirectory() as tmp:
+                tmp_dir = Path(tmp)
+                restore_blocks = vp.extract_perl_blocks((ROOT_DIR / "restore_sims2.command").read_text(encoding="utf-8"))
+                restore_pl = tmp_dir / "check_pristine.pl"
+                restore_pl.write_text(restore_blocks[0], encoding="utf-8")
+                only_fb_patched = (
+                    b"\x00" * 16
+                    + ORIG1
+                    + b"\x00" * 16
+                    + ORIG2
+                    + b"\x00" * 16
+                    + bytes.fromhex("4c8d4dd09090909090488b9d48ffffff")
+                )
+                f_bin = tmp_dir / "PartiallyPatched"
+                f_bin.write_bytes(only_fb_patched)
+                self.assertEqual(subprocess.run([perl_bin, str(restore_pl), str(f_bin)]).returncode, 1)
+
+    def test_v140_silent_logs_crash_capture_dynamic_res_and_github_support(self) -> None:
+        patch_text = (ROOT_DIR / "patch_sims2.command").read_text(encoding="utf-8")
+        self.assertNotIn('grules_w="1800"', patch_text)
+        self.assertNotIn('grules_h="1169"', patch_text)
+        self.assertNotIn("affichage natif 1800x1169", patch_text)
+        self.assertIn("Diagnostic & Support GitHub", patch_text)
+        self.assertIn("github_support_report.md", patch_text)
+
+        bug_tpl = ROOT_DIR / ".github" / "ISSUE_TEMPLATE" / "bug_report.md"
+        self.assertTrue(bug_tpl.is_file(), "Missing .github/ISSUE_TEMPLATE/bug_report.md")
+        bug_tpl_text = bug_tpl.read_text(encoding="utf-8")
+        self.assertIn("patch_sims2.command", bug_tpl_text)
+        self.assertIn("Diagnostic & Support GitHub", bug_tpl_text)
+        self.assertIn("github_support_report.md", bug_tpl_text)
+
+        if sys.platform == "darwin":
+            bash_bin = vp.find_bash()
+            self.assertIsNotNone(bash_bin)
+
+            # Interactive menu of patch_sims2.command shows [1]..[3] and exits cleanly on 3
+            res_quit = subprocess.run(
+                [bash_bin, "./patch_sims2.command"],
+                cwd=str(ROOT_DIR),
+                input="3\n",
+                capture_output=True,
+                text=True,
+            )
+            self.assertEqual(res_quit.returncode, 0, res_quit.stderr or res_quit.stdout)
+            self.assertIn("[1]", res_quit.stdout)
+            self.assertIn("Diagnostic & Support GitHub", res_quit.stdout)
+            self.assertIn("[3]", res_quit.stdout)
+
+            # Debug toggle + GitHub support report generation + /Users/<user> anonymization
+            with tempfile.TemporaryDirectory() as tmp:
+                base = Path(tmp)
+                fake_home = base / "Users" / "alice_secret"
+                log_dir = fake_home / "Library" / "Logs" / "Sims2-Crash-Patch"
+                cfg_dir = fake_home / "Library" / "Application Support" / "Aspyr" / "The Sims 2" / "Config"
+                cfg_dir.mkdir(parents=True)
+                userprops = cfg_dir / "userProps.xml"
+                userprops.write_text(
+                    '<?xml version="1.0"?><cGZPersistDBSegment>'
+                    '<AnyString key="activeDeviceDisplayMode" type="0x0b8bea18">1440x900x32x60</AnyString>'
+                    '</cGZPersistDBSegment>\n',
+                    encoding="utf-8",
+                )
+
+                r_dbg_on = self._run_bash_lib(
+                    "patch_sims2.command",
+                    'REAL_HOME="$1"; SIMS2_LOG_DIR="$2"; toggle_debug_mode enable',
+                    fake_home.as_posix(),
+                    log_dir.as_posix(),
+                )
+                self.assertEqual(r_dbg_on.returncode, 0, r_dbg_on.stderr or r_dbg_on.stdout)
+                self.assertTrue((log_dir / ".debug_enabled").is_file())
+
+                crash_file = log_dir / "crash_report.log"
+                crash_file.write_text(
+                    f"Patch Version : 1.5.0-rc1\nPath: /Users/alice_secret/Library/Application Support/test\n",
+                    encoding="utf-8",
+                )
+                dbg_file = log_dir / "debug_boot.log"
+                dbg_file.write_text("BOOT pid=1234 path=/Users/alice_secret/Desktop\n", encoding="utf-8")
+                (log_dir / "debug_boot.previous.log").write_text("OLD\n", encoding="utf-8")
+
+                env = dict(os.environ)
+                env["SIMS2_LIB_ONLY"] = "1"
+                env["SIMS2_SKIP_PBCOPY"] = "1"
+                env["SIMS2_SKIP_SYSTEM_PROFILER"] = "1"
+                env["SIMS2_LOG_DIR"] = log_dir.as_posix()
+                env["SIMS2_USERPROPS_OVERRIDE"] = userprops.as_posix()
+                r_rep = subprocess.run(
+                    [
+                        bash_bin,
+                        "-c",
+                        'set -u; source "./patch_sims2.command"; REAL_HOME="$1"; REAL_USER="alice_secret"; generate_github_support_report',
+                        "_",
+                        fake_home.as_posix(),
+                    ],
+                    cwd=str(ROOT_DIR),
+                    env=env,
+                    capture_output=True,
+                    text=True,
+                )
+                self.assertEqual(r_rep.returncode, 0, r_rep.stderr or r_rep.stdout)
+                self.assertNotIn("command not found", r_rep.stderr)
+                self.assertNotIn("hw.model", r_rep.stderr)
+                report_path = log_dir / "github_support_report.md"
+                self.assertTrue(report_path.is_file())
+                rep_text = report_path.read_text(encoding="utf-8")
+                self.assertIn("v1.5.0-rc1", rep_text)
+                self.assertIn("1440x900x32x60", rep_text)
+                self.assertIn("crash_report.log", rep_text)
+                self.assertIn("debug_boot.log", rep_text)
+                self.assertNotIn("alice_secret", rep_text)
+                self.assertIn("~/Library/Application Support/test", rep_text)
+
+                r_dbg_off = self._run_bash_lib(
+                    "patch_sims2.command",
+                    'REAL_HOME="$1"; SIMS2_LOG_DIR="$2"; toggle_debug_mode disable',
+                    fake_home.as_posix(),
+                    log_dir.as_posix(),
+                )
+                self.assertEqual(r_dbg_off.returncode, 0, r_dbg_off.stderr or r_dbg_off.stdout)
+                self.assertFalse((log_dir / ".debug_enabled").exists())
+                self.assertFalse(dbg_file.exists())
+                self.assertFalse((log_dir / "debug_boot.previous.log").exists())
+                self.assertTrue(crash_file.is_file())
+
+            # Runtime test of compiled x86_64 dylib (silent normal mode, debug_boot.log, crash_report.log)
+            clangxx = vp.find_unix_tool("clang++", ())
+            if clangxx:
+                cpp_src = (
+                    "#include <csignal>\n"
+                    "#include <stdexcept>\n"
+                    "#include <string>\n"
+                    "int main(int argc, char **argv) {\n"
+                    "  if (argc > 1 && std::string(argv[1]) == \"terminate\") throw std::runtime_error(\"boom\");\n"
+                    "  if (argc > 1 && std::string(argv[1]) == \"segv\") std::raise(SIGSEGV);\n"
+                    "  return 0;\n"
+                    "}\n"
+                )
+                with tempfile.TemporaryDirectory() as tmp:
+                    tmp_p = Path(tmp)
+                    src = tmp_p / "host.cpp"
+                    exe = tmp_p / "host"
+                    src.write_text(cpp_src, encoding="utf-8")
+                    subprocess.run([clangxx, "-arch", "x86_64", str(src), "-o", str(exe)], check=True)
+                    dylib_path = (ROOT_DIR / "trackpad_mod" / "libsims2_trackpad.dylib").as_posix()
+
+                    h_norm = tmp_p / "h_norm"
+                    h_norm.mkdir()
+                    rn = subprocess.run([str(exe)], env={**os.environ, "HOME": str(h_norm), "SIMS2_DIAG_LOG_DIR": str(tmp_p), "DYLD_INSERT_LIBRARIES": dylib_path})
+                    self.assertEqual(rn.returncode, 0)
+                    self.assertFalse((h_norm / "Library" / "Logs" / "Sims2-Crash-Patch").exists())
+
+                    h_dbg = tmp_p / "h_dbg"
+                    h_dbg.mkdir()
+                    rd = subprocess.run([str(exe)], env={**os.environ, "HOME": str(h_dbg), "SIMS2_DEBUG": "1", "SIMS2_DIAG_LOG_DIR": str(tmp_p), "DYLD_INSERT_LIBRARIES": dylib_path})
+                    self.assertEqual(rd.returncode, 0)
+                    self.assertTrue((h_dbg / "Library" / "Logs" / "Sims2-Crash-Patch" / "debug_boot.log").is_file())
+
+                    h_segv = tmp_p / "h_segv"
+                    h_segv.mkdir()
+                    rs = subprocess.run([str(exe), "segv"], env={**os.environ, "HOME": str(h_segv), "SIMS2_DIAG_LOG_DIR": str(tmp_p), "DYLD_INSERT_LIBRARIES": dylib_path})
+                    self.assertNotEqual(rs.returncode, 0)
+                    cr_segv = h_segv / "Library" / "Logs" / "Sims2-Crash-Patch" / "crash_report.log"
+                    self.assertTrue(cr_segv.is_file())
+                    cr_txt = cr_segv.read_text(encoding="utf-8")
+                    self.assertIn("Patch Version : 1.5.0-rc1", cr_txt)
+                    self.assertIn("SIGSEGV", cr_txt)
+                    self.assertIn("Backtrace", cr_txt)
 
     def test_v14_option_a_userprops_and_graphics_rules_1800x1125(self) -> None:
         if not vp.find_perl():
@@ -1142,6 +2424,12 @@ class TestMacScriptsIntegrity(unittest.TestCase):
         if not perl_bin:
             self.skipTest("perl not available on PATH")
 
+        orig_fb_1280 = bytes.fromhex("4989c1e8740c0000c745b000040000")
+        repl_fb_1280 = bytes.fromhex("4989c19090909090c745b000040000")
+        orig_fb_1024 = bytes.fromhex("4c8d4dd0e83f0c00004c89e8")
+        repl_fb_1024 = bytes.fromhex("4c8d4dd090909090904c89e8")
+        orig_fb_1344 = bytes.fromhex("4c8d4dd0e8fa0b0000488b9d48ffffff")
+        repl_fb_1344 = bytes.fromhex("4c8d4dd09090909090488b9d48ffffff")
         orig_asl = bytes.fromhex("39f17fd04139f87fcb")
         repl_asl = bytes.fromhex("39f190904139f89090")
         orig_val_p0 = bytes.fromhex("0f57c9f3480f2ac9f3480f2ad0f30f5eca0f2ec10f8538ffffff7b40")
@@ -1159,6 +2447,12 @@ class TestMacScriptsIntegrity(unittest.TestCase):
                 + b"\x90" * 16
                 + ORIG2
                 + b"\x90" * 16
+                + orig_fb_1280
+                + b"\x90" * 16
+                + orig_fb_1024
+                + b"\x90" * 16
+                + orig_fb_1344
+                + b"\x90" * 16
                 + orig_asl
                 + b"\x90" * 16
                 + orig_stretch
@@ -1175,9 +2469,15 @@ class TestMacScriptsIntegrity(unittest.TestCase):
             )
             self.assertEqual(r1.returncode, 0, r1.stderr or r1.stdout)
             patched = exe.read_bytes()
+            self.assertIn(repl_fb_1280, patched)
+            self.assertIn(repl_fb_1024, patched)
+            self.assertIn(repl_fb_1344, patched)
             self.assertIn(repl_asl, patched)
             self.assertIn(repl_val_p3, patched)
             self.assertIn(repl_stretch, patched)
+            self.assertNotIn(orig_fb_1280, patched)
+            self.assertNotIn(orig_fb_1024, patched)
+            self.assertNotIn(orig_fb_1344, patched)
             self.assertNotIn(orig_asl, patched)
             self.assertNotIn(orig_val_p0, patched)
             self.assertNotIn(orig_stretch, patched)
@@ -1201,6 +2501,12 @@ class TestMacScriptsIntegrity(unittest.TestCase):
                 + ORIG1
                 + b"\x90" * 16
                 + ORIG2
+                + b"\x90" * 16
+                + orig_fb_1280
+                + b"\x90" * 16
+                + orig_fb_1024
+                + b"\x90" * 16
+                + orig_fb_1344
                 + b"\x90" * 16
                 + orig_asl
                 + b"\x90" * 16
