@@ -1,5 +1,5 @@
 ================================================================================
-  THE SIMS 2: SUPER COLLECTION (macOS) — QUICK START & SUPPORT MEMO (v1.5.0-rc1)
+  THE SIMS 2: SUPER COLLECTION (macOS) — QUICK START & SUPPORT MEMO (v1.5.0-rc2)
   Apple Silicon & Intel | Zero Xcode | MIT License (Free & Non-Profit)
 ================================================================================
 
@@ -17,7 +17,7 @@
         aucun '*', c'est normal !) puis Entrée.
       - Cliquez impérativement sur « Autoriser » si Terminal demande à contrôler
         Finder (pour copier vos sauvegardes sans rien écraser).
-      - Attendez « PATCH COMPLETE (v1.5.0-rc1) » puis lancez le jeu !
+      - Attendez « PATCH COMPLETE (v1.5.0-rc2) » puis lancez le jeu !
 
 2. CONTRÔLES TRACKPAD & AFFICHAGE MACOS
    - Pincement 2 doigts                 : Zoom (+ / -)
@@ -26,13 +26,19 @@
    - Option (⌥) + glisser               : Panoramique natif (déplacement carte)
    - ⌘ + Entrée (ou menu Affichage)     : Plein écran natif <-> Mode Fenêtré
    - ⌘ + R (en mode Fenêtré uniquement) : Cycle des résolutions fenêtrées
+   - Multi-écrans : déplacer une session 16:10 vers un écran 16:9 conserve des
+     bordures noires symétriques (zéro étirement). Astuce : définissez l'écran
+     externe comme Écran principal avant de lancer le jeu pour du 16:9 natif !
+   - Limitation connue (macOS 27.0, Retina + écran externe 1x) : passez en mode
+     Fenêtré (⌘ + Entrée) avant de déplacer le jeu d'un écran à l'autre plutôt
+     que via un Space Plein écran dans Mission Control (si écran noir : killall Dock).
 
 3. OUTILS INCLUS & NOTE AFFICHAGE
    - clean_sims2_cache.command :
      [1] Nettoyer les caches corrompus (Entrée, sans mot de passe).
      [2] Réinitialiser la résolution au lancement dans userProps.xml (crée
          userProps.xml.backup). Le jeu démarre toujours en Space Plein écran
-         natif sous l'encoche (v1.5.0-rc1).
+         natif sous l'encoche (v1.5.0-rc2).
      [3] Vérifier vos Mods (.package / .zip oubliés) & limite maxfiles (10 240).
    - restore_sims2.command :
      Restaure le jeu d'origine (Sims2XP_Exe.backup + Graphics Rules.sgr.backup)
@@ -68,7 +74,7 @@
         or '*' appear on screen — normal macOS security) then press Enter.
       - Click "Allow" ("Autoriser") if Terminal asks to control Finder so your
         saves are copied without overwriting anything.
-      - Wait for "PATCH COMPLETE (v1.5.0-rc1)" and launch the game!
+      - Wait for "PATCH COMPLETE (v1.5.0-rc2)" and launch the game!
 
 2. MACBOOK TRACKPAD & DISPLAY CONTROLS
    - 2-finger pinch                     : Zoom in / out (+ / -)
@@ -77,12 +83,18 @@
    - Option (⌥) + drag                  : Native camera pan (hand-drag)
    - ⌘ + Return (or Affichage menu)     : Toggle Native Fullscreen <-> Windowed
    - ⌘ + R (Windowed mode only)         : Cycle display-compatible resolutions
+   - Multi-monitor: moving a 16:10 session onto a 16:9 external display keeps
+     symmetric black pillarboxes (zero stretch). Tip: set your external display
+     as Main Display before launching the game for native edge-to-edge 16:9!
+   - Known limitation (macOS 27.0, mixed Retina + 1x external display): switch
+     to Windowed mode (⌘ + Return) before moving the game across displays instead
+     of dragging a Fullscreen Space in Mission Control (if black screen: killall Dock).
 
 3. INCLUDED TOOLS & DISPLAY NOTE
    - clean_sims2_cache.command :
      [1] Purge corrupted caches (Enter, no password).
      [2] Reset launch resolution in userProps.xml (keeps userProps.xml.backup).
-         In v1.5.0-rc1, the game always launches in native under-notch Fullscreen.
+         In v1.5.0-rc2, the game always launches in native under-notch Fullscreen.
      [3] Check Mods/CC (.package / leftover .zip) & 10,240 open-file limit.
    - restore_sims2.command :
      Cleanly restores original binaries/configs and removes the trackpad dylib.

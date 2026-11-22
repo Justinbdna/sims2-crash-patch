@@ -4,6 +4,28 @@ All notable changes to **Sims 2 Crash Patch** (*The Sims 2: Super Collection* �
 
 ---
 
+## [1.5.0-rc2] - 2026-11-22
+
+### Fixed & Improved (FR / EN)
+- **Multi-écrans Fenêtré sans rebond & anti ping-pong Window Tiling (`trackpad_mod/sims2_trackpad.m`):**
+  - **FR :** Contournement de `-[SDLWindow constrainFrameRect:toScreen:]` (`0x100101050`) qui forçait `SDL_GetDisplayBounds(0)` et renvoyait toute fenêtre déplacée sur un écran secondaire vers le bord droit de l'écran principal (`x = 288`). Délégation propre vers `NSWindow` sur l'écran contenant la fenêtre (`resolve_screen_for_rect`), neutralisation du ping-pong macOS Window Tiling (`compute_anti_tiling_windowed_frame`), et séparation des métriques de l'écran principal (`gPrimary*`) pour stabiliser les coordonnées SDL/souris sur moniteur externe non-Retina (`scale=1.0`, `safeTop=0`).
+  - **EN:** Bypassed Aspyr's `-[SDLWindow constrainFrameRect:toScreen:]` (`0x100101050`) hardcoded `SDL_GetDisplayBounds(0)` clamp that bounced windowed sessions on secondary monitors back to Display 0 (`x = 288`). Clean delegation to `NSWindow` on the actual target screen (`resolve_screen_for_rect`), Window Tiling ping-pong neutralization (`compute_anti_tiling_windowed_frame`), and isolated primary display metrics (`gPrimary*`) for rock-solid mouse/SDL coordinates on non-Retina external monitors.
+- **Plein écran multi-écrans respectueux des proportions (`compute_aspect_fitted_fullscreen_rect`):**
+  - **FR :** Ajustement homothétique centré (`compute_aspect_fitted_fullscreen_rect`) dans les Spaces Plein écran multi-écrans : si l'écran diffère du ratio framebuffer moteur de plus de `2 %` (ex. framebuffer `1800×1131` déplacé sur TV `1920×1080` 16:9), le jeu conserve des bordures noires symétriques propres (`1719×1080@(1900,89)`, zéro étirement) avec projection souris/clics 3D exacte ; un lancement avec l'écran 16:9 en écran principal conserve le plein cadre natif `1920×1080` et propose des presets fenêtrés 16:9 cohérents.
+  - **EN:** Added `compute_aspect_fitted_fullscreen_rect` for multi-monitor Fullscreen Spaces: when display aspect differs from the engine framebuffer by `> 2%` (e.g. `1800×1131` moved onto a `1920×1080` 16:9 TV), the game preserves symmetric black pillarboxes (`1719×1080@(1900,89)`, zero stretch) with exact 3D mouse projection; launching with a 16:9 display set as Main Display runs native edge-to-edge `1920×1080` with 16:9 windowed presets.
+- **Correctif écran noir `scale=1.0 <-> 2.0`, sortie Plein écran sur l'écran d'origine, rafraîchissement OpenGL/Spaces coalescé & rollback `windowDidFailToExitFullScreen:`:**
+  - **FR :** Mémorisation de l'écran source avant sortie du Space Plein écran (`remember_exit_fullscreen_target_screen`, bypass `swizzled_sdlConstrainFrameRect` actif pendant `gInFullscreenTransition` + garde `didExitFullScreenSettle` 180 ms) afin que `⌘ + Entrée` sur un écran externe ne renvoie plus la fenêtre sur l'écran principal. Coalescence des rafraîchissements OpenGL/Metal (`gOpenGLRefreshSeq`, debounce 140 ms sans `setFrame:` synchrone en inactif) sur `NSWindowDidChangeScreenNotification` / `NSWindowDidChangeBackingPropertiesNotification`, réactivation différée 150 ms sur `NSWorkspaceActiveSpaceDidChangeNotification` (`gSpaceReactivateSeq`), protection de `NSApplicationPresentationFullScreen` (`0x400`) et correction de `swizzled_windowDidFailToExitFullScreen` lorsque `stillInSpace == NO`.
+  - **EN:** Preserved the origin display when exiting a Fullscreen Space (`remember_exit_fullscreen_target_screen`, `swizzled_sdlConstrainFrameRect` bypass during `gInFullscreenTransition`, plus 180 ms `didExitFullScreenSettle` guard) so `⌘ + Return` on an external display never bounces back to Display 0. Coalesced OpenGL/Metal refreshes (`gOpenGLRefreshSeq`, 140 ms debounce with zero synchronous `setFrame:` while inactive) on `NSWindowDidChangeScreenNotification` / `NSWindowDidChangeBackingPropertiesNotification`, deferred 150 ms `NSWorkspaceActiveSpaceDidChangeNotification` reactivation (`gSpaceReactivateSeq`), `NSApplicationPresentationFullScreen` (`0x400`) preservation, and fixed `swizzled_windowDidFailToExitFullScreen` when `stillInSpace == NO`.
+- **Alignement versions `v1.5.0-rc2` (`restore_sims2.command`, `clean_sims2_cache.command`, `patch_sims2.command`, docs & QA):**
+  - **FR :** Suppression des anciennes bannières `(v1.4.1)` dans `restore_sims2.command` et `clean_sims2_cache.command`, documentation multi-écrans bilingue et suite de tests dédiée (`36/36`).
+  - **EN:** Aligned all banners across `restore_sims2.command`, `clean_sims2_cache.command`, `patch_sims2.command`, docs, and packager to `v1.5.0-rc2`, plus bilingual multi-monitor documentation and dedicated QA tests (`36/36`).
+
+### Known Limitations (FR / EN)
+- **FR :** En multi-écrans mixtes (Retina + écran externe 1x) sous macOS 27.0, passez en mode Fenêtré (`⌘ + Entrée`) avant de déplacer le jeu sur un autre écran plutôt que de glisser un Space Plein écran via Mission Control (contournement côté WindowServer/Dock si l'écran externe reste noir : `killall Dock`).
+- **EN:** On mixed multi-monitor setups (Retina + 1x external display) on macOS 27.0, switch to Windowed mode (`⌘ + Return`) before moving the game across displays instead of dragging a Fullscreen Space in Mission Control (WindowServer/Dock workaround if the external display stays black: `killall Dock`).
+
+---
+
 ## [1.5.0-rc1] - 2026-11-22
 
 ### Added & Fixed (FR / EN)

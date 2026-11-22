@@ -27,7 +27,7 @@
 #import <unistd.h>
 
 /*
- * libsims2_trackpad.dylib (v1.5.0-rc1)
+ * libsims2_trackpad.dylib (v1.5.0-rc2)
  * Free, non-profit & open-source (MIT) Trackpad, Display & Stability helper
  * for lawful owners of The Sims 2: Super Collection (macOS).
  * Software preservation, debugging & interoperability only — no DRM bypass.
@@ -58,7 +58,7 @@
  *   SIMS2_TRACKPAD_DEBUG=0|1     (default 0, logs via NSLog)
  */
 
-#define SIMS2_PATCH_VERSION "1.5.0-rc1"
+#define SIMS2_PATCH_VERSION "1.5.0-rc2"
 
 typedef NS_ENUM(NSInteger, Sims2ScrollAxis) {
     Sims2ScrollAxisNone = 0,
@@ -146,6 +146,7 @@ static BOOL gUserRequestedFullscreenExit = NO;
 static BOOL gHasCompletedFirstWindowShow = NO;
 static BOOL gAllowResizableForSpaceToggle = NO;
 static BOOL gHasAppliedPresentationOpts = NO;
+static BOOL gAllowExplicitSpaceReactivation = NO;
 static CFAbsoluteTime gLastResignTimestamp = 0.0;
 
 static BOOL gDebugBootEnabled = NO;
@@ -238,6 +239,10 @@ static NSInteger gRawHardwareScreenHeight = 1169;
 static NSInteger gNotchTopInset = 0;
 static NSInteger gNativeScreenWidth = 1800;
 static NSInteger gNativeScreenHeight = 1131;
+static NSInteger gPrimaryRawScreenWidth = 1800;
+static NSInteger gPrimaryRawScreenHeight = 1169;
+static NSInteger gPrimaryNotchTopInset = 0;
+static NSInteger gPrimaryNativeScreenHeight = 1131;
 static NSInteger gTargetWindowWidth = 0;
 static NSInteger gTargetWindowHeight = 0;
 static size_t gLastExposedModeWidth = 0;
@@ -253,6 +258,14 @@ static BOOL gSuppressSDLResizeNotification = NO;
 static BOOL gPendingOpenGLSurfaceSync = NO;
 static volatile int32_t gModeTransitionInProgress = 0;
 static volatile uint64_t gDisplayTransitionGen = 0;
+static volatile uint64_t gOpenGLRefreshSeq = 0;
+static volatile uint64_t gSpaceReactivateSeq = 0;
+static CGFloat gLastAppliedGlBackingScale = 0.0;
+static __weak NSScreen *gLastAppliedGlScreen = nil;
+static __weak NSScreen *gExitFullscreenTargetScreen = nil;
+static NSRect gExitFullscreenTargetFrame = {{0.0, 0.0}, {0.0, 0.0}};
+static BOOL gHasExitFullscreenTarget = NO;
+static CFAbsoluteTime gExitFullscreenTargetSetTime = 0.0;
 static BOOL gUserWindowMoveInProgress = NO;
 static CFAbsoluteTime gLastModeToggleTime = 0.0;
 static CFAbsoluteTime gLastWarpDiagLogTime = 0.0;
@@ -291,8 +304,14 @@ static void debuglog_write(const char *category, const char *fmt, ...) __attribu
 static BOOL is_sdl_game_window(id winObj);
 static BOOL is_secondary_orphan_game_window(id winObj);
 static void enforce_primary_window_borderless_fullscreen(NSWindow *win, const char *reason);
+static NSScreen *resolve_screen_for_rect(NSRect rect, NSScreen *fallbackScreen);
+static NSRect compute_aspect_fitted_fullscreen_rect(NSRect screenUsableRect, double fbW, double fbH);
 static NSRect compute_expected_fullscreen_space_frame(NSWindow *win);
 static void ensure_fullscreen_space_geometry(NSWindow *win, const char *reason);
+static void refresh_opengl_surface_for_screen_or_backing_change(NSWindow *win, const char *reason);
+static void remember_exit_fullscreen_target_screen(NSWindow *win, const char *reason);
+static void clear_exit_fullscreen_target_screen(void);
+static NSScreen *resolve_active_exit_fullscreen_target_screen(void);
 static void restore_game_window_focus_and_input(NSWindow *win, const char *reason);
 static BOOL query_sdl_window_rect(NSWindow *win, CGFloat *outX, CGFloat *outY, CGFloat *outW, CGFloat *outH);
 static BOOL query_sdl_window_logical_size(NSWindow *win, CGFloat *outW, CGFloat *outH);
@@ -2968,12 +2987,16 @@ static void apply_borderless_presentation_options(BOOL wantHiddenDesktopUI) {
     @try {
         NSApplicationPresentationOptions hiddenOpts = (NSApplicationPresentationHideDock |
                                                        NSApplicationPresentationHideMenuBar);
+        NSApplicationPresentationOptions curOpts = [NSApp presentationOptions];
         if (wantHiddenDesktopUI) {
-            if (!gHasAppliedPresentationOpts || ([NSApp presentationOptions] & hiddenOpts) != hiddenOpts) {
+            if (!gHasAppliedPresentationOpts || (curOpts & hiddenOpts) != hiddenOpts) {
                 [NSApp setPresentationOptions:hiddenOpts];
                 gHasAppliedPresentationOpts = YES;
             }
-        } else if (gHasAppliedPresentationOpts || [NSApp presentationOptions] != NSApplicationPresentationDefault) {
+        } else if (gHasAppliedPresentationOpts ||
+                   (curOpts != NSApplicationPresentationDefault &&
+                    (curOpts & NSApplicationPresentationFullScreen) == 0)) {
+            /* Never clobber AppKit's own NSApplicationPresentationFullScreen (0x400) while inside a native Space. */
             [NSApp setPresentationOptions:NSApplicationPresentationDefault];
             gHasAppliedPresentationOpts = NO;
         }
@@ -2984,9 +3007,92 @@ static void apply_borderless_presentation_options(BOOL wantHiddenDesktopUI) {
     }
 }
 
+static NSScreen *resolve_screen_for_rect(NSRect rect, NSScreen *fallbackScreen) {
+    if ([NSThread isMainThread] && NSApp != nil) {
+        NSArray<NSScreen *> *screens = [NSScreen screens];
+        if (screens && [screens count] > 0) {
+            if (rect.size.width >= 1.0 && rect.size.height >= 1.0) {
+                NSPoint center = NSMakePoint(NSMidX(rect), NSMidY(rect));
+                for (NSScreen *s in screens) {
+                    if (NSPointInRect(center, s.frame)) {
+                        return s;
+                    }
+                }
+                NSScreen *bestScreen = nil;
+                CGFloat bestArea = 0.0;
+                for (NSScreen *s in screens) {
+                    NSRect inter = NSIntersectionRect(rect, s.frame);
+                    CGFloat area = inter.size.width * inter.size.height;
+                    if (area > bestArea) {
+                        bestArea = area;
+                        bestScreen = s;
+                    }
+                }
+                if (bestScreen) {
+                    return bestScreen;
+                }
+            }
+        }
+    }
+    if (fallbackScreen) {
+        return fallbackScreen;
+    }
+    return ([NSThread isMainThread] && NSApp != nil) ? [NSScreen mainScreen] : nil;
+}
+
+static NSRect compute_aspect_fitted_fullscreen_rect(NSRect screenUsableRect, double fbW, double fbH) {
+    if (screenUsableRect.size.width < 1.0 || screenUsableRect.size.height < 1.0 ||
+        fbW < 1.0 || fbH < 1.0) {
+        return screenUsableRect;
+    }
+    double screenAspect = (double)screenUsableRect.size.width / (double)screenUsableRect.size.height;
+    double fbAspect = fbW / fbH;
+    double relDiff = fabs(screenAspect - fbAspect) / fbAspect;
+    if (relDiff <= 0.02) {
+        /* Same aspect ratio within 2% (e.g. notched MacBook usable frame vs FB,
+           or native 1920x1080 on 16:9 external primary display): fill 100% edge-to-edge. */
+        return screenUsableRect;
+    }
+    if (screenAspect > fbAspect) {
+        /* Wider display (e.g. 16:9 TV showing 16:10 MacBook FB): centered pillarbox, zero stretch. */
+        CGFloat fitH = screenUsableRect.size.height;
+        CGFloat fitW = (CGFloat)llround((double)fitH * fbAspect);
+        if (fitW > screenUsableRect.size.width) {
+            fitW = screenUsableRect.size.width;
+        }
+        CGFloat fitX = screenUsableRect.origin.x + floor((screenUsableRect.size.width - fitW) * 0.5);
+        return NSMakeRect(fitX, screenUsableRect.origin.y, fitW, fitH);
+    }
+    /* Taller display (e.g. 16:10 MacBook showing 16:9 TV FB): centered letterbox, zero stretch. */
+    CGFloat fitW = screenUsableRect.size.width;
+    CGFloat fitH = (CGFloat)llround((double)fitW / fbAspect);
+    if (fitH > screenUsableRect.size.height) {
+        fitH = screenUsableRect.size.height;
+    }
+    CGFloat fitY = screenUsableRect.origin.y + floor((screenUsableRect.size.height - fitH) * 0.5);
+    return NSMakeRect(screenUsableRect.origin.x, fitY, fitW, fitH);
+}
+
 static void detect_native_screen_resolution(NSWindow *win) {
     NSScreen *scr = nil;
     if ([NSThread isMainThread] && NSApp != nil) {
+        NSArray<NSScreen *> *screens = [NSScreen screens];
+        if (screens && [screens count] > 0) {
+            NSScreen *primary = [screens objectAtIndex:0];
+            if (primary && primary.frame.size.width >= 640.0 && primary.frame.size.height >= 480.0) {
+                NSInteger pRawW = (NSInteger)llround(primary.frame.size.width);
+                NSInteger pRawH = (NSInteger)llround(primary.frame.size.height);
+                CGFloat pSafeTop = 0.0;
+                if (@available(macOS 12.0, *)) {
+                    pSafeTop = primary.safeAreaInsets.top;
+                }
+                NSInteger pInset = (pSafeTop > 0.5 && pSafeTop < 120.0) ? (NSInteger)llround(pSafeTop) : 0;
+                gPrimaryRawScreenWidth = pRawW;
+                gPrimaryRawScreenHeight = pRawH;
+                gPrimaryNotchTopInset = pInset;
+                gPrimaryNativeScreenHeight = ((pRawH - pInset) >= 480) ? (pRawH - pInset) : pRawH;
+            }
+        }
         scr = (win && win.screen) ? win.screen : [NSScreen mainScreen];
     }
     if (scr && scr.frame.size.width >= 640.0 && scr.frame.size.height >= 480.0) {
@@ -3008,9 +3114,13 @@ static void detect_native_screen_resolution(NSWindow *win) {
     if (bounds.size.width >= 640.0 && bounds.size.height >= 480.0) {
         gRawHardwareScreenWidth = (NSInteger)llround(bounds.size.width);
         gRawHardwareScreenHeight = (NSInteger)llround(bounds.size.height);
+        gPrimaryRawScreenWidth = gRawHardwareScreenWidth;
+        gPrimaryRawScreenHeight = gRawHardwareScreenHeight;
         gNativeScreenWidth = gRawHardwareScreenWidth;
         NSInteger usableH = gRawHardwareScreenHeight - gNotchTopInset;
         gNativeScreenHeight = (usableH >= 480) ? usableH : gRawHardwareScreenHeight;
+        NSInteger pUsableH = gPrimaryRawScreenHeight - gPrimaryNotchTopInset;
+        gPrimaryNativeScreenHeight = (pUsableH >= 480) ? pUsableH : gPrimaryRawScreenHeight;
     }
 }
 
@@ -3037,9 +3147,16 @@ static NSRect compute_expected_fullscreen_space_frame(NSWindow *win) {
         if (vf.size.height >= 480.0 && fabs(vf.size.height - usableH) <= 2.5) {
             usableH = vf.size.height;
         }
-        return NSMakeRect(sf.origin.x, sf.origin.y, sf.size.width, usableH);
+        NSRect notchUsable = NSMakeRect(sf.origin.x, sf.origin.y, sf.size.width, usableH);
+        if (gHasCapturedInitialEngineFb && gEngineFbW >= 640.0 && gEngineFbH >= 480.0) {
+            return compute_aspect_fitted_fullscreen_rect(notchUsable, (double)gEngineFbW, (double)gEngineFbH);
+        }
+        return notchUsable;
     }
-    /* Mac without notch or external monitor: native Fullscreen Space fills 100% of screen frame. */
+    /* Mac without notch or external monitor: aspect-fit engine FB inside full screen frame (zero stretch). */
+    if (gHasCapturedInitialEngineFb && gEngineFbW >= 640.0 && gEngineFbH >= 480.0) {
+        return compute_aspect_fitted_fullscreen_rect(sf, (double)gEngineFbW, (double)gEngineFbH);
+    }
     return sf;
 }
 
@@ -3057,14 +3174,16 @@ static void ensure_fullscreen_space_geometry(NSWindow *win, const char *reason) 
     }
     NSRect curFrame = win.frame;
     NSRect curContent = win.contentView ? win.contentView.bounds : curFrame;
-    BOOL frameTooSmall = (curFrame.size.width < expectedSpace.size.width - 4.0 ||
-                          curFrame.size.height < expectedSpace.size.height - 4.0);
-    BOOL contentTooSmall = (curContent.size.width < expectedSpace.size.width - 4.0 ||
-                            curContent.size.height < expectedSpace.size.height - 4.0);
-    if (!frameTooSmall && !contentTooSmall) {
+    BOOL frameMismatch = (fabs(curFrame.size.width - expectedSpace.size.width) > 4.0 ||
+                          fabs(curFrame.size.height - expectedSpace.size.height) > 4.0 ||
+                          fabs(curFrame.origin.x - expectedSpace.origin.x) > 4.0 ||
+                          fabs(curFrame.origin.y - expectedSpace.origin.y) > 4.0);
+    BOOL contentMismatch = (fabs(curContent.size.width - expectedSpace.size.width) > 4.0 ||
+                            fabs(curContent.size.height - expectedSpace.size.height) > 4.0);
+    if (!frameMismatch && !contentMismatch) {
         return;
     }
-    debuglog_write("WIN", "Fullscreen Space geometry mismatch (%s): frame=%.0fx%.0f@(%.0f,%.0f) content=%.0fx%.0f -> forcing %.0fx%.0f@(%.0f,%.0f)",
+    debuglog_write("WIN", "Fullscreen Space geometry mismatch (%s): frame=%.0fx%.0f@(%.0f,%.0f) content=%.0fx%.0f -> fitting %.0fx%.0f@(%.0f,%.0f)",
                    reason ? reason : "spaceCheck",
                    curFrame.size.width, curFrame.size.height, curFrame.origin.x, curFrame.origin.y,
                    curContent.size.width, curContent.size.height,
@@ -3074,6 +3193,9 @@ static void ensure_fullscreen_space_geometry(NSWindow *win, const char *reason) 
     BOOL prevSuppress = gSuppressSDLResizeNotification;
     gNotchFitInProgress = YES;
     gSuppressSDLResizeNotification = YES;
+    if (![win.backgroundColor isEqual:[NSColor blackColor]]) {
+        [win setBackgroundColor:[NSColor blackColor]];
+    }
     if (gOrigSDLSetFrameDisplayIMP && gSDLWindowClass && [win isKindOfClass:gSDLWindowClass]) {
         typedef void (*FrameFn)(id, SEL, NSRect, BOOL);
         ((FrameFn)gOrigSDLSetFrameDisplayIMP)(win, @selector(setFrame:display:), expectedSpace, YES);
@@ -3173,6 +3295,16 @@ static void load_display_preferences_from_defaults(void) {
                    (long)gTargetWindowWidth, (long)gTargetWindowHeight);
 }
 
+static BOOL engine_fb_is_widescreen_16_9(void) {
+    if (gHasCapturedInitialEngineFb && gEngineFbW >= 640.0 && gEngineFbH >= 480.0) {
+        return ((double)gEngineFbW / (double)gEngineFbH) >= 1.70;
+    }
+    if (gNativeScreenWidth >= 640 && gNativeScreenHeight >= 480) {
+        return ((double)gNativeScreenWidth / (double)gNativeScreenHeight) >= 1.70;
+    }
+    return NO;
+}
+
 static size_t build_windowed_resolution_list(NSWindow *win, NSInteger outW[4], NSInteger outH[4]) {
     detect_native_screen_resolution(win);
     NSScreen *scr = (win && win.screen) ? win.screen : [NSScreen mainScreen];
@@ -3181,16 +3313,35 @@ static size_t build_windowed_resolution_list(NSWindow *win, NSInteger outW[4], N
                                     NSWindowStyleMaskClosable |
                                     NSWindowStyleMaskMiniaturizable |
                                     NSWindowStyleMaskResizable);
+    BOOL is16by9Fb = engine_fb_is_widescreen_16_9();
 
-    static const NSInteger kWindowedPresets[][2] = {
+    static const NSInteger kWindowedPresets16x10[][2] = {
         { 1512, 982 },
         { 1440, 900 },
         { 1280, 800 },
     };
+    static const NSInteger kSmallScreenPresets16x10[][2] = {
+        { 1152, 720 },
+        { 1024, 640 },
+        { 960,  600 },
+    };
+    static const NSInteger kWindowedPresets16x9[][2] = {
+        { 1600, 900 },
+        { 1366, 768 },
+        { 1280, 720 },
+    };
+    static const NSInteger kSmallScreenPresets16x9[][2] = {
+        { 1152, 648 },
+        { 1024, 576 },
+        { 960,  540 },
+    };
+
+    const NSInteger (*mainPresets)[2] = is16by9Fb ? kWindowedPresets16x9 : kWindowedPresets16x10;
+    const NSInteger (*smallPresets)[2] = is16by9Fb ? kSmallScreenPresets16x9 : kSmallScreenPresets16x10;
     size_t count = 0;
-    for (size_t i = 0; i < sizeof(kWindowedPresets) / sizeof(kWindowedPresets[0]) && count < 4; i++) {
-        NSInteger pw = kWindowedPresets[i][0];
-        NSInteger ph = kWindowedPresets[i][1];
+    for (size_t i = 0; i < 3 && count < 4; i++) {
+        NSInteger pw = mainPresets[i][0];
+        NSInteger ph = mainPresets[i][1];
         if (pw > gNativeScreenWidth || ph > gNativeScreenHeight ||
             (pw == gNativeScreenWidth && ph == gNativeScreenHeight)) {
             continue;
@@ -3203,14 +3354,9 @@ static size_t build_windowed_resolution_list(NSWindow *win, NSInteger outW[4], N
             count++;
         }
     }
-    static const NSInteger kSmallScreenPresets[][2] = {
-        { 1152, 720 },
-        { 1024, 640 },
-        { 960,  600 },
-    };
-    for (size_t i = 0; i < sizeof(kSmallScreenPresets) / sizeof(kSmallScreenPresets[0]) && count < 2; i++) {
-        NSInteger pw = kSmallScreenPresets[i][0];
-        NSInteger ph = kSmallScreenPresets[i][1];
+    for (size_t i = 0; i < 3 && count < 2; i++) {
+        NSInteger pw = smallPresets[i][0];
+        NSInteger ph = smallPresets[i][1];
         if (pw > gNativeScreenWidth || ph > gNativeScreenHeight ||
             (pw == gNativeScreenWidth && ph == gNativeScreenHeight)) {
             continue;
@@ -3224,18 +3370,17 @@ static size_t build_windowed_resolution_list(NSWindow *win, NSInteger outW[4], N
         }
     }
     if (count == 0) {
-        outW[0] = 1024;
-        outH[0] = 640;
+        outW[0] = is16by9Fb ? 1024 : 1024;
+        outH[0] = is16by9Fb ? 576  : 640;
         count = 1;
     }
     return count;
 }
 
-static void resolve_compatible_windowed_size(NSWindow *win, NSInteger *ioW, NSInteger *ioH) {
+static void resolve_compatible_windowed_size_on_screen(NSScreen *scr, NSInteger *ioW, NSInteger *ioH) {
     if (!ioW || !ioH) {
         return;
     }
-    NSScreen *scr = (win && win.screen) ? win.screen : [NSScreen mainScreen];
     NSRect vf = scr ? scr.visibleFrame : NSMakeRect(0.0, 0.0, (CGFloat)gNativeScreenWidth, (CGFloat)gNativeScreenHeight);
     NSWindowStyleMask titledMask = (NSWindowStyleMaskTitled |
                                     NSWindowStyleMaskClosable |
@@ -3246,7 +3391,8 @@ static void resolve_compatible_windowed_size(NSWindow *win, NSInteger *ioW, NSIn
     if (outer.size.width <= vf.size.width && outer.size.height <= vf.size.height) {
         return;
     }
-    static const NSInteger kCompatPresets[][2] = {
+    BOOL is16by9Fb = engine_fb_is_widescreen_16_9();
+    static const NSInteger kCompatPresets16x10[][2] = {
         { 1512, 982 },
         { 1440, 900 },
         { 1280, 800 },
@@ -3254,23 +3400,41 @@ static void resolve_compatible_windowed_size(NSWindow *win, NSInteger *ioW, NSIn
         { 1024, 640 },
         { 960,  600 },
     };
-    for (size_t i = 0; i < sizeof(kCompatPresets) / sizeof(kCompatPresets[0]); i++) {
-        NSRect testOuter = [NSWindow frameRectForContentRect:NSMakeRect(0.0, 0.0, (CGFloat)kCompatPresets[i][0], (CGFloat)kCompatPresets[i][1])
+    static const NSInteger kCompatPresets16x9[][2] = {
+        { 1600, 900 },
+        { 1366, 768 },
+        { 1280, 720 },
+        { 1152, 648 },
+        { 1024, 576 },
+        { 960,  540 },
+    };
+    const NSInteger (*presets)[2] = is16by9Fb ? kCompatPresets16x9 : kCompatPresets16x10;
+    for (size_t i = 0; i < 6; i++) {
+        NSRect testOuter = [NSWindow frameRectForContentRect:NSMakeRect(0.0, 0.0, (CGFloat)presets[i][0], (CGFloat)presets[i][1])
                                                    styleMask:titledMask];
         if (testOuter.size.width <= vf.size.width && testOuter.size.height <= vf.size.height) {
-            *ioW = kCompatPresets[i][0];
-            *ioH = kCompatPresets[i][1];
+            *ioW = presets[i][0];
+            *ioH = presets[i][1];
             return;
         }
     }
     *ioW = 1024;
-    *ioH = 640;
+    *ioH = is16by9Fb ? 576 : 640;
 }
 
-static NSRect compute_windowed_game_frame(NSWindow *win, NSInteger targetW, NSInteger targetH, BOOL centerInVisible) {
-    NSScreen *scr = (win && win.screen) ? win.screen : [NSScreen mainScreen];
+static void resolve_compatible_windowed_size(NSWindow *win, NSInteger *ioW, NSInteger *ioH) {
+    NSScreen *scr = win ? resolve_screen_for_rect(win.frame, win.screen) : [NSScreen mainScreen];
+    resolve_compatible_windowed_size_on_screen(scr, ioW, ioH);
+}
+
+static NSRect compute_windowed_game_frame_on_screen(NSWindow *win,
+                                                    NSScreen *targetScreen,
+                                                    NSInteger targetW,
+                                                    NSInteger targetH,
+                                                    BOOL centerInVisible) {
+    NSScreen *scr = targetScreen ?: (win ? resolve_screen_for_rect(win.frame, win.screen) : [NSScreen mainScreen]);
     NSRect vf = scr ? scr.visibleFrame : NSMakeRect(0.0, 0.0, (CGFloat)gNativeScreenWidth, (CGFloat)gNativeScreenHeight);
-    resolve_compatible_windowed_size(win, &targetW, &targetH);
+    resolve_compatible_windowed_size_on_screen(scr, &targetW, &targetH);
     NSRect contentRect = NSMakeRect(0.0, 0.0, (CGFloat)targetW, (CGFloat)targetH);
     NSWindowStyleMask titledMask = (NSWindowStyleMaskTitled |
                                     NSWindowStyleMaskClosable |
@@ -3287,16 +3451,25 @@ static NSRect compute_windowed_game_frame(NSWindow *win, NSInteger targetW, NSIn
         outerRect.origin.y = vf.origin.y + floor((vf.size.height - outerRect.size.height) * 0.5);
     }
     CGFloat maxTop = vf.origin.y + vf.size.height;
+    CGFloat maxRight = vf.origin.x + vf.size.width;
     if (outerRect.origin.y + outerRect.size.height > maxTop) {
         outerRect.origin.y = maxTop - outerRect.size.height;
     }
     if (outerRect.origin.y < vf.origin.y) {
         outerRect.origin.y = vf.origin.y;
     }
+    if (outerRect.origin.x + outerRect.size.width > maxRight) {
+        outerRect.origin.x = maxRight - outerRect.size.width;
+    }
     if (outerRect.origin.x < vf.origin.x) {
         outerRect.origin.x = vf.origin.x;
     }
     return outerRect;
+}
+
+static NSRect compute_windowed_game_frame(NSWindow *win, NSInteger targetW, NSInteger targetH, BOOL centerInVisible) {
+    NSScreen *scr = win ? resolve_screen_for_rect(win.frame, win.screen) : [NSScreen mainScreen];
+    return compute_windowed_game_frame_on_screen(win, scr, targetW, targetH, centerInVisible);
 }
 
 #pragma clang diagnostic push
@@ -3436,6 +3609,11 @@ static void apply_opengl_surface_backing_size_ex(NSWindow *win, BOOL forceUpdate
     }
     CGLUnlockContext(cglCtx);
 
+    CGFloat winScale = (win && win.backingScaleFactor > 0.0) ? win.backingScaleFactor : 1.0;
+    NSScreen *winScreen = win ? win.screen : nil;
+    BOOL backingOrScreenChanged = (fabs(winScale - gLastAppliedGlBackingScale) > 0.01 ||
+                                   winScreen != gLastAppliedGlScreen);
+
     if (needsBackingScale) {
         /* Anti-cropping & GPU scaling safety net (Windowed mode or mismatched engine FB):
            lock kCGLCPSurfaceBackingSize to { gEngineFbW, gEngineFbH } without redundant [nsglCtx update] calls
@@ -3446,19 +3624,25 @@ static void apply_opengl_surface_backing_size_ex(NSWindow *win, BOOL forceUpdate
         };
         gActiveFramebufferWidth = fbW;
         gActiveFramebufferHeight = fbH;
-        if (!forceUpdate && wasEnabled && curDims[0] == dims[0] && curDims[1] == dims[1]) {
+        if (!forceUpdate && !backingOrScreenChanged && wasEnabled && curDims[0] == dims[0] && curDims[1] == dims[1]) {
             return;
         }
         CGLLockContext(cglCtx);
         CGLSetParameter(cglCtx, kCGLCPSurfaceBackingSize, dims);
         CGLEnable(cglCtx, kCGLCESurfaceBackingSize);
+        CGLUpdateContext(cglCtx);
         CGLUnlockContext(cglCtx);
         if (nsglCtx) {
             [nsglCtx update];
         }
-        debuglog_write("GL", "Set kCGLCPSurfaceBackingSize=%dx%d (prev=%dx%d en=%d) into content=%.0fx%.0f (windowed=%d scale=%.1f force=%d)",
+        if (win && win.contentView && [NSThread isMainThread]) {
+            [win.contentView setNeedsDisplay:YES];
+        }
+        gLastAppliedGlBackingScale = winScale;
+        gLastAppliedGlScreen = winScreen;
+        debuglog_write("GL", "Set kCGLCPSurfaceBackingSize=%dx%d (prev=%dx%d en=%d) into content=%.0fx%.0f (windowed=%d scale=%.1f winScale=%.1f force=%d)",
                        dims[0], dims[1], curDims[0], curDims[1], wasEnabled, contentW, contentH,
-                       gWindowedModeActive ? 1 : 0, backingScale,
+                       gWindowedModeActive ? 1 : 0, backingScale, winScale,
                        forceUpdate ? 1 : 0);
     } else {
         /* Exact 1:1 native match */
@@ -3466,25 +3650,148 @@ static void apply_opengl_surface_backing_size_ex(NSWindow *win, BOOL forceUpdate
             gActiveFramebufferWidth = contentW;
             gActiveFramebufferHeight = contentH;
         }
-        if (!forceUpdate && !wasEnabled) {
+        if (!forceUpdate && !backingOrScreenChanged && !wasEnabled) {
             return;
         }
         CGLLockContext(cglCtx);
         CGLDisable(cglCtx, kCGLCESurfaceBackingSize);
+        CGLUpdateContext(cglCtx);
         CGLUnlockContext(cglCtx);
         if (nsglCtx) {
             [nsglCtx update];
         }
-        debuglog_write("GL", "Native 1:1 surface: disabled kCGLCESurfaceBackingSize (prevEn=%d fb=%.0fx%.0f content=%.0fx%.0f force=%d)",
+        if (win && win.contentView && [NSThread isMainThread]) {
+            [win.contentView setNeedsDisplay:YES];
+        }
+        gLastAppliedGlBackingScale = winScale;
+        gLastAppliedGlScreen = winScreen;
+        debuglog_write("GL", "Native 1:1 surface: disabled kCGLCESurfaceBackingSize (prevEn=%d fb=%.0fx%.0f content=%.0fx%.0f winScale=%.1f force=%d)",
                        wasEnabled, gActiveFramebufferWidth, gActiveFramebufferHeight,
-                       contentW, contentH, forceUpdate ? 1 : 0);
+                       contentW, contentH, winScale, forceUpdate ? 1 : 0);
     }
 }
 
 static void apply_opengl_surface_backing_size(NSWindow *win) {
     apply_opengl_surface_backing_size_ex(win, NO);
 }
+
+static void refresh_opengl_surface_for_screen_or_backing_change(NSWindow *win, const char *reason) {
+    if (!win || gAppIsTerminating || !is_sdl_game_window(win) || is_secondary_orphan_game_window(win)) {
+        return;
+    }
+    /* Update lightweight screen/menu/SDL metadata immediately, NEVER mutate setFrame: synchronously
+       while inactive (e.g. mid-Mission-Control Space drag between monitors), and coalesce all rapid
+       DidChangeBackingProperties / DidChangeScreen / DidChangeScreenParameters bursts into a single
+       debounced OpenGL + geometry settle pass (140 ms) via gOpenGLRefreshSeq. */
+    detect_native_screen_resolution(win);
+    update_cached_screen_geometry(win.screen ?: [NSScreen mainScreen]);
+    rebuild_sims2_display_menu_resolution_items(win);
+    update_sims2_display_menu_state();
+    sync_sdl_window_logical_size_to_engine_fb(win, reason ? reason : "screenOrBackingChange");
+
+    uint64_t mySeq = __atomic_add_fetch(&gOpenGLRefreshSeq, 1ULL, __ATOMIC_ACQ_REL);
+    uint64_t refreshGen = current_display_transition_gen();
+    __weak NSWindow *weakWin = win;
+    const char *reasonTag = reason ? reason : "screenOrBackingChange";
+
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(140 * NSEC_PER_MSEC)),
+                   dispatch_get_main_queue(), ^{
+        if (__atomic_load_n(&gOpenGLRefreshSeq, __ATOMIC_ACQUIRE) != mySeq ||
+            current_display_transition_gen() != refreshGen ||
+            gInFullscreenTransition || gAppIsTerminating) {
+            return;
+        }
+        NSWindow *w = weakWin;
+        if (!w || !is_sdl_window_fully_attached(w)) {
+            return;
+        }
+        detect_native_screen_resolution(w);
+        update_cached_screen_geometry(w.screen ?: [NSScreen mainScreen]);
+        rebuild_sims2_display_menu_resolution_items(w);
+        update_sims2_display_menu_state();
+        BOOL wInSpace = ((w.styleMask & NSWindowStyleMaskFullScreen) != 0);
+        BOOL appActive = (NSApp && [NSApp isActive] && !gAppIsHiding);
+        if (!gWindowedModeActive && wInSpace && appActive) {
+            /* Only fit Space geometry once active & WindowServer/NSToolbarFullScreenWindow have settled. */
+            ensure_fullscreen_space_geometry(w, reasonTag);
+        }
+        sync_sdl_window_logical_size_to_engine_fb(w, reasonTag);
+        BOOL forceGl = (reasonTag &&
+                        (strcmp(reasonTag, "ActiveSpaceDidChange") == 0 ||
+                         strcmp(reasonTag, "ActiveSpaceVisibleRefresh") == 0 ||
+                         strcmp(reasonTag, "ActiveSpaceDidChangeReactivate") == 0 ||
+                         strcmp(reasonTag, "didExitFullScreenSettle") == 0 ||
+                         strcmp(reasonTag, "DidBecomeActive") == 0));
+        apply_opengl_surface_backing_size_ex(w, forceGl);
+        if (w.contentView) {
+            [w.contentView setNeedsDisplay:YES];
+        }
+        debuglog_write("GL", "Coalesced OpenGL refresh (%s) screen=%.0fx%.0f@(%.0f,%.0f) scale=%.1f inSpace=%d active=%d windowed=%d",
+                       reasonTag,
+                       w.screen ? w.screen.frame.size.width : 0.0,
+                       w.screen ? w.screen.frame.size.height : 0.0,
+                       w.screen ? w.screen.frame.origin.x : 0.0,
+                       w.screen ? w.screen.frame.origin.y : 0.0,
+                       w.backingScaleFactor,
+                       wInSpace ? 1 : 0,
+                       appActive ? 1 : 0,
+                       gWindowedModeActive ? 1 : 0);
+    });
+}
 #pragma clang diagnostic pop
+
+static void clear_exit_fullscreen_target_screen(void) {
+    gExitFullscreenTargetScreen = nil;
+    gExitFullscreenTargetFrame = NSZeroRect;
+    gHasExitFullscreenTarget = NO;
+    gExitFullscreenTargetSetTime = 0.0;
+}
+
+static void remember_exit_fullscreen_target_screen(NSWindow *win, const char *reason) {
+    if (!win) {
+        return;
+    }
+    NSScreen *srcScreen = win.screen ?: resolve_screen_for_rect(win.frame, nil);
+    if (!srcScreen) {
+        return;
+    }
+    NSInteger tw = (gTargetWindowWidth >= 640) ? gTargetWindowWidth : 1512;
+    NSInteger th = (gTargetWindowHeight >= 480) ? gTargetWindowHeight : 982;
+    resolve_compatible_windowed_size_on_screen(srcScreen, &tw, &th);
+    NSRect targetFrame = compute_windowed_game_frame_on_screen(win, srcScreen, tw, th, YES);
+    gExitFullscreenTargetScreen = srcScreen;
+    gExitFullscreenTargetFrame = targetFrame;
+    gHasExitFullscreenTarget = YES;
+    gExitFullscreenTargetSetTime = CFAbsoluteTimeGetCurrent();
+    debuglog_write("WIN", "Remembered exit-fullscreen target (%s): screen=%.0fx%.0f@(%.0f,%.0f) target=%.0fx%.0f@(%.0f,%.0f)",
+                   reason ? reason : "exitFS",
+                   srcScreen.frame.size.width, srcScreen.frame.size.height,
+                   srcScreen.frame.origin.x, srcScreen.frame.origin.y,
+                   targetFrame.size.width, targetFrame.size.height,
+                   targetFrame.origin.x, targetFrame.origin.y);
+}
+
+static NSScreen *resolve_active_exit_fullscreen_target_screen(void) {
+    if (!gHasExitFullscreenTarget || !gExitFullscreenTargetScreen) {
+        return nil;
+    }
+    if (gUserWindowMoveInProgress || ([NSEvent pressedMouseButtons] & 1) != 0) {
+        clear_exit_fullscreen_target_screen();
+        return nil;
+    }
+    if (gExitFullscreenTargetSetTime > 0.0 &&
+        (CFAbsoluteTimeGetCurrent() - gExitFullscreenTargetSetTime) > 3.0) {
+        clear_exit_fullscreen_target_screen();
+        return nil;
+    }
+    NSScreen *saved = gExitFullscreenTargetScreen;
+    NSArray<NSScreen *> *screens = ([NSThread isMainThread] && NSApp != nil) ? [NSScreen screens] : nil;
+    if (screens && [screens containsObject:saved]) {
+        return saved;
+    }
+    clear_exit_fullscreen_target_screen();
+    return nil;
+}
 
 static BOOL is_secondary_orphan_game_window(id winObj) {
     if (!gPrimaryFullscreenWindow || !winObj || winObj == gPrimaryFullscreenWindow) {
@@ -3649,6 +3956,7 @@ static void swizzled_windowWillEnterFullScreen(id self, SEL _cmd, NSNotification
     gInFullscreenTransition = YES;
     gAllowResizableForSpaceToggle = YES;
     gWindowedModeActive = NO;
+    clear_exit_fullscreen_target_screen();
     NSWindow *winObj = extract_nswindow_from_delegate_arg(notification);
     if (winObj) {
         neutralize_secondary_orphan_windows(winObj);
@@ -3668,6 +3976,17 @@ static void swizzled_windowWillEnterFullScreen(id self, SEL _cmd, NSNotification
 
 static void swizzled_windowDidEnterFullScreen(id self, SEL _cmd, NSNotification *notification) {
     gWindowListener = self;
+    NSWindow *win = extract_nswindow_from_delegate_arg(notification);
+    if (!win) {
+        win = resolve_primary_game_window();
+    }
+    if (win && ((win.styleMask & NSWindowStyleMaskFullScreen) == 0)) {
+        /* Guard against SDL2's windowDidFailToExitFullScreen: tail-calling [self windowDidEnterFullScreen:nil]
+           when macOS actually already exited the Fullscreen Space (fs=0). */
+        debuglog_write("WIN", "IGNORED spurious windowDidEnterFullScreen win=%p (fs=0 windowed=%d)",
+                       (__bridge void *)win, gWindowedModeActive ? 1 : 0);
+        return;
+    }
     gInFullscreenTransition = NO;
     gAllowResizableForSpaceToggle = NO;
     gUserRequestedFullscreenEnter = NO;
@@ -3676,7 +3995,6 @@ static void swizzled_windowDidEnterFullScreen(id self, SEL _cmd, NSNotification 
     gLastKnownInSpace = YES;
     record_last_hook_state("windowDidEnterFullScreen");
     uint64_t enterGen = current_display_transition_gen();
-    NSWindow *win = extract_nswindow_from_delegate_arg(notification);
     if (win) {
         if (!gHasCapturedInitialEngineFb) {
             CGFloat sdlW = 0.0, sdlH = 0.0;
@@ -3700,17 +4018,17 @@ static void swizzled_windowDidEnterFullScreen(id self, SEL _cmd, NSNotification 
         ((DidEnterFSFn)gOrigWindowDidEnterFullScreenIMP)(self, _cmd, notification);
     }
     if (win) {
-        /* Verify Space window fills the entire usable Space surface (prevents 1280x828 black-box
-           regression after rapid mode transitions) */
+        /* Verify Space window matches aspect-fitted usable Space rect (zero 16:10 -> 16:9 stretching) */
         ensure_fullscreen_space_geometry(win, "didEnterFullScreen");
         sync_sdl_window_logical_size_to_engine_fb(win, "windowDidEnterFullScreen");
+        rebuild_sims2_display_menu_resolution_items(win);
         update_sims2_display_menu_state();
         ensure_sdl_responder_chain(win, "windowDidEnterFullScreen");
         apply_opengl_surface_backing_size_ex(win, YES);
         flush_stuck_modifier_state_to_sdl(win, "didEnterFullScreen");
         restore_game_window_focus_and_input(win, "didEnterFullScreen");
 
-        /* Generation-guarded post-Space settle check in case macOS delivers a late frame nudge */
+        /* Generation-guarded post-Space settle check in case macOS delivers a late frame nudge or backing change */
         __weak NSWindow *weakWin = win;
         dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(80 * NSEC_PER_MSEC)),
                        dispatch_get_main_queue(), ^{
@@ -3720,6 +4038,7 @@ static void swizzled_windowDidEnterFullScreen(id self, SEL _cmd, NSNotification 
             NSWindow *w = weakWin;
             if (w && !gWindowedModeActive && ((w.styleMask & NSWindowStyleMaskFullScreen) != 0)) {
                 ensure_fullscreen_space_geometry(w, "didEnterFullScreenSettle");
+                apply_opengl_surface_backing_size_ex(w, YES);
             }
         });
     }
@@ -3777,6 +4096,9 @@ static void swizzled_windowWillExitFullScreen(id self, SEL _cmd, NSNotification 
         gForceCenterWindowedFrame = YES;
     }
     NSWindow *winObj = extract_nswindow_from_delegate_arg(notification);
+    if (!gHasExitFullscreenTarget && winObj) {
+        remember_exit_fullscreen_target_screen(winObj, "windowWillExitFullScreen");
+    }
     debuglog_write("WIN", "windowWillExitFullScreen win=%p active=%d userReqExit=%d windowed=%d",
                    (__bridge void *)winObj,
                    (NSApp && [NSApp isActive]) ? 1 : 0,
@@ -3822,10 +4144,15 @@ static void swizzled_windowDidExitFullScreen(id self, SEL _cmd, NSNotification *
     }
     if (win && !gAppIsTerminating && is_sdl_game_window(win) && !is_secondary_orphan_game_window(win)) {
         sync_sdl_window_logical_size_to_engine_fb(win, "windowDidExitFullScreen");
+        NSScreen *exitScr = resolve_active_exit_fullscreen_target_screen();
         if (gWindowedModeActive) {
             if (!is_reduced_target_resolution()) {
                 NSInteger defW = 1512, defH = 982;
-                resolve_compatible_windowed_size(win, &defW, &defH);
+                if (exitScr) {
+                    resolve_compatible_windowed_size_on_screen(exitScr, &defW, &defH);
+                } else {
+                    resolve_compatible_windowed_size(win, &defW, &defH);
+                }
                 gTargetWindowWidth = defW;
                 gTargetWindowHeight = defH;
             }
@@ -3844,6 +4171,32 @@ static void swizzled_windowDidExitFullScreen(id self, SEL _cmd, NSNotification *
                 restore_game_window_focus_and_input(w, "didExitFullScreen");
             }
         });
+        /* Post-exit settle check (180 ms): neutralize any late AppKit Space-exit frame callback (~118 ms)
+           that attempts to snap the exited window back onto screens[0] instead of the TV / origin screen. */
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(180 * NSEC_PER_MSEC)),
+                       dispatch_get_main_queue(), ^{
+            if (current_display_transition_gen() != exitGen || gInFullscreenTransition || gAppIsTerminating) {
+                return;
+            }
+            NSWindow *w = weakWin;
+            NSScreen *savedExitScr = resolve_active_exit_fullscreen_target_screen();
+            if (w && gWindowedModeActive && ((w.styleMask & NSWindowStyleMaskFullScreen) == 0) &&
+                [NSEvent pressedMouseButtons] == 0 && !gUserWindowMoveInProgress && savedExitScr) {
+                NSScreen *curScr = resolve_screen_for_rect(w.frame, w.screen);
+                if (curScr != savedExitScr) {
+                    debuglog_write("WIN", "Post-exit settle restoring window to exit screen %.0fx%.0f@(%.0f,%.0f) from frame=%.0fx%.0f@(%.0f,%.0f)",
+                                   savedExitScr.frame.size.width, savedExitScr.frame.size.height,
+                                   savedExitScr.frame.origin.x, savedExitScr.frame.origin.y,
+                                   w.frame.size.width, w.frame.size.height,
+                                   w.frame.origin.x, w.frame.origin.y);
+                    gForceCenterWindowedFrame = YES;
+                    enforce_primary_window_borderless_fullscreen(w, "didExitFullScreenSettle");
+                    refresh_opengl_surface_for_screen_or_backing_change(w, "didExitFullScreenSettle");
+                    restore_game_window_focus_and_input(w, "didExitFullScreenSettle");
+                }
+            }
+            clear_exit_fullscreen_target_screen();
+        });
     }
 }
 
@@ -3855,16 +4208,71 @@ static void swizzled_windowDidFailToExitFullScreen(id self, SEL _cmd, id windowO
     record_last_hook_state("windowDidFailToExitFullScreen");
     uint64_t failGen = current_display_transition_gen();
     NSWindow *win = extract_nswindow_from_delegate_arg(windowOrNote);
+    if (!win) {
+        win = resolve_primary_game_window();
+    }
     BOOL stillInSpace = (win && ((win.styleMask & NSWindowStyleMaskFullScreen) != 0));
     gLastKnownInSpace = stillInSpace;
     gWindowedModeActive = !stillInSpace;
     debuglog_write("WIN", "windowDidFailToExitFullScreen win=%p stillInSpace=%d windowed=%d",
                    (__bridge void *)win, stillInSpace ? 1 : 0, gWindowedModeActive ? 1 : 0);
 
+    if (!stillInSpace) {
+        /* Window HAS actually exited the Fullscreen Space (fs=0): NEVER call Aspyr's original IMP
+           (0x1001030e0 sets _inFullscreenSpace=YES and calls [self windowDidEnterFullScreen:nil],
+           which corrupted styleMask -> 0x0 and windowed -> 0!). Finalize Windowed mode cleanly. */
+        if (win) {
+            select_default_windowed_resolution_if_native(win);
+            gForceCenterWindowedFrame = YES;
+        }
+        apply_borderless_presentation_options(NO);
+        rebuild_sims2_display_menu_resolution_items(win);
+        update_sims2_display_menu_state();
+        if (win && !gAppIsTerminating) {
+            enforce_primary_window_borderless_fullscreen(win, "failExitFullScreenToWindowed");
+            apply_opengl_surface_backing_size_ex(win, YES);
+            __weak NSWindow *weakWin = win;
+            dispatch_async(dispatch_get_main_queue(), ^{
+                if (current_display_transition_gen() != failGen || gInFullscreenTransition || gAppIsTerminating) {
+                    return;
+                }
+                NSWindow *w = weakWin;
+                if (w && gWindowedModeActive && ((w.styleMask & NSWindowStyleMaskFullScreen) == 0)) {
+                    enforce_primary_window_borderless_fullscreen(w, "failExitFullScreenToWindowedAsync");
+                    apply_opengl_surface_backing_size_ex(w, YES);
+                    flush_stuck_modifier_state_to_sdl(w, "failExitFullScreenToWindowed");
+                    restore_game_window_focus_and_input(w, "failExitFullScreenToWindowed");
+                }
+            });
+            dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(180 * NSEC_PER_MSEC)),
+                           dispatch_get_main_queue(), ^{
+                if (current_display_transition_gen() != failGen || gInFullscreenTransition || gAppIsTerminating) {
+                    return;
+                }
+                NSWindow *w = weakWin;
+                NSScreen *savedExitScr = resolve_active_exit_fullscreen_target_screen();
+                if (w && gWindowedModeActive && ((w.styleMask & NSWindowStyleMaskFullScreen) == 0) &&
+                    [NSEvent pressedMouseButtons] == 0 && !gUserWindowMoveInProgress && savedExitScr) {
+                    NSScreen *curScr = resolve_screen_for_rect(w.frame, w.screen);
+                    if (curScr != savedExitScr) {
+                        gForceCenterWindowedFrame = YES;
+                        enforce_primary_window_borderless_fullscreen(w, "didExitFullScreenSettle");
+                        refresh_opengl_surface_for_screen_or_backing_change(w, "didExitFullScreenSettle");
+                    }
+                }
+                clear_exit_fullscreen_target_screen();
+            });
+        }
+        return;
+    }
+
+    /* Window genuinely remained inside Fullscreen Space (stillInSpace == YES). */
+    clear_exit_fullscreen_target_screen();
     if (is_callable_orig_imp(gOrigWindowDidFailToExitFullScreenIMP)) {
         typedef void (*FailExitFSFn)(id, SEL, id);
         ((FailExitFSFn)gOrigWindowDidFailToExitFullScreenIMP)(self, _cmd, windowOrNote);
     }
+    rebuild_sims2_display_menu_resolution_items(win);
     update_sims2_display_menu_state();
     if (win && !gAppIsTerminating) {
         __weak NSWindow *weakWin = win;
@@ -3873,13 +4281,11 @@ static void swizzled_windowDidFailToExitFullScreen(id self, SEL _cmd, id windowO
                 return;
             }
             NSWindow *w = weakWin;
-            if (w) {
-                if (stillInSpace) {
-                    ensure_fullscreen_space_geometry(w, "failExitFullScreenRollback");
-                }
+            if (w && !gWindowedModeActive && ((w.styleMask & NSWindowStyleMaskFullScreen) != 0)) {
+                ensure_fullscreen_space_geometry(w, "failExitFullScreenStillInSpace");
                 apply_opengl_surface_backing_size_ex(w, YES);
-                flush_stuck_modifier_state_to_sdl(w, "failExitFullScreenRollback");
-                restore_game_window_focus_and_input(w, "failExitFullScreenRollback");
+                flush_stuck_modifier_state_to_sdl(w, "failExitFullScreenStillInSpace");
+                restore_game_window_focus_and_input(w, "failExitFullScreenStillInSpace");
             }
         });
     }
@@ -4051,7 +4457,7 @@ static void swizzled_focusSomeWindow(id self, SEL _cmd, NSNotification *notifica
 }
 
 static void swizzled_activateIgnoringOtherApps(id self, SEL _cmd, BOOL flag) {
-    if (flag && gAppHasActivatedOnce &&
+    if (flag && !gAllowExplicitSpaceReactivation && gAppHasActivatedOnce &&
         (!gAppIsActive || (gLastResignTimestamp > 0.0 && (CFAbsoluteTimeGetCurrent() - gLastResignTimestamp) < 2.0))) {
         CFAbsoluteTime dt = (gLastResignTimestamp > 0.0) ? (CFAbsoluteTimeGetCurrent() - gLastResignTimestamp) : -1.0;
         debuglog_write("WIN", "SUPPRESSED activateIgnoringOtherApps:YES (active=%d dt=%.3fs)",
@@ -4178,6 +4584,69 @@ static NSRect swizzled_sdlConstrainFrameRect(id self, SEL _cmd, NSRect frameRect
         return frameRect;
     }
     BOOL inSpace = ((win.styleMask & NSWindowStyleMaskFullScreen) != 0);
+    if (inSpace) {
+        /* Never let Aspyr's Display-0 constrainFrameRect:toScreen: (0x100101050) pull a Fullscreen Space off a secondary monitor. */
+        return frameRect;
+    }
+    if (gWindowedModeActive || gInFullscreenTransition || gHasExitFullscreenTarget) {
+        /* Bypass Aspyr's hardcoded SDL_GetDisplayBounds(0) clamp (0x100101050) BOTH during steady
+           windowed drags AND during native Fullscreen Space exit animations (where fs=0, style=0x8,
+           and gInFullscreenTransition=1 used to fall through and bounce TV windows to x=288 on screens[0]). */
+        NSRect r = frameRect;
+        NSArray<NSScreen *> *screens = ([NSThread isMainThread] && NSApp != nil) ? [NSScreen screens] : nil;
+        NSScreen *exitScr = resolve_active_exit_fullscreen_target_screen();
+        NSScreen *containingScreen = nil;
+        BOOL intersectsAnyScreen = NO;
+        if (screens && [screens count] > 0 && r.size.width >= 1.0 && r.size.height >= 1.0) {
+            NSPoint center = NSMakePoint(NSMidX(r), NSMidY(r));
+            for (NSScreen *s in screens) {
+                if (NSPointInRect(center, s.frame)) {
+                    containingScreen = s;
+                    intersectsAnyScreen = YES;
+                    break;
+                }
+                if (NSIntersectsRect(r, s.frame)) {
+                    intersectsAnyScreen = YES;
+                }
+            }
+        }
+        if (exitScr && screens && [screens count] > 1 && containingScreen && containingScreen != exitScr &&
+            gExitFullscreenTargetFrame.size.width >= 640.0 && gExitFullscreenTargetFrame.size.height >= 480.0) {
+            /* AppKit tried to bounce an exiting multi-monitor Fullscreen Space back onto screens[0]:
+               redirect straight onto the screen where the Space was exited. */
+            debuglog_write("WIN", "constrainFrameRect kept exiting Space on origin screen: %.0fx%.0f@(%.0f,%.0f) -> %.0fx%.0f@(%.0f,%.0f)",
+                           r.size.width, r.size.height, r.origin.x, r.origin.y,
+                           gExitFullscreenTargetFrame.size.width, gExitFullscreenTargetFrame.size.height,
+                           gExitFullscreenTargetFrame.origin.x, gExitFullscreenTargetFrame.origin.y);
+            return gExitFullscreenTargetFrame;
+        }
+        NSScreen *targetScreen = containingScreen ?: (exitScr ?: resolve_screen_for_rect(r, screen ?: win.screen));
+        if (containingScreen || intersectsAnyScreen) {
+            if (targetScreen) {
+                NSRect vf = targetScreen.visibleFrame;
+                if (vf.size.height >= 200.0) {
+                    CGFloat maxTop = vf.origin.y + vf.size.height;
+                    if (NSMaxY(r) > maxTop) {
+                        r.origin.y = maxTop - r.size.height;
+                    }
+                    if (NSMaxY(r) < vf.origin.y + 40.0) {
+                        r.origin.y = vf.origin.y + 40.0 - r.size.height;
+                    }
+                }
+            }
+            return r;
+        }
+        if (screen != nil && targetScreen != nil) {
+            /* Window is completely off all connected screens (e.g. external monitor unplugged):
+               delegate to AppKit's NSWindow superclass on targetScreen so it remains reachable. */
+            IMP superConstrainIMP = [NSWindow instanceMethodForSelector:@selector(constrainFrameRect:toScreen:)];
+            if (superConstrainIMP) {
+                typedef NSRect (*SuperFn)(id, SEL, NSRect, NSScreen *);
+                return ((SuperFn)superConstrainIMP)(self, _cmd, r, targetScreen);
+            }
+        }
+        return r;
+    }
     if (!gWindowedModeActive && !inSpace && !gInFullscreenTransition &&
         gHasCompletedFirstWindowShow && is_main_sized_sdl_window(win, frameRect)) {
         return (gNotchFitInProgress || gModeTransitionInProgress) ? frameRect : compute_primary_game_frame(win);
@@ -4295,6 +4764,10 @@ static BOOL should_clamp_stale_windowed_frame_during_fullscreen(NSWindow *win, N
         !is_main_sized_sdl_window(win, frameRect)) {
         return NO;
     }
+    if (!gInFullscreenTransition && NSApp && ![NSApp isActive]) {
+        /* Never fight Mission Control while relocating a Fullscreen Space across monitors (active=0). */
+        return NO;
+    }
     BOOL inSpace = ((win.styleMask & NSWindowStyleMaskFullScreen) != 0);
     if (!inSpace && !gInFullscreenTransition) {
         return NO;
@@ -4303,12 +4776,12 @@ static BOOL should_clamp_stale_windowed_frame_during_fullscreen(NSWindow *win, N
     if (expectedSpace.size.width < 640.0 || expectedSpace.size.height < 480.0) {
         return NO;
     }
-    BOOL frameShrunkToWindowed = (frameRect.size.width < expectedSpace.size.width - 20.0 ||
-                                  frameRect.size.height < expectedSpace.size.height - 40.0);
-    if (!frameShrunkToWindowed) {
+    BOOL frameMismatched = (fabs(frameRect.size.width - expectedSpace.size.width) > 20.0 ||
+                            fabs(frameRect.size.height - expectedSpace.size.height) > 40.0);
+    if (!frameMismatched) {
         return NO;
     }
-    /* Already in Space OR window had already expanded for Space transition -> never revert to windowed size */
+    /* Already in Space OR window had already expanded for Space transition -> enforce exact aspect-fitted Space rect */
     BOOL curAlreadyFull = (win.frame.size.width >= expectedSpace.size.width - 4.0 &&
                            win.frame.size.height >= expectedSpace.size.height - 4.0);
     if (inSpace || curAlreadyFull) {
@@ -4318,6 +4791,59 @@ static BOOL should_clamp_stale_windowed_frame_during_fullscreen(NSWindow *win, N
         return YES;
     }
     return NO;
+}
+
+static NSRect compute_anti_tiling_windowed_frame(NSWindow *win, NSRect requestedRect, BOOL *outAcceptedAsIs) {
+    if (outAcceptedAsIs) {
+        *outAcceptedAsIs = NO;
+    }
+    NSScreen *targetScreen = resolve_screen_for_rect(requestedRect, win ? win.screen : nil);
+    NSInteger compatW = (gTargetWindowWidth >= 640) ? gTargetWindowWidth : 1440;
+    NSInteger compatH = (gTargetWindowHeight >= 480) ? gTargetWindowHeight : 900;
+    if ([NSEvent pressedMouseButtons] == 0 && !gUserWindowMoveInProgress) {
+        NSScreen *exitScr = resolve_active_exit_fullscreen_target_screen();
+        NSArray<NSScreen *> *screens = ([NSThread isMainThread] && NSApp != nil) ? [NSScreen screens] : nil;
+        if (exitScr && screens && [screens count] > 1 && targetScreen != exitScr) {
+            resolve_compatible_windowed_size_on_screen(exitScr, &compatW, &compatH);
+            return compute_windowed_game_frame_on_screen(win, exitScr, compatW, compatH, YES);
+        }
+    }
+    resolve_compatible_windowed_size_on_screen(targetScreen, &compatW, &compatH);
+    NSRect expectedOuter = [win frameRectForContentRect:NSMakeRect(0.0, 0.0, (CGFloat)compatW, (CGFloat)compatH)];
+    BOOL sizeMatches = (fabs(requestedRect.size.width - expectedOuter.size.width) <= 2.0 &&
+                        fabs(requestedRect.size.height - expectedOuter.size.height) <= 2.0);
+    BOOL isExactZeroOrigin = (fabs(requestedRect.origin.x) <= 1.0 && fabs(requestedRect.origin.y) <= 1.0);
+    if (sizeMatches && !isExactZeroOrigin) {
+        if (outAcceptedAsIs) {
+            *outAcceptedAsIs = YES;
+        }
+        return requestedRect;
+    }
+    /* Anti Window-Tiling ping-pong: pin size to selected preset while keeping window on targetScreen
+       (e.g. TV at x >= 1800) instead of letting macOS Tiling stretch to visibleFrame or snapping to screens[0]. */
+    NSRect vf = targetScreen ? targetScreen.visibleFrame : NSMakeRect(0.0, 0.0, (CGFloat)gNativeScreenWidth, (CGFloat)gNativeScreenHeight);
+    NSRect result = expectedOuter;
+    if (isExactZeroOrigin || requestedRect.size.width < 1.0 || requestedRect.size.height < 1.0) {
+        return compute_windowed_game_frame_on_screen(win, targetScreen, compatW, compatH, YES);
+    }
+    /* Preserve horizontal center of requestedRect inside targetScreen, clamp cleanly inside targetScreen.visibleFrame */
+    result.origin.x = floor(NSMidX(requestedRect) - result.size.width * 0.5);
+    result.origin.y = floor(NSMaxY(requestedRect) - result.size.height);
+    CGFloat maxTop = vf.origin.y + vf.size.height;
+    CGFloat maxRight = vf.origin.x + vf.size.width;
+    if (result.origin.y + result.size.height > maxTop) {
+        result.origin.y = maxTop - result.size.height;
+    }
+    if (result.origin.y < vf.origin.y) {
+        result.origin.y = vf.origin.y;
+    }
+    if (result.origin.x + result.size.width > maxRight) {
+        result.origin.x = maxRight - result.size.width;
+    }
+    if (result.origin.x < vf.origin.x) {
+        result.origin.x = vf.origin.x;
+    }
+    return result;
 }
 
 static void swizzled_sdlSetFrameDisplay(id self, SEL _cmd, NSRect frameRect, BOOL flag) {
@@ -4344,17 +4870,38 @@ static void swizzled_sdlSetFrameDisplay(id self, SEL _cmd, NSRect frameRect, BOO
             ((Fn)gOrigSDLSetFrameDisplayIMP)(self, _cmd, finalRect, flag);
             gNotchFitInProgress = NO;
         }
+        sync_sdl_window_origin_to_frame(win, "clamped-space-setFrame");
         return;
     }
     if (!gNotchFitInProgress && !gModeTransitionInProgress && !gInFullscreenTransition && !inSpace &&
         is_main_sized_sdl_window(win, frameRect)) {
-        if (gWindowedModeActive && ([NSEvent pressedMouseButtons] != 0 || gUserWindowMoveInProgress || [win inLiveResize])) {
-            /* User/AppKit live titlebar drag or resize: pass straight through unmodified */
+        if (gWindowedModeActive && ([NSEvent pressedMouseButtons] != 0 || gUserWindowMoveInProgress)) {
+            BOOL acceptedAsIs = NO;
+            NSRect guardedRect = compute_anti_tiling_windowed_frame(win, frameRect, &acceptedAsIs);
+            if (acceptedAsIs) {
+                /* User live titlebar drag at exact preset size across any screen: pass straight through */
+                if (gOrigSDLSetFrameDisplayIMP) {
+                    typedef void (*Fn)(id, SEL, NSRect, BOOL);
+                    ((Fn)gOrigSDLSetFrameDisplayIMP)(self, _cmd, frameRect, flag);
+                }
+                sync_sdl_window_origin_to_frame(win, "liveDrag-setFrame");
+                return;
+            }
+            /* macOS Window Tiling tried to inflate size during drag -> pin size on targetScreen, zero ping-pong */
+            debuglog_write("WIN", "Neutralized Window Tiling setFrame %.0fx%.0f@(%.0f,%.0f) -> %.0fx%.0f@(%.0f,%.0f)",
+                           frameRect.size.width, frameRect.size.height, frameRect.origin.x, frameRect.origin.y,
+                           guardedRect.size.width, guardedRect.size.height, guardedRect.origin.x, guardedRect.origin.y);
+            gNotchFitInProgress = YES;
+            BOOL prevSuppress = gSuppressSDLResizeNotification;
+            gSuppressSDLResizeNotification = YES;
             if (gOrigSDLSetFrameDisplayIMP) {
                 typedef void (*Fn)(id, SEL, NSRect, BOOL);
-                ((Fn)gOrigSDLSetFrameDisplayIMP)(self, _cmd, frameRect, flag);
+                ((Fn)gOrigSDLSetFrameDisplayIMP)(self, _cmd, guardedRect, flag);
             }
-            sync_sdl_window_origin_to_frame(win, "liveDrag-setFrame");
+            sync_content_view_to_window_bounds(win, guardedRect);
+            sync_sdl_window_origin_to_frame(win, "antiTiling-setFrame");
+            gSuppressSDLResizeNotification = prevSuppress;
+            gNotchFitInProgress = NO;
             return;
         }
         if (!gWindowedModeActive && !gHasCompletedFirstWindowShow) {
@@ -4373,18 +4920,7 @@ static void swizzled_sdlSetFrameDisplay(id self, SEL _cmd, NSRect frameRect, BOO
             gNotchFitInProgress = NO;
         }
         if (gWindowedModeActive) {
-            NSInteger compatW = gTargetWindowWidth;
-            NSInteger compatH = gTargetWindowHeight;
-            resolve_compatible_windowed_size(win, &compatW, &compatH);
-            NSRect expectedOuter = [win frameRectForContentRect:NSMakeRect(0.0, 0.0, (CGFloat)compatW, (CGFloat)compatH)];
-            BOOL sizeMatches = (fabs(frameRect.size.width - expectedOuter.size.width) <= 2.0 &&
-                                fabs(frameRect.size.height - expectedOuter.size.height) <= 2.0);
-            BOOL isExactZeroOrigin = (fabs(frameRect.origin.x) <= 1.0 && fabs(frameRect.origin.y) <= 1.0);
-            if (sizeMatches && !isExactZeroOrigin) {
-                finalRect = frameRect;
-            } else {
-                finalRect = compute_windowed_game_frame(win, compatW, compatH, YES);
-            }
+            finalRect = compute_anti_tiling_windowed_frame(win, frameRect, NULL);
         } else {
             finalRect = compute_primary_game_frame(win);
         }
@@ -4447,12 +4983,31 @@ static void swizzled_sdlSetFrameDisplayAnimate(id self, SEL _cmd, NSRect frameRe
     }
     if (!gNotchFitInProgress && !gModeTransitionInProgress && !gInFullscreenTransition && !inSpace &&
         is_main_sized_sdl_window(win, frameRect)) {
-        if (gWindowedModeActive && ([NSEvent pressedMouseButtons] != 0 || gUserWindowMoveInProgress || [win inLiveResize])) {
+        if (gWindowedModeActive && ([NSEvent pressedMouseButtons] != 0 || gUserWindowMoveInProgress)) {
+            BOOL acceptedAsIs = NO;
+            NSRect guardedRect = compute_anti_tiling_windowed_frame(win, frameRect, &acceptedAsIs);
+            if (acceptedAsIs) {
+                if (gOrigSDLSetFrameDisplayAnimateIMP) {
+                    typedef void (*Fn)(id, SEL, NSRect, BOOL, BOOL);
+                    ((Fn)gOrigSDLSetFrameDisplayAnimateIMP)(self, _cmd, frameRect, displayFlag, animateFlag);
+                }
+                sync_sdl_window_origin_to_frame(win, "liveDrag-setFrameAnimate");
+                return;
+            }
+            debuglog_write("WIN", "Neutralized Window Tiling setFrameAnimate %.0fx%.0f@(%.0f,%.0f) -> %.0fx%.0f@(%.0f,%.0f)",
+                           frameRect.size.width, frameRect.size.height, frameRect.origin.x, frameRect.origin.y,
+                           guardedRect.size.width, guardedRect.size.height, guardedRect.origin.x, guardedRect.origin.y);
+            gNotchFitInProgress = YES;
+            BOOL prevSuppress = gSuppressSDLResizeNotification;
+            gSuppressSDLResizeNotification = YES;
             if (gOrigSDLSetFrameDisplayAnimateIMP) {
                 typedef void (*Fn)(id, SEL, NSRect, BOOL, BOOL);
-                ((Fn)gOrigSDLSetFrameDisplayAnimateIMP)(self, _cmd, frameRect, displayFlag, animateFlag);
+                ((Fn)gOrigSDLSetFrameDisplayAnimateIMP)(self, _cmd, guardedRect, displayFlag, NO);
             }
-            sync_sdl_window_origin_to_frame(win, "liveDrag-setFrameAnimate");
+            sync_content_view_to_window_bounds(win, guardedRect);
+            sync_sdl_window_origin_to_frame(win, "antiTiling-setFrameAnimate");
+            gSuppressSDLResizeNotification = prevSuppress;
+            gNotchFitInProgress = NO;
             return;
         }
         if (!gWindowedModeActive && !gHasCompletedFirstWindowShow) {
@@ -4470,18 +5025,7 @@ static void swizzled_sdlSetFrameDisplayAnimate(id self, SEL _cmd, NSRect frameRe
             gNotchFitInProgress = NO;
         }
         if (gWindowedModeActive) {
-            NSInteger compatW = gTargetWindowWidth;
-            NSInteger compatH = gTargetWindowHeight;
-            resolve_compatible_windowed_size(win, &compatW, &compatH);
-            NSRect expectedOuter = [win frameRectForContentRect:NSMakeRect(0.0, 0.0, (CGFloat)compatW, (CGFloat)compatH)];
-            BOOL sizeMatches = (fabs(frameRect.size.width - expectedOuter.size.width) <= 2.0 &&
-                                fabs(frameRect.size.height - expectedOuter.size.height) <= 2.0);
-            BOOL isExactZeroOrigin = (fabs(frameRect.origin.x) <= 1.0 && fabs(frameRect.origin.y) <= 1.0);
-            if (sizeMatches && !isExactZeroOrigin) {
-                finalRect = frameRect;
-            } else {
-                finalRect = compute_windowed_game_frame(win, compatW, compatH, YES);
-            }
+            finalRect = compute_anti_tiling_windowed_frame(win, frameRect, NULL);
         } else {
             finalRect = compute_primary_game_frame(win);
         }
@@ -4577,9 +5121,11 @@ static void swizzled_sdlToggleFullScreen(id self, SEL _cmd, id sender) {
                 gTargetWindowWidth = defW;
                 gTargetWindowHeight = defH;
             }
+            remember_exit_fullscreen_target_screen(win, "sdlToggleFullScreenExit");
         } else {
             gUserRequestedFullscreenEnter = YES;
             gWindowedModeActive = NO;
+            clear_exit_fullscreen_target_screen();
             NSWindowCollectionBehavior beh = sanitize_mission_control_collection_behavior(win.collectionBehavior);
             if (gOrigSDLSetCollectionBehaviorIMP && gSDLWindowClass && [win isKindOfClass:gSDLWindowClass]) {
                 typedef void (*BehFn)(id, SEL, NSWindowCollectionBehavior);
@@ -4764,15 +5310,15 @@ static size_t hook_CGDisplayModeGetHeight(CGDisplayModeRef mode) {
     if (!mode) {
         return 0;
     }
-    if (gNotchTopInset == 0 && [NSThread isMainThread] && NSApp != nil) {
+    if (gPrimaryNotchTopInset == 0 && [NSThread isMainThread] && NSApp != nil) {
         detect_native_screen_resolution(nil);
     }
     size_t w = CGDisplayModeGetWidth(mode);
     size_t h = CGDisplayModeGetHeight(mode);
-    if (gNotchTopInset > 0 &&
-        (NSInteger)w == gRawHardwareScreenWidth &&
-        (NSInteger)h == gRawHardwareScreenHeight) {
-        return (size_t)gNativeScreenHeight;
+    if (gPrimaryNotchTopInset > 0 &&
+        (NSInteger)w == gPrimaryRawScreenWidth &&
+        (NSInteger)h == gPrimaryRawScreenHeight) {
+        return (size_t)gPrimaryNativeScreenHeight;
     }
     return h;
 }
@@ -4781,19 +5327,19 @@ static size_t hook_CGDisplayModeGetPixelHeight(CGDisplayModeRef mode) {
     if (!mode) {
         return 0;
     }
-    if (gNotchTopInset == 0 && [NSThread isMainThread] && NSApp != nil) {
+    if (gPrimaryNotchTopInset == 0 && [NSThread isMainThread] && NSApp != nil) {
         detect_native_screen_resolution(nil);
     }
     size_t w = CGDisplayModeGetWidth(mode);
     size_t h = CGDisplayModeGetHeight(mode);
     size_t ph = CGDisplayModeGetPixelHeight(mode);
-    if (gNotchTopInset > 0 && h > 0 &&
-        (NSInteger)w == gRawHardwareScreenWidth &&
-        (NSInteger)h == gRawHardwareScreenHeight) {
+    if (gPrimaryNotchTopInset > 0 && h > 0 &&
+        (NSInteger)w == gPrimaryRawScreenWidth &&
+        (NSInteger)h == gPrimaryRawScreenHeight) {
         if (ph == h) {
-            return (size_t)gNativeScreenHeight;
+            return (size_t)gPrimaryNativeScreenHeight;
         }
-        return (size_t)llround((double)gNativeScreenHeight * ((double)ph / (double)h));
+        return (size_t)llround((double)gPrimaryNativeScreenHeight * ((double)ph / (double)h));
     }
     return ph;
 }
@@ -4801,11 +5347,11 @@ static size_t hook_CGDisplayModeGetPixelHeight(CGDisplayModeRef mode) {
 static size_t hook_CGDisplayPixelsHigh(CGDirectDisplayID display) {
     size_t h = CGDisplayPixelsHigh(display);
     if (display == CGMainDisplayID()) {
-        if (gNotchTopInset == 0 && [NSThread isMainThread] && NSApp != nil) {
+        if (gPrimaryNotchTopInset == 0 && [NSThread isMainThread] && NSApp != nil) {
             detect_native_screen_resolution(nil);
         }
-        if (gNotchTopInset > 0 && (NSInteger)h == gRawHardwareScreenHeight) {
-            return (size_t)gNativeScreenHeight;
+        if (gPrimaryNotchTopInset > 0 && (NSInteger)h == gPrimaryRawScreenHeight) {
+            return (size_t)gPrimaryNativeScreenHeight;
         }
     }
     return h;
@@ -4814,13 +5360,13 @@ static size_t hook_CGDisplayPixelsHigh(CGDirectDisplayID display) {
 static CGRect hook_CGDisplayBounds(CGDirectDisplayID display) {
     CGRect r = CGDisplayBounds(display);
     if (display == CGMainDisplayID()) {
-        if (gNotchTopInset == 0 && [NSThread isMainThread] && NSApp != nil) {
+        if (gPrimaryNotchTopInset == 0 && [NSThread isMainThread] && NSApp != nil) {
             detect_native_screen_resolution(nil);
         }
-        if (gNotchTopInset > 0 &&
-            (NSInteger)llround(r.size.width) == gRawHardwareScreenWidth &&
-            (NSInteger)llround(r.size.height) == gRawHardwareScreenHeight) {
-            r.size.height = (CGFloat)gNativeScreenHeight;
+        if (gPrimaryNotchTopInset > 0 &&
+            (NSInteger)llround(r.size.width) == gPrimaryRawScreenWidth &&
+            (NSInteger)llround(r.size.height) == gPrimaryRawScreenHeight) {
+            r.size.height = (CGFloat)gPrimaryNativeScreenHeight;
         }
     }
     return r;
@@ -5412,6 +5958,9 @@ static void enforce_primary_window_borderless_fullscreen_locked(NSWindow *win, c
                                   strcmp(reason, "cycleResolution") == 0 ||
                                   strcmp(reason, "selectResolution") == 0 ||
                                   strcmp(reason, "didExitFullScreen") == 0 ||
+                                  strcmp(reason, "didExitFullScreenSettle") == 0 ||
+                                  strcmp(reason, "failExitFullScreenToWindowed") == 0 ||
+                                  strcmp(reason, "failExitFullScreenToWindowedAsync") == 0 ||
                                   strcmp(reason, "bootEnterFullscreen") == 0 ||
                                   strcmp(reason, "fullscreenSettle") == 0));
 
@@ -5422,6 +5971,7 @@ static void enforce_primary_window_borderless_fullscreen_locked(NSWindow *win, c
     if (gWindowedModeActive) {
         if (inSpace) {
             if (!gInFullscreenTransition) {
+                remember_exit_fullscreen_target_screen(win, "toggleFullScreenExit");
                 gUserRequestedFullscreenExit = YES;
                 gInFullscreenTransition = YES;
                 gAllowResizableForSpaceToggle = YES;
@@ -5474,10 +6024,15 @@ static void enforce_primary_window_borderless_fullscreen_locked(NSWindow *win, c
         [win setMovable:YES];
         [win setMovableByWindowBackground:NO];
 
-        /* 3. Compute compatible outer frame inside NSScreen.visibleFrame */
+        /* 3. Compute compatible outer frame inside NSScreen.visibleFrame (preserving origin screen on Space exit) */
+        NSScreen *exitTargetScr = resolve_active_exit_fullscreen_target_screen();
         NSInteger targetW = (gTargetWindowWidth >= 640) ? gTargetWindowWidth : 1440;
         NSInteger targetH = (gTargetWindowHeight >= 480) ? gTargetWindowHeight : 900;
-        resolve_compatible_windowed_size(win, &targetW, &targetH);
+        if (exitTargetScr) {
+            resolve_compatible_windowed_size_on_screen(exitTargetScr, &targetW, &targetH);
+        } else {
+            resolve_compatible_windowed_size(win, &targetW, &targetH);
+        }
         if (targetW != gTargetWindowWidth || targetH != gTargetWindowHeight) {
             gTargetWindowWidth = targetW;
             gTargetWindowHeight = targetH;
@@ -5494,8 +6049,11 @@ static void enforce_primary_window_borderless_fullscreen_locked(NSWindow *win, c
             return;
         }
 
-        BOOL shouldCenter = gForceCenterWindowedFrame || !sizeMatches;
-        NSRect targetOuter = compute_windowed_game_frame(win, targetW, targetH, shouldCenter);
+        BOOL offExitScreen = (exitTargetScr != nil && resolve_screen_for_rect(liveCurF, win.screen) != exitTargetScr);
+        BOOL shouldCenter = gForceCenterWindowedFrame || !sizeMatches || offExitScreen;
+        NSRect targetOuter = exitTargetScr
+            ? compute_windowed_game_frame_on_screen(win, exitTargetScr, targetW, targetH, shouldCenter)
+            : compute_windowed_game_frame(win, targetW, targetH, shouldCenter);
         gForceCenterWindowedFrame = NO;
 
         /* 4. Apply outer frame & exact contentView bounds (excluding titlebar), suppress SDL resize
@@ -5606,6 +6164,7 @@ static void enforce_primary_window_borderless_fullscreen_locked(NSWindow *win, c
 
     if (isExplicitTransition && !isFallbackReason) {
         /* Enter real native macOS Fullscreen Space cleanly via toggleFullScreen: */
+        clear_exit_fullscreen_target_screen();
         NSWindowStyleMask spaceReadyMask = (NSWindowStyleMaskTitled |
                                             NSWindowStyleMaskClosable |
                                             NSWindowStyleMaskMiniaturizable |
@@ -5819,7 +6378,7 @@ static void apply_target_resolution(NSWindow *win, NSInteger resW, NSInteger res
     if (win) {
         enforce_primary_window_borderless_fullscreen(win, reason);
     } else {
-        apply_borderless_presentation_options(!gWindowedModeActive);
+        apply_borderless_presentation_options(NO);
     }
 }
 
@@ -5842,7 +6401,7 @@ static void toggle_windowed_fullscreen_mode_ex(NSTimeInterval eventTs, const cha
     if (win) {
         enforce_primary_window_borderless_fullscreen(win, "toggleMode");
     } else {
-        apply_borderless_presentation_options(!gWindowedModeActive);
+        apply_borderless_presentation_options(NO);
     }
 }
 
@@ -6149,16 +6708,24 @@ static void ensure_workspace_space_observer_registered(void) {
                       usingBlock:^(NSNotification *note) {
             (void)note;
             gUserWindowMoveInProgress = NO;
-            gInFullscreenTransition = NO;
+            if (!gUserRequestedFullscreenExit && !gUserRequestedFullscreenEnter) {
+                gInFullscreenTransition = NO;
+            }
             gSuppressSDLResizeNotification = NO;
             gNotchFitInProgress = NO;
             __sync_lock_release(&gModeTransitionInProgress);
             reset_gesture_and_key_state(resolve_window_listener());
-            debuglog_write("SPACE", "NSWorkspaceActiveSpaceDidChangeNotification active=%d windowed=%d",
-                           (NSApp && [NSApp isActive]) ? 1 : 0, gWindowedModeActive ? 1 : 0);
+            NSWindow *primaryWin = resolve_primary_game_window();
+            BOOL inSpace = (primaryWin && ((primaryWin.styleMask & NSWindowStyleMaskFullScreen) != 0));
+            BOOL onActiveSpace = (primaryWin && [primaryWin isOnActiveSpace]);
+            BOOL isVisible = (primaryWin && (([primaryWin occlusionState] & NSWindowOcclusionStateVisible) != 0));
+            debuglog_write("SPACE", "NSWorkspaceActiveSpaceDidChangeNotification active=%d windowed=%d inSpace=%d onActiveSpace=%d visible=%d",
+                           (NSApp && [NSApp isActive]) ? 1 : 0, gWindowedModeActive ? 1 : 0,
+                           inSpace ? 1 : 0, onActiveSpace ? 1 : 0, isVisible ? 1 : 0);
             if (NSApp && [NSApp isActive] && !gAppIsHiding && !gAppIsTerminating) {
-                NSWindow *primaryWin = resolve_primary_game_window();
+                __atomic_add_fetch(&gSpaceReactivateSeq, 1ULL, __ATOMIC_ACQ_REL);
                 if (primaryWin) {
+                    refresh_opengl_surface_for_screen_or_backing_change(primaryWin, "ActiveSpaceDidChange");
                     restore_game_window_focus_and_input(primaryWin, "ActiveSpaceDidChange");
                     uint64_t spaceGen = current_display_transition_gen();
                     __weak NSWindow *weakWin = primaryWin;
@@ -6173,7 +6740,57 @@ static void ensure_workspace_space_observer_registered(void) {
                         }
                     });
                 }
+            } else if (primaryWin && !gAppIsHiding && !gAppIsTerminating &&
+                       !gWindowedModeActive && inSpace && onActiveSpace) {
+                /* Multi-screen Space return recovery WITHOUT colliding with Mission Control dismissal:
+                   1. Coalesce OpenGL surface refresh (debounced 140 ms, zero synchronous setFrame:).
+                   2. Defer NSApp reactivation by 150 ms via gSpaceReactivateSeq: if macOS activates
+                      the app naturally (e.g. clicking the Space in Mission Control), do nothing!
+                      Only reactivate if still inactive after 150 ms and cursor is on the game screen. */
+                if (isVisible) {
+                    refresh_opengl_surface_for_screen_or_backing_change(primaryWin, "ActiveSpaceVisibleRefresh");
+                }
+                uint64_t reactSeq = __atomic_add_fetch(&gSpaceReactivateSeq, 1ULL, __ATOMIC_ACQ_REL);
+                uint64_t spaceGen = current_display_transition_gen();
+                __weak NSWindow *weakWin = primaryWin;
+                dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(150 * NSEC_PER_MSEC)),
+                               dispatch_get_main_queue(), ^{
+                    if (__atomic_load_n(&gSpaceReactivateSeq, __ATOMIC_ACQUIRE) != reactSeq ||
+                        current_display_transition_gen() != spaceGen ||
+                        gInFullscreenTransition || gAppIsHiding || gAppIsTerminating) {
+                        return;
+                    }
+                    if (NSApp && [NSApp isActive]) {
+                        return;
+                    }
+                    NSWindow *w = weakWin;
+                    if (!w || gWindowedModeActive) {
+                        return;
+                    }
+                    BOOL wInSpace = ((w.styleMask & NSWindowStyleMaskFullScreen) != 0);
+                    BOOL wOnActive = [w isOnActiveSpace];
+                    BOOL wVisible = (([w occlusionState] & NSWindowOcclusionStateVisible) != 0);
+                    NSArray<NSScreen *> *allScreens = [NSScreen screens];
+                    NSPoint cursorPt = [NSEvent mouseLocation];
+                    BOOL cursorOnGameScreen = (w.screen && NSPointInRect(cursorPt, w.screen.frame));
+                    if (wInSpace && wOnActive && wVisible &&
+                        (cursorOnGameScreen || !allScreens || [allScreens count] <= 1)) {
+                        debuglog_write("SPACE", "Deferred reactivation of game Fullscreen Space (cursorOnGameScreen=%d screens=%lu)",
+                                       cursorOnGameScreen ? 1 : 0, (unsigned long)(allScreens ? [allScreens count] : 0));
+                        gAppIsActive = YES;
+                        gLastResignTimestamp = 0.0;
+                        gAllowExplicitSpaceReactivation = YES;
+                        [NSApp activateIgnoringOtherApps:YES];
+                        gAllowExplicitSpaceReactivation = NO;
+                        restore_game_window_focus_and_input(w, "ActiveSpaceDidChangeReactivate");
+                        refresh_opengl_surface_for_screen_or_backing_change(w, "ActiveSpaceDidChangeReactivate");
+                    } else {
+                        CGAssociateMouseAndMouseCursorPosition(true);
+                        CGDisplayShowCursor(kCGDirectMainDisplay);
+                    }
+                });
             } else {
+                __atomic_add_fetch(&gSpaceReactivateSeq, 1ULL, __ATOMIC_ACQ_REL);
                 CGAssociateMouseAndMouseCursorPosition(true);
                 CGDisplayShowCursor(kCGDirectMainDisplay);
                 apply_borderless_presentation_options(NO);
@@ -6223,19 +6840,52 @@ static void register_window_geometry_observers(void) {
         if (primaryWin && is_sdl_window_fully_attached(primaryWin) && !gInFullscreenTransition) {
             sync_sdl_window_origin_to_frame(primaryWin, "screenParamsChanged");
             if (gWindowedModeActive) {
+                NSInteger prevW = gTargetWindowWidth;
+                NSInteger prevH = gTargetWindowHeight;
                 if (gTargetWindowWidth >= 640 && gTargetWindowHeight >= 480) {
                     resolve_compatible_windowed_size(primaryWin, &gTargetWindowWidth, &gTargetWindowHeight);
                     update_sims2_display_menu_state();
                 }
-                gForceCenterWindowedFrame = YES;
-                enforce_primary_window_borderless_fullscreen(primaryWin, "screenParamsChanged");
-            } else {
-                BOOL inSpace = ((primaryWin.styleMask & NSWindowStyleMaskFullScreen) != 0);
-                if (inSpace) {
-                    ensure_fullscreen_space_geometry(primaryWin, "screenParamsChanged");
+                NSScreen *curScr = resolve_screen_for_rect(primaryWin.frame, primaryWin.screen);
+                BOOL fitsOnScreen = (curScr && NSContainsRect(curScr.visibleFrame, primaryWin.frame));
+                if (!fitsOnScreen || prevW != gTargetWindowWidth || prevH != gTargetWindowHeight) {
+                    gForceCenterWindowedFrame = YES;
+                    enforce_primary_window_borderless_fullscreen(primaryWin, "screenParamsChanged");
                 }
-                apply_opengl_surface_backing_size_ex(primaryWin, YES);
+                refresh_opengl_surface_for_screen_or_backing_change(primaryWin, "screenParamsChanged");
+            } else {
+                refresh_opengl_surface_for_screen_or_backing_change(primaryWin, "screenParamsChanged");
             }
+        }
+    }];
+    [nc addObserverForName:NSWindowDidChangeScreenNotification object:nil queue:nil
+                usingBlock:^(NSNotification *note) {
+        NSWindow *win = (NSWindow *)note.object;
+        if (gAppIsTerminating || !win || !is_sdl_game_window(win) || is_secondary_orphan_game_window(win)) {
+            return;
+        }
+        debuglog_window_geometry("DidChangeScreen", win);
+        if (is_sdl_window_fully_attached(win) && !gInFullscreenTransition) {
+            if (gWindowedModeActive && gTargetWindowWidth >= 640 && gTargetWindowHeight >= 480) {
+                NSInteger prevW = gTargetWindowWidth, prevH = gTargetWindowHeight;
+                resolve_compatible_windowed_size(win, &gTargetWindowWidth, &gTargetWindowHeight);
+                if (prevW != gTargetWindowWidth || prevH != gTargetWindowHeight) {
+                    gForceCenterWindowedFrame = YES;
+                    enforce_primary_window_borderless_fullscreen(win, "didChangeScreen");
+                }
+            }
+            refresh_opengl_surface_for_screen_or_backing_change(win, "didChangeScreen");
+        }
+    }];
+    [nc addObserverForName:NSWindowDidChangeBackingPropertiesNotification object:nil queue:nil
+                usingBlock:^(NSNotification *note) {
+        NSWindow *win = (NSWindow *)note.object;
+        if (gAppIsTerminating || !win || !is_sdl_game_window(win) || is_secondary_orphan_game_window(win)) {
+            return;
+        }
+        debuglog_window_geometry("DidChangeBackingProperties", win);
+        if (is_sdl_window_fully_attached(win) && !gInFullscreenTransition) {
+            refresh_opengl_surface_for_screen_or_backing_change(win, "didChangeBackingProperties");
         }
     }];
     [nc addObserverForName:NSMenuDidEndTrackingNotification object:nil queue:nil
@@ -6290,9 +6940,14 @@ static void register_window_geometry_observers(void) {
         debuglog_window_geometry("DidResize", win);
         if (win && is_sdl_game_window(win) && !is_secondary_orphan_game_window(win)) {
             BOOL inSpace = ((win.styleMask & NSWindowStyleMaskFullScreen) != 0);
-            if (inSpace || (gWindowedModeActive && [win inLiveResize])) {
-                sync_sdl_window_logical_size_to_engine_fb(win, inSpace ? "didResizeSpace" : "didResizeLive");
-                apply_opengl_surface_backing_size_ex(win, NO);
+            if (inSpace) {
+                if (NSApp && [NSApp isActive] && !gAppIsHiding) {
+                    ensure_fullscreen_space_geometry(win, "didResizeSpace");
+                    sync_sdl_window_logical_size_to_engine_fb(win, "didResizeSpace");
+                    apply_opengl_surface_backing_size_ex(win, NO);
+                } else {
+                    refresh_opengl_surface_for_screen_or_backing_change(win, "didResizeSpaceInactive");
+                }
                 return;
             }
             clamp_fullscreen_window_to_visible_frame(win);
@@ -6305,6 +6960,7 @@ static void register_window_geometry_observers(void) {
             ([NSEvent pressedMouseButtons] & 1) != 0 &&
             win && is_sdl_game_window(win) && !is_secondary_orphan_game_window(win)) {
             gUserWindowMoveInProgress = YES;
+            clear_exit_fullscreen_target_screen();
         }
     }];
     [nc addObserverForName:NSWindowDidMoveNotification object:nil queue:nil
@@ -6736,6 +7392,9 @@ static void sims2_trackpad_init(void) {
         if (primaryWin && !gInFullscreenTransition) {
             enforce_primary_window_borderless_fullscreen(primaryWin, "DidBecomeActive");
             restore_game_window_focus_and_input(primaryWin, "DidBecomeActive");
+            if (!gWindowedModeActive && ((primaryWin.styleMask & NSWindowStyleMaskFullScreen) != 0)) {
+                refresh_opengl_surface_for_screen_or_backing_change(primaryWin, "DidBecomeActive");
+            }
             uint64_t activeGen = current_display_transition_gen();
             __weak NSWindow *weakWin = primaryWin;
             dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(60 * NSEC_PER_MSEC)),
