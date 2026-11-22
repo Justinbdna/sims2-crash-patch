@@ -1,7 +1,7 @@
 #!/bin/bash
 # ==============================================================================
 # The Sims 2: Super Collection — Official Binary Restore Utility
-# Version: 1.4.1
+# Version: 1.5.0-rc1
 # Verifies pristine fingerprints before atomically restoring Sims2XP_Exe.backup.
 # License: MIT — Free, non-profit community software preservation & bug-fix
 # utility for lawful owners. No copyrighted game binaries or DRM bypass.
@@ -312,6 +312,9 @@ my $repl1 = pack("H*", "41bf3c000000909090904889df");
 my $orig2 = pack("H*", "41bf3c000000440f45f8c70300000000");
 my $repl2 = pack("H*", "41bf3c00000090909090c70300000000");
 my $repl_asl     = pack("H*", "39f190904139f89090");
+my $repl_fb_1280 = pack("H*", "4989c19090909090c745b000040000");
+my $repl_fb_1024 = pack("H*", "4c8d4dd090909090904c89e8");
+my $repl_fb_1344 = pack("H*", "4c8d4dd09090909090488b9d48ffffff");
 my $repl_aspect  = pack("H*", "3b45c077063b4dc4764190");
 my $repl_val_p3  = pack("H*", "3d000a0000771581f940060000770deb4b9090909090909090909090");
 my $repl_stretch = pack("H*", "e86277fbff84c0eb108b43183b45f0");
@@ -321,6 +324,9 @@ if (count_occurrences($buf, $orig1) == 1 &&
     count_occurrences($buf, $repl1) == 0 &&
     count_occurrences($buf, $repl2) == 0 &&
     index($buf, $repl_asl) == -1 &&
+    index($buf, $repl_fb_1280) == -1 &&
+    index($buf, $repl_fb_1024) == -1 &&
+    index($buf, $repl_fb_1344) == -1 &&
     index($buf, $repl_aspect) == -1 &&
     index($buf, $repl_val_p3) == -1 &&
     index($buf, $repl_stretch) == -1 &&

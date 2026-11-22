@@ -1,7 +1,7 @@
 #!/bin/bash
 # ==============================================================================
 # The Sims 2: Super Collection — Maintenance, Caches & Display Reset Utility
-# Version: 1.4.1
+# Version: 1.5.0-rc1
 # Safe dual-location cache cleaner, userProps.xml display reset, CC/maxfiles check.
 # License: MIT — Free, non-profit community software preservation & bug-fix
 # utility for lawful owners. No copyrighted game binaries or DRM bypass.
