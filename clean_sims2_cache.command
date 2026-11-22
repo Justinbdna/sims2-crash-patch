@@ -1,13 +1,15 @@
 #!/bin/bash
 # ==============================================================================
 # The Sims 2: Super Collection — Maintenance, Caches & Display Reset Utility
-# Version: 1.5.0-rc1
+# Version: 1.5.0-rc2
 # Safe dual-location cache cleaner, userProps.xml display reset, CC/maxfiles check.
 # License: MIT — Free, non-profit community software preservation & bug-fix
 # utility for lawful owners. No copyrighted game binaries or DRM bypass.
 # ==============================================================================
 
 set -u
+
+SCRIPT_VERSION="1.5.0-rc2"
 
 # ANSI Colors
 RED='\033[0;31m'
@@ -33,7 +35,7 @@ LOG_FILE=""
 LOG_FINALIZED=0
 
 init_diagnostic_log() {
-    local label="${1:-clean_sims2_cache.command v1.4.1}"
+    local label="${1:-clean_sims2_cache.command v${SCRIPT_VERSION}}"
     [ -z "${REAL_HOME:-}" ] && return 0
     local log_dir="${SIMS2_LOG_DIR:-$REAL_HOME/Library/Logs/Sims2-Crash-Patch}"
     run_as_real_user mkdir -p "$log_dir" >/dev/null 2>&1 || return 0
@@ -748,7 +750,7 @@ run_menu_choice() {
 
     case "$choice" in
         1|2|3)
-            init_diagnostic_log "clean_sims2_cache.command v1.4.1 (menu=$choice)"
+            init_diagnostic_log "clean_sims2_cache.command v${SCRIPT_VERSION} (menu=$choice)"
             ;;
     esac
 
@@ -765,7 +767,7 @@ run_menu_choice() {
             echo ""
             if [ "$SANDBOX_FAILED" -eq 0 ]; then
                 echo -e "${GREEN}${BOLD}========================================================================${NC}"
-                echo -e "${GREEN}${BOLD}  NETTOYAGE TERMINÉ / CACHE PURGE COMPLETE (v1.4.1) !                   ${NC}"
+                echo -e "${GREEN}${BOLD}  NETTOYAGE TERMINÉ / CACHE PURGE COMPLETE (v${SCRIPT_VERSION}) !              ${NC}"
                 echo -e "${GREEN}${BOLD}========================================================================${NC}"
                 echo "  Vos quartiers, familles et mods (Downloads) sont 100 % intacts."
                 echo "  Vous pouvez relancer Les Sims 2 et charger votre quartier en sécurité."
@@ -776,7 +778,7 @@ run_menu_choice() {
                 pause_exit 0
             else
                 echo -e "${YELLOW}${BOLD}========================================================================${NC}"
-                echo -e "${YELLOW}${BOLD}  NETTOYAGE PARTIEL / PARTIAL CLEANUP (v1.4.1)                          ${NC}"
+                echo -e "${YELLOW}${BOLD}  NETTOYAGE PARTIEL / PARTIAL CLEANUP (v${SCRIPT_VERSION})                     ${NC}"
                 echo -e "${YELLOW}${BOLD}========================================================================${NC}"
                 echo "  Le dossier actif Application Support a été vérifié/nettoyé, mais le"
                 echo "  conteneur Sandbox n'a pas pu être inspecté via Finder (voir message"
@@ -824,7 +826,7 @@ run_menu_choice() {
 main() {
     echo -e "${CYAN}${BOLD}"
     echo "========================================================================"
-    echo "  The Sims 2 — Maintenance, Caches & Affichage / Utility (v1.4.1)       "
+    echo "  The Sims 2 — Maintenance, Caches & Affichage / Utility (v${SCRIPT_VERSION})  "
     echo "========================================================================"
     echo -e "${NC}"
 

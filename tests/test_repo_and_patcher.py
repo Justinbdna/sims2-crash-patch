@@ -589,7 +589,7 @@ class TestMacScriptsIntegrity(unittest.TestCase):
         clt_tools_rx = re.compile(r"(?<![#\w/.-])(python3|swift|git|clang|xcodebuild|objdump|cc)\b")
         for script_name in ("patch_sims2.command", "clean_sims2_cache.command", "restore_sims2.command"):
             text = (ROOT_DIR / script_name).read_text(encoding="utf-8")
-            self.assertIn("Version: 1.5.0-rc1", text)
+            self.assertIn("Version: 1.5.0-rc2", text)
             non_comment = "\n".join(ln for ln in text.splitlines() if not ln.lstrip().startswith("#"))
             # Remove heredoc text/URLs isn't needed if no CLT tool word appears in code lines
             for line in non_comment.splitlines():
@@ -604,10 +604,11 @@ class TestMacScriptsIntegrity(unittest.TestCase):
         readme_md = (ROOT_DIR / "README.md").read_text(encoding="utf-8")
         changelog = (ROOT_DIR / "CHANGELOG.md").read_text(encoding="utf-8")
         for doc_text in (readme_txt, readme_md):
-            self.assertIn("v1.5.0-rc1", doc_text)
+            self.assertIn("v1.5.0-rc2", doc_text)
             self.assertIn("Gatekeeper", doc_text)
             self.assertIn("userProps.xml.backup", doc_text)
             self.assertIn("Autoriser", doc_text)
+        self.assertIn("[1.5.0-rc2]", changelog)
         self.assertIn("[1.5.0-rc1]", changelog)
         self.assertIn("[1.4.1]", changelog)
         self.assertIn("[1.4.0]", changelog)
@@ -938,7 +939,7 @@ class TestMacScriptsIntegrity(unittest.TestCase):
         self.assertIn("--------RRRRRRRRGGGGGGGGBBBBBBBB", src_m)
         self.assertIn("clamp_fullscreen_window_to_visible_frame", src_m)
         self.assertIn("update_cached_screen_geometry", src_m)
-        self.assertIn("SIMS2_PATCH_VERSION \"1.5.0-rc1\"", src_m)
+        self.assertIn("SIMS2_PATCH_VERSION \"1.5.0-rc2\"", src_m)
         self.assertIn("_CGDisplayCopyAllDisplayModes", src_m)
         self.assertIn("_CGDisplayCopyDisplayMode", src_m)
         self.assertIn("_CGDisplayModeGetHeight", src_m)
@@ -1405,7 +1406,7 @@ class TestMacScriptsIntegrity(unittest.TestCase):
                     self.assertTrue(diag_log.is_file(), "Expected sims2_patch_diag.log when SIMS2_DIAG_LOG=1")
                     diag_txt = diag_log.read_text(encoding="utf-8")
                     self.assertIn("[BOOT]", diag_txt)
-                    self.assertIn("v1.5.0-rc1", diag_txt)
+                    self.assertIn("v1.5.0-rc2", diag_txt)
                     self.assertIn("[INIT]", diag_txt)
                     self.assertIn("[+0", diag_txt)
                     self.assertFalse((h1 / "Library" / "Logs" / "Sims2-Crash-Patch").exists())
@@ -1791,7 +1792,7 @@ class TestMacScriptsIntegrity(unittest.TestCase):
                 for expected in (
                     "Timestamp     :",
                     "Crash Log #   : 1 ",
-                    "Patch Version : 1.5.0-rc1",
+                    "Patch Version : 1.5.0-rc2",
                     "SIGSEGV",
                     "Signal Code   :",
                     "Fault Address : 0x8",
@@ -1858,7 +1859,7 @@ class TestMacScriptsIntegrity(unittest.TestCase):
         #    compact screen presets, and external mouse wheel bypass.
         for sym in (
             '#import <objc/message.h>',
-            'SIMS2_PATCH_VERSION "1.5.0-rc1"',
+            'SIMS2_PATCH_VERSION "1.5.0-rc2"',
             "extract_nswindow_from_delegate_arg",
             "is_callable_orig_imp",
             "_objc_msgForward",
@@ -1921,7 +1922,7 @@ class TestMacScriptsIntegrity(unittest.TestCase):
 
         # 4. patch_sims2.command v1.5.0-rc1 checks: version, obsolete prefs cleanup, ad-hoc sign WITHOUT --deep,
         #    strict --verify --deep --strict, Command shortcuts, crash log path, zero Upscaling / Option+U / Option+R.
-        self.assertIn('PATCH_VERSION="1.5.0-rc1"', patch_sh)
+        self.assertIn('PATCH_VERSION="1.5.0-rc2"', patch_sh)
         self.assertIn("cleanup_obsolete_experimental_prefs", patch_sh)
         for obsolete_key in (
             "S2PatchFullscreenUpscaling",
@@ -2030,8 +2031,10 @@ class TestMacScriptsIntegrity(unittest.TestCase):
                     "        [[NSRunLoop currentRunLoop] runUntilDate:[NSDate dateWithTimeIntervalSinceNow:0.05]];\n"
                     "        [w setDelegate:nil];\n"
                     "        [w close];\n"
-                    "        printf(\"enterFail=%d exitFail=%d\\n\", gOrigEnterFailCalls, gOrigExitFailCalls);\n"
-                    "        return (gOrigEnterFailCalls == 1 && gOrigExitFailCalls == 1) ? 0 : 42;\n"
+                    "        printf(\"enterFail=%d exitFail=%d style=0x%lx\\n\", gOrigEnterFailCalls, gOrigExitFailCalls, (unsigned long)[w styleMask]);\n"
+                    "        /* When stillInSpace == NO, swizzled_windowDidFailToExitFullScreen MUST skip Aspyr's bogus\n"
+                    "           orig IMP (which called [self windowDidEnterFullScreen:nil] and corrupted styleMask -> 0x0). */\n"
+                    "        return (gOrigEnterFailCalls == 1 && gOrigExitFailCalls == 0 && (([w styleMask] & NSWindowStyleMaskTitled) != 0)) ? 0 : 42;\n"
                     "    }\n"
                     "}\n",
                     encoding="utf-8",
@@ -2057,13 +2060,362 @@ class TestMacScriptsIntegrity(unittest.TestCase):
                 env_fs.pop("SIMS2_DEBUG", None)
                 r_fs = subprocess.run([str(probe_exe)], env=env_fs, capture_output=True, text=True)
                 self.assertEqual(r_fs.returncode, 0, f"windowDidFailToEnterFullScreen probe failed rc={r_fs.returncode} out={r_fs.stdout} err={r_fs.stderr}")
-                self.assertIn("enterFail=1 exitFail=1", r_fs.stdout)
+                self.assertIn("enterFail=1 exitFail=0", r_fs.stdout)
                 self.assertNotIn("doesNotRecognizeSelector", r_fs.stderr)
                 self.assertFalse((h_fs / "Library" / "Logs" / "Sims2-Crash-Patch").exists(), "Zero crash log should be written")
                 diag_txt = (d_fs / "sims2_patch_diag.log").read_text(encoding="utf-8")
                 self.assertIn("windowDidFailToEnterFullScreen win=0x", diag_txt)
                 self.assertIn("windowDidFailToExitFullScreen win=0x", diag_txt)
                 self.assertIn("stillInSpace=0 windowed=1", diag_txt)
+                self.assertNotIn("windowDidEnterFullScreen win=0x0", diag_txt)
+
+    def test_exp_rc2_multiscreen_aspect_fit_no_bounce_opengl_and_fail_exit_fs(self) -> None:
+        src_m = (ROOT_DIR / "trackpad_mod" / "sims2_trackpad.m").read_text(encoding="utf-8")
+        restore_sh = (ROOT_DIR / "restore_sims2.command").read_text(encoding="utf-8")
+        clean_sh = (ROOT_DIR / "clean_sims2_cache.command").read_text(encoding="utf-8")
+        patch_sh = (ROOT_DIR / "patch_sims2.command").read_text(encoding="utf-8")
+
+        # 1. Pure aspect-fit formula verification (compute_aspect_fitted_fullscreen_rect):
+        #    1800x1131 on 1920x1080@(1800,89) -> 1719x1080@(1900,89) (symmetric pillarboxes, zero stretch)
+        #    1800x1131 on 1800x1130@(0,0)     -> 1800x1130@(0,0) (<= 2%, full-bleed)
+        #    1920x1080 on 1920x1080@(1800,89) -> 1920x1080@(1800,89) (TV primary, full-bleed 16:9)
+        def aspect_fit(sx: float, sy: float, sw: float, sh: float, fb_w: float, fb_h: float) -> tuple[int, int, int, int]:
+            screen_aspect = sw / sh
+            fb_aspect = fb_w / fb_h
+            rel_diff = abs(screen_aspect - fb_aspect) / fb_aspect
+            if rel_diff <= 0.02:
+                return int(sx), int(sy), int(sw), int(sh)
+            if screen_aspect > fb_aspect:
+                fit_h = sh
+                fit_w = int(fit_h * fb_aspect + 0.5)
+                fit_x = sx + int((sw - fit_w) // 2)
+                return int(fit_x), int(sy), int(fit_w), int(fit_h)
+            fit_w = sw
+            fit_h = int(fit_w / fb_aspect + 0.5)
+            fit_y = sy + int((sh - fit_h) // 2)
+            return int(sx), int(fit_y), int(fit_w), int(fit_h)
+
+        self.assertEqual(aspect_fit(1800, 89, 1920, 1080, 1800, 1131), (1900, 89, 1719, 1080))
+        self.assertEqual(aspect_fit(0, 0, 1800, 1130, 1800, 1131), (0, 0, 1800, 1130))
+        self.assertEqual(aspect_fit(1800, 89, 1920, 1080, 1920, 1080), (1800, 89, 1920, 1080))
+        self.assertEqual(aspect_fit(0, 0, 1800, 1130, 1920, 1080), (0, 58, 1800, 1013))
+
+        # 2. Source safeguards for Bugs 1, 2, 3, and 4 in sims2_trackpad.m
+        for sym in (
+            "compute_aspect_fitted_fullscreen_rect",
+            "resolve_screen_for_rect",
+            "compute_anti_tiling_windowed_frame",
+            "compute_windowed_game_frame_on_screen",
+            "refresh_opengl_surface_for_screen_or_backing_change",
+            "NSWindowDidChangeScreenNotification",
+            "NSWindowDidChangeBackingPropertiesNotification",
+            "CGLUpdateContext(cglCtx)",
+            "[nsglCtx update]",
+            "setNeedsDisplay:YES",
+            "gAllowExplicitSpaceReactivation",
+            "NSApplicationPresentationFullScreen",
+            "gPrimaryNotchTopInset",
+            "gPrimaryRawScreenHeight",
+            "failExitFullScreenToWindowed",
+            "IGNORED spurious windowDidEnterFullScreen",
+            "engine_fb_is_widescreen_16_9",
+        ):
+            self.assertIn(sym, src_m, f"Missing v1.5.0-rc2 multi-screen fix in sims2_trackpad.m: {sym}")
+
+        # Verify swizzled_sdlConstrainFrameRect delegates to NSWindow superclass instead of Aspyr's Display-0 clamp
+        cf_idx = src_m.find("static NSRect swizzled_sdlConstrainFrameRect(")
+        self.assertNotEqual(cf_idx, -1)
+        cf_end = src_m.find("static void sync_content_view_to_window_bounds(", cf_idx)
+        cf_body = src_m[cf_idx : cf_end if cf_end != -1 else cf_idx + 5200]
+        self.assertIn("[NSWindow instanceMethodForSelector:@selector(constrainFrameRect:toScreen:)]", cf_body)
+        self.assertIn("resolve_screen_for_rect(", cf_body)
+
+        # 3. Version consistency across all scripts & docs (zero stale v1.4.1 banners in restore/clean)
+        self.assertIn('PATCH_VERSION="1.5.0-rc2"', patch_sh)
+        self.assertIn('SCRIPT_VERSION="1.5.0-rc2"', restore_sh)
+        self.assertIn('SCRIPT_VERSION="1.5.0-rc2"', clean_sh)
+        self.assertNotIn("v1.4.1", restore_sh)
+        self.assertNotIn("v1.4.1", clean_sh)
+        for doc_name in ("README.md", "README.txt"):
+            doc = (ROOT_DIR / doc_name).read_text(encoding="utf-8")
+            self.assertIn("v1.5.0-rc2", doc)
+            self.assertIn("16:9", doc)
+            self.assertIn("16:10", doc)
+
+        # 4. Live x86_64 ObjC runtime test for BUG 1 (no snap from x=2004 -> x=288 on secondary monitor)
+        #    and BUG 4 (windowDidFailToExitFullScreen with stillInSpace==NO keeps styleMask=0xf, windowed=1,
+        #    and never triggers Aspyr's bogus windowDidEnterFullScreen:nil / styleMask=0x0).
+        if sys.platform == "darwin" and vp.find_unix_tool("clang", ()):
+            dylib_path = (ROOT_DIR / "trackpad_mod" / "libsims2_trackpad.dylib").as_posix()
+            with tempfile.TemporaryDirectory() as tmp:
+                tmp_p = Path(tmp)
+                probe_m = tmp_p / "multiscreen_rc2_probe.m"
+                probe_exe = tmp_p / "multiscreen_rc2_probe"
+                probe_m.write_text(
+                    "#import <Cocoa/Cocoa.h>\n"
+                    "#import <stdio.h>\n"
+                    "static int gAspyrDisplay0BounceCalled = 0;\n"
+                    "static int gAspyrBogusFailExitCalled = 0;\n"
+                    "@interface SDLWindow : NSWindow\n"
+                    "@end\n"
+                    "@implementation SDLWindow\n"
+                    "- (NSRect)constrainFrameRect:(NSRect)frameRect toScreen:(NSScreen *)screen {\n"
+                    "    /* Mimic Aspyr's exact 0x100101050 bug: clamp secondary-screen x onto Display 0 [0,1800] */\n"
+                    "    gAspyrDisplay0BounceCalled++;\n"
+                    "    NSRect r = [super constrainFrameRect:frameRect toScreen:screen];\n"
+                    "    if (r.origin.x + r.size.width > 1800.0) r.origin.x = 1800.0 - r.size.width;\n"
+                    "    return r;\n"
+                    "}\n"
+                    "@end\n"
+                    "@interface Cocoa_WindowListener : NSObject <NSWindowDelegate>\n"
+                    "@end\n"
+                    "@implementation Cocoa_WindowListener\n"
+                    "- (void)windowDidEnterFullScreen:(NSNotification *)n { (void)n; }\n"
+                    "- (void)windowDidFailToEnterFullScreen:(NSWindow *)w { (void)w; }\n"
+                    "- (void)windowDidFailToExitFullScreen:(NSWindow *)w {\n"
+                    "    /* Mimic Aspyr's exact 0x1001030e0 bug: tail-call windowDidEnterFullScreen:nil & set styleMask=0 */\n"
+                    "    gAspyrBogusFailExitCalled++;\n"
+                    "    [self windowDidEnterFullScreen:nil];\n"
+                    "    [w setStyleMask:0];\n"
+                    "}\n"
+                    "@end\n"
+                    "int main(void) {\n"
+                    "    @autoreleasepool {\n"
+                    "        [NSApplication sharedApplication];\n"
+                    "        Cocoa_WindowListener *listener = [[Cocoa_WindowListener alloc] init];\n"
+                    "        SDLWindow *w = [[SDLWindow alloc] initWithContentRect:NSMakeRect(100, 100, 1512, 982)\n"
+                    "                                                    styleMask:(NSWindowStyleMaskTitled | NSWindowStyleMaskClosable |\n"
+                    "                                                               NSWindowStyleMaskMiniaturizable | NSWindowStyleMaskResizable)\n"
+                    "                                                      backing:NSBackingStoreBuffered\n"
+                    "                                                        defer:NO];\n"
+                    "        [w setReleasedWhenClosed:NO];\n"
+                    "        [w setDelegate:listener];\n"
+                    "        /* Enter Windowed mode cleanly */\n"
+                    "        [listener windowDidFailToEnterFullScreen:w];\n"
+                    "        [[NSRunLoop currentRunLoop] runUntilDate:[NSDate dateWithTimeIntervalSinceNow:0.05]];\n"
+                    "        /* BUG 1 probe: constrain a TV window at x=2004 (1512x1010) -> must NOT snap to x=288! */\n"
+                    "        NSRect tvRect = NSMakeRect(2004.0, 109.0, 1512.0, 1010.0);\n"
+                    "        NSRect constrained = [w constrainFrameRect:tvRect toScreen:nil];\n"
+                    "        /* BUG 4 probe: spurious windowDidFailToExitFullScreen while stillInSpace==NO (fs=0) */\n"
+                    "        [listener windowDidFailToExitFullScreen:w];\n"
+                    "        [[NSRunLoop currentRunLoop] runUntilDate:[NSDate dateWithTimeIntervalSinceNow:0.05]];\n"
+                    "        NSUInteger finalStyle = (NSUInteger)[w styleMask];\n"
+                    "        printf(\"constrainedX=%.0f bounceCalls=%d bogusFailExit=%d finalStyle=0x%lx\\n\",\n"
+                    "               constrained.origin.x, gAspyrDisplay0BounceCalled, gAspyrBogusFailExitCalled, (unsigned long)finalStyle);\n"
+                    "        [w setDelegate:nil];\n"
+                    "        [w close];\n"
+                    "        if (constrained.origin.x < 2000.0 || gAspyrDisplay0BounceCalled != 0) return 11;\n"
+                    "        if (gAspyrBogusFailExitCalled != 0 || finalStyle != 0xf) return 12;\n"
+                    "        return 0;\n"
+                    "    }\n"
+                    "}\n",
+                    encoding="utf-8",
+                )
+                rc_build = subprocess.run(
+                    ["clang", "-arch", "x86_64", "-mmacosx-version-min=10.13", "-fobjc-arc", "-framework", "Cocoa", str(probe_m), "-o", str(probe_exe)],
+                    capture_output=True,
+                    text=True,
+                )
+                self.assertEqual(rc_build.returncode, 0, rc_build.stderr)
+                h_rc2 = tmp_p / "h_rc2"
+                d_rc2 = tmp_p / "d_rc2"
+                h_rc2.mkdir()
+                d_rc2.mkdir()
+                env_rc2 = {
+                    **os.environ,
+                    "HOME": str(h_rc2),
+                    "SIMS2_DIAG_LOG_DIR": str(d_rc2),
+                    "SIMS2_DIAG_LOG": "1",
+                    "DYLD_INSERT_LIBRARIES": dylib_path,
+                }
+                env_rc2.pop("SIMS2_DEBUG", None)
+                r_rc2 = subprocess.run([str(probe_exe)], env=env_rc2, capture_output=True, text=True)
+                self.assertEqual(r_rc2.returncode, 0, f"rc2 multiscreen probe failed rc={r_rc2.returncode} out={r_rc2.stdout} err={r_rc2.stderr}")
+                self.assertIn("constrainedX=2004 bounceCalls=0 bogusFailExit=0 finalStyle=0xf", r_rc2.stdout)
+                self.assertFalse((h_rc2 / "Library" / "Logs" / "Sims2-Crash-Patch").exists())
+                diag_txt = (d_rc2 / "sims2_patch_diag.log").read_text(encoding="utf-8")
+                self.assertIn("windowDidFailToExitFullScreen win=0x", diag_txt)
+                self.assertNotIn("windowDidEnterFullScreen win=0x0", diag_txt)
+
+    def test_exp_rc2_bug_a_exit_fs_tv_and_bug_b_coalesced_mission_control(self) -> None:
+        src_m = (ROOT_DIR / "trackpad_mod" / "sims2_trackpad.m").read_text(encoding="utf-8")
+
+        # 1. Bug A static guards: preserve origin monitor (e.g. TV) when exiting Fullscreen Space,
+        #    even mid-animation while gInFullscreenTransition==YES, plus 180 ms post-exit settle.
+        for sym in (
+            "remember_exit_fullscreen_target_screen",
+            "clear_exit_fullscreen_target_screen",
+            "resolve_active_exit_fullscreen_target_screen",
+            "didExitFullScreenSettle",
+            "gExitFullscreenTargetScreen",
+            "gExitFullscreenTargetFrame",
+            "gHasExitFullscreenTarget",
+            "if (!gUserRequestedFullscreenExit && !gUserRequestedFullscreenEnter)",
+        ):
+            self.assertIn(sym, src_m, f"Missing Bug A safeguard in sims2_trackpad.m: {sym}")
+
+        cf_idx = src_m.find("static NSRect swizzled_sdlConstrainFrameRect(")
+        self.assertNotEqual(cf_idx, -1)
+        cf_end = src_m.find("static void sync_content_view_to_window_bounds(", cf_idx)
+        cf_body = src_m[cf_idx : cf_end if cf_end != -1 else cf_idx + 5200]
+        self.assertIn("if (gWindowedModeActive || gInFullscreenTransition || gHasExitFullscreenTarget)", cf_body)
+        self.assertNotIn("if (gWindowedModeActive && !gInFullscreenTransition)", cf_body)
+
+        wex_idx = src_m.find("static void swizzled_windowWillExitFullScreen(")
+        self.assertNotEqual(wex_idx, -1)
+        self.assertIn("remember_exit_fullscreen_target_screen(", src_m[wex_idx : wex_idx + 1200])
+
+        dex_idx = src_m.find("static void swizzled_windowDidExitFullScreen(")
+        self.assertNotEqual(dex_idx, -1)
+        dex_end = src_m.find("static void swizzled_windowDidFailToExitFullScreen(", dex_idx)
+        dex_body = src_m[dex_idx : dex_end if dex_end != -1 else dex_idx + 5200]
+        self.assertIn("didExitFullScreenSettle", dex_body)
+        self.assertIn("clear_exit_fullscreen_target_screen();", dex_body)
+
+        # 2. Bug B static guards: coalesced/debounced OpenGL refresh (zero synchronous setFrame: or CGL storm
+        #    while inactive in Mission Control), and 150 ms deferred Space reactivation that yields to macOS activation.
+        for sym in (
+            "gOpenGLRefreshSeq",
+            "gSpaceReactivateSeq",
+            "gLastAppliedGlBackingScale",
+            "gLastAppliedGlScreen",
+            "Coalesced OpenGL refresh",
+            "Deferred reactivation of game Fullscreen Space",
+            "didResizeSpaceInactive",
+        ):
+            self.assertIn(sym, src_m, f"Missing Bug B safeguard in sims2_trackpad.m: {sym}")
+
+        gl_ref_idx = src_m.find("static void refresh_opengl_surface_for_screen_or_backing_change(NSWindow *win, const char *reason) {")
+        self.assertNotEqual(gl_ref_idx, -1)
+        gl_ref_end = src_m.find("static void clear_exit_fullscreen_target_screen(", gl_ref_idx)
+        gl_ref_body = src_m[gl_ref_idx : gl_ref_end if gl_ref_end != -1 else gl_ref_idx + 4000]
+        da_pos = gl_ref_body.find("dispatch_after(")
+        self.assertNotEqual(da_pos, -1, "refresh_opengl_surface_for_screen_or_backing_change must debounce via dispatch_after")
+        pre_da = gl_ref_body[:da_pos]
+        post_da = gl_ref_body[da_pos:]
+        self.assertNotIn("ensure_fullscreen_space_geometry(", pre_da, "Must never call setFrame:/ensure_fullscreen_space_geometry synchronously")
+        self.assertNotIn("apply_opengl_surface_backing_size_ex(", pre_da, "Must coalesce CGL updates inside debounced dispatch_after")
+        self.assertIn("if (!gWindowedModeActive && wInSpace && appActive)", post_da)
+
+        clamp_idx = src_m.find("static BOOL should_clamp_stale_windowed_frame_during_fullscreen(")
+        self.assertNotEqual(clamp_idx, -1)
+        self.assertIn("if (!gInFullscreenTransition && NSApp && ![NSApp isActive])", src_m[clamp_idx : clamp_idx + 600])
+
+        sp_idx = src_m.find("static void ensure_workspace_space_observer_registered(void) {")
+        self.assertNotEqual(sp_idx, -1)
+        sp_end = src_m.find("static void register_window_geometry_observers(", sp_idx)
+        sp_body = src_m[sp_idx : sp_end if sp_end != -1 else sp_idx + 6000]
+        else_if_pos = sp_body.find("} else if (primaryWin && !gAppIsHiding")
+        self.assertNotEqual(else_if_pos, -1)
+        sp_inactive = sp_body[else_if_pos:]
+        sp_da_pos = sp_inactive.find("dispatch_after(")
+        sp_act_pos = sp_inactive.find("[NSApp activateIgnoringOtherApps:YES]")
+        sp_active_guard_pos = sp_inactive.find("if (NSApp && [NSApp isActive])")
+        self.assertTrue(0 < sp_da_pos < sp_active_guard_pos < sp_act_pos,
+                        "NSWorkspaceActiveSpaceDidChangeNotification must defer activateIgnoringOtherApps:YES inside dispatch_after after checking [NSApp isActive]")
+
+        # 3. Live x86_64 ObjC runtime test for Bug A:
+        #    Invoke windowWillExitFullScreen: (gInFullscreenTransition == YES) and call constrainFrameRect:toScreen:
+        #    with TV coordinates (x=1957, 1512x1010) MID-TRANSITION -> must keep x=1957 and never invoke Aspyr's 0x100101050 clamp!
+        if sys.platform == "darwin" and vp.find_unix_tool("clang", ()):
+            dylib_path = (ROOT_DIR / "trackpad_mod" / "libsims2_trackpad.dylib").as_posix()
+            with tempfile.TemporaryDirectory() as tmp:
+                tmp_p = Path(tmp)
+                probe_m = tmp_p / "bug_a_exit_fs_probe.m"
+                probe_exe = tmp_p / "bug_a_exit_fs_probe"
+                probe_m.write_text(
+                    "#import <Cocoa/Cocoa.h>\n"
+                    "#import <stdio.h>\n"
+                    "static int gAspyrDisplay0BounceCalled = 0;\n"
+                    "static int gProbeArmed = 0;\n"
+                    "@interface SDLWindow : NSWindow\n"
+                    "@end\n"
+                    "@implementation SDLWindow\n"
+                    "- (NSRect)constrainFrameRect:(NSRect)frameRect toScreen:(NSScreen *)screen {\n"
+                    "    if (!gProbeArmed) return frameRect;\n"
+                    "    gAspyrDisplay0BounceCalled++;\n"
+                    "    NSRect r = [super constrainFrameRect:frameRect toScreen:screen];\n"
+                    "    if (r.origin.x + r.size.width > 1800.0) r.origin.x = 1800.0 - r.size.width;\n"
+                    "    return r;\n"
+                    "}\n"
+                    "@end\n"
+                    "@interface Cocoa_WindowListener : NSObject <NSWindowDelegate>\n"
+                    "@end\n"
+                    "@implementation Cocoa_WindowListener\n"
+                    "- (void)windowWillExitFullScreen:(NSNotification *)n { (void)n; }\n"
+                    "- (void)windowDidExitFullScreen:(NSNotification *)n { (void)n; }\n"
+                    "@end\n"
+                    "int main(void) {\n"
+                    "    @autoreleasepool {\n"
+                    "        [NSApplication sharedApplication];\n"
+                    "        NSArray<NSScreen *> *screens = [NSScreen screens];\n"
+                    "        BOOL hasSec = (screens && [screens count] > 1);\n"
+                    "        NSScreen *secScr = hasSec ? [screens objectAtIndex:1] : nil;\n"
+                    "        NSRect initRect = hasSec\n"
+                    "            ? NSMakeRect(secScr.frame.origin.x + 80.0, secScr.frame.origin.y + 40.0, 1512.0, 982.0)\n"
+                    "            : NSMakeRect(100.0, 100.0, 1512.0, 982.0);\n"
+                    "        Cocoa_WindowListener *listener = [[Cocoa_WindowListener alloc] init];\n"
+                    "        SDLWindow *w = [[SDLWindow alloc] initWithContentRect:initRect\n"
+                    "                                                    styleMask:(NSWindowStyleMaskTitled | NSWindowStyleMaskClosable |\n"
+                    "                                                               NSWindowStyleMaskMiniaturizable | NSWindowStyleMaskResizable)\n"
+                    "                                                      backing:NSBackingStoreBuffered\n"
+                    "                                                        defer:NO];\n"
+                    "        [w setReleasedWhenClosed:NO];\n"
+                    "        [w setDelegate:listener];\n"
+                    "        gProbeArmed = 1;\n"
+                    "        /* Enter Space-exit transition: sets gInFullscreenTransition=YES & gHasExitFullscreenTarget=YES */\n"
+                    "        NSNotification *willExitNote = [NSNotification notificationWithName:NSWindowWillExitFullScreenNotification object:w];\n"
+                    "        [listener windowWillExitFullScreen:willExitNote];\n"
+                    "        /* Exact Bug A moment (+00138.209s): AppKit calls constrainFrameRect on TV frame MID-TRANSITION */\n"
+                    "        NSRect tvExitRect = hasSec\n"
+                    "            ? NSMakeRect(secScr.frame.origin.x + 157.0, secScr.frame.origin.y + 40.0, 1512.0, 1010.0)\n"
+                    "            : NSMakeRect(1957.0, 129.0, 1512.0, 1010.0);\n"
+                    "        NSRect constrainedMidExit = [w constrainFrameRect:tvExitRect toScreen:nil];\n"
+                    "        /* On real multi-screen, also test AppKit attempting a screens[0] @(288,120) bounce mid-exit -> must stay on secScr! */\n"
+                    "        NSRect antiBounceRect = hasSec\n"
+                    "            ? [w constrainFrameRect:NSMakeRect(288.0, 120.0, 1512.0, 1010.0) toScreen:[screens objectAtIndex:0]]\n"
+                    "            : constrainedMidExit;\n"
+                    "        /* Complete Space exit + drain 220ms settle timer */\n"
+                    "        NSNotification *didExitNote = [NSNotification notificationWithName:NSWindowDidExitFullScreenNotification object:w];\n"
+                    "        [listener windowDidExitFullScreen:didExitNote];\n"
+                    "        [[NSRunLoop currentRunLoop] runUntilDate:[NSDate dateWithTimeIntervalSinceNow:0.22]];\n"
+                    "        printf(\"screens=%lu midExitX=%.0f antiBounceX=%.0f bounceCalls=%d\\n\",\n"
+                    "               (unsigned long)(screens ? [screens count] : 0),\n"
+                    "               constrainedMidExit.origin.x, antiBounceRect.origin.x, gAspyrDisplay0BounceCalled);\n"
+                    "        [w setDelegate:nil];\n"
+                    "        [w close];\n"
+                    "        CGFloat minExpectedX = hasSec ? secScr.frame.origin.x : 1950.0;\n"
+                    "        if (constrainedMidExit.origin.x < minExpectedX || gAspyrDisplay0BounceCalled != 0) return 21;\n"
+                    "        if (hasSec && antiBounceRect.origin.x < secScr.frame.origin.x) return 22;\n"
+                    "        return 0;\n"
+                    "    }\n"
+                    "}\n",
+                    encoding="utf-8",
+                )
+                rc_build = subprocess.run(
+                    ["clang", "-arch", "x86_64", "-mmacosx-version-min=10.13", "-fobjc-arc", "-framework", "Cocoa", str(probe_m), "-o", str(probe_exe)],
+                    capture_output=True,
+                    text=True,
+                )
+                self.assertEqual(rc_build.returncode, 0, rc_build.stderr)
+                h_a = tmp_p / "h_a"
+                d_a = tmp_p / "d_a"
+                h_a.mkdir()
+                d_a.mkdir()
+                env_a = {
+                    **os.environ,
+                    "HOME": str(h_a),
+                    "SIMS2_DIAG_LOG_DIR": str(d_a),
+                    "SIMS2_DIAG_LOG": "1",
+                    "DYLD_INSERT_LIBRARIES": dylib_path,
+                }
+                env_a.pop("SIMS2_DEBUG", None)
+                r_a = subprocess.run([str(probe_exe)], env=env_a, capture_output=True, text=True)
+                self.assertEqual(r_a.returncode, 0, f"Bug A mid-exit probe failed rc={r_a.returncode} out={r_a.stdout} err={r_a.stderr}")
+                self.assertIn("bounceCalls=0", r_a.stdout)
+                self.assertFalse((h_a / "Library" / "Logs" / "Sims2-Crash-Patch").exists())
+                diag_txt = (d_a / "sims2_patch_diag.log").read_text(encoding="utf-8")
+                self.assertIn("Remembered exit-fullscreen target (windowWillExitFullScreen)", diag_txt)
 
     def test_exp_rc1_single_native_resolution_catalog_no_800x600(self) -> None:
         src_m = (ROOT_DIR / "trackpad_mod" / "sims2_trackpad.m").read_text(encoding="utf-8")
@@ -2186,7 +2538,7 @@ class TestMacScriptsIntegrity(unittest.TestCase):
 
                 crash_file = log_dir / "crash_report.log"
                 crash_file.write_text(
-                    f"Patch Version : 1.5.0-rc1\nPath: /Users/alice_secret/Library/Application Support/test\n",
+                    f"Patch Version : 1.5.0-rc2\nPath: /Users/alice_secret/Library/Application Support/test\n",
                     encoding="utf-8",
                 )
                 dbg_file = log_dir / "debug_boot.log"
@@ -2218,7 +2570,7 @@ class TestMacScriptsIntegrity(unittest.TestCase):
                 report_path = log_dir / "github_support_report.md"
                 self.assertTrue(report_path.is_file())
                 rep_text = report_path.read_text(encoding="utf-8")
-                self.assertIn("v1.5.0-rc1", rep_text)
+                self.assertIn("v1.5.0-rc2", rep_text)
                 self.assertIn("1440x900x32x60", rep_text)
                 self.assertIn("crash_report.log", rep_text)
                 self.assertIn("debug_boot.log", rep_text)
@@ -2277,7 +2629,7 @@ class TestMacScriptsIntegrity(unittest.TestCase):
                     cr_segv = h_segv / "Library" / "Logs" / "Sims2-Crash-Patch" / "crash_report.log"
                     self.assertTrue(cr_segv.is_file())
                     cr_txt = cr_segv.read_text(encoding="utf-8")
-                    self.assertIn("Patch Version : 1.5.0-rc1", cr_txt)
+                    self.assertIn("Patch Version : 1.5.0-rc2", cr_txt)
                     self.assertIn("SIGSEGV", cr_txt)
                     self.assertIn("Backtrace", cr_txt)
 
