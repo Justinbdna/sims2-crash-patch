@@ -2417,6 +2417,13 @@ class TestMacScriptsIntegrity(unittest.TestCase):
                 diag_txt = (d_a / "sims2_patch_diag.log").read_text(encoding="utf-8")
                 self.assertIn("Remembered exit-fullscreen target (windowWillExitFullScreen)", diag_txt)
 
+    def test_ci_workflow_links_opengl_framework_for_macos_trackpad_build(self) -> None:
+        ci_yml = (ROOT_DIR / ".github" / "workflows" / "ci-and-release.yml").read_text(encoding="utf-8")
+        build_sh = (ROOT_DIR / "trackpad_mod" / "build_trackpad.sh").read_text(encoding="utf-8")
+        for fw in ("-framework Cocoa", "-framework Carbon", "-framework CoreGraphics", "-framework OpenGL"):
+            self.assertIn(fw, build_sh, f"Missing {fw} in trackpad_mod/build_trackpad.sh")
+            self.assertIn(fw, ci_yml, f"Missing {fw} in .github/workflows/ci-and-release.yml")
+
     def test_exp_rc1_single_native_resolution_catalog_no_800x600(self) -> None:
         src_m = (ROOT_DIR / "trackpad_mod" / "sims2_trackpad.m").read_text(encoding="utf-8")
         patch_sh = (ROOT_DIR / "patch_sims2.command").read_text(encoding="utf-8")

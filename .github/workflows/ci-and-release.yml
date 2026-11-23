@@ -31,7 +31,7 @@ jobs:
       - name: Compile-check Trackpad module on macOS
         if: runner.os == 'macOS'
         run: |
-          clang -arch x86_64 -mmacosx-version-min=10.13 -dynamiclib -O2 -Wall -Wextra -fobjc-arc -framework Cocoa -framework Carbon -framework CoreGraphics -install_name "@executable_path/libsims2_trackpad.dylib" -o /tmp/libsims2_trackpad_ci.dylib trackpad_mod/sims2_trackpad.m
+          clang -arch x86_64 -mmacosx-version-min=10.13 -dynamiclib -O2 -Wall -Wextra -fobjc-arc -framework Cocoa -framework Carbon -framework CoreGraphics -framework OpenGL -install_name "@executable_path/libsims2_trackpad.dylib" -o /tmp/libsims2_trackpad_ci.dylib trackpad_mod/sims2_trackpad.m
           codesign --force --sign - /tmp/libsims2_trackpad_ci.dylib
           codesign --verify --strict /tmp/libsims2_trackpad_ci.dylib
 
