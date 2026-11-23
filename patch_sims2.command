@@ -1,7 +1,7 @@
 #!/bin/bash
 # ==============================================================================
 # The Sims 2: Super Collection — ProMotion 120Hz Patch, Save Migration & Fixes
-# Version: 1.5.0-rc2 (Option A — Non-Sandbox Architecture)
+# Version: 1.5.0 (Option A — Non-Sandbox Architecture)
 # Target:  /Applications/The Sims 2.app/Contents/MacOS/Sims2XP_Exe
 # Zero Xcode / Python dependency: native /usr/bin/perl, codesign & osascript.
 # License: MIT — Free, non-profit community software preservation & bug-fix
@@ -10,7 +10,7 @@
 
 set -u
 
-PATCH_VERSION="1.5.0-rc2"
+PATCH_VERSION="1.5.0"
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 

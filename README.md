@@ -1,6 +1,6 @@
-# 💎 Sims 2 Crash Patch — macOS Edition (`v1.5.0-rc2`)
+# 💎 Sims 2 Crash Patch — macOS Edition (`v1.5.0`)
 
-[![Release v1.5.0-rc2](https://img.shields.io/badge/Release-v1.5.0--rc2-blue.svg)](https://github.com/Justinbdna/sims2-crash-patch/releases)
+[![Release v1.5.0](https://img.shields.io/badge/Release-v1.5.0-blue.svg)](https://github.com/Justinbdna/sims2-crash-patch/releases)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![macOS Apple Silicon & Intel](https://img.shields.io/badge/macOS-Apple%20Silicon%20%26%20Intel-black.svg?logo=apple)](https://apple.com)
 [![ProMotion 120Hz Fix](https://img.shields.io/badge/ProMotion-120Hz%20Fix-brightgreen.svg)](https://github.com/Justinbdna/sims2-crash-patch)
@@ -33,20 +33,20 @@
 > **Zero external dependencies:** uses only built-in macOS system tools (no Xcode or Command Line Tools required).
 
 ### 🇫🇷 Français
-1. **Téléchargez et décompressez** [`sims2-crash-patch-v1.5.0-rc2.zip`](https://github.com/Justinbdna/sims2-crash-patch/releases) *(fermez d'abord Les Sims 2 avec `Cmd + Q`)*.
+1. **Téléchargez et décompressez** [`sims2-crash-patch-v1.5.0.zip`](https://github.com/Justinbdna/sims2-crash-patch/releases) *(fermez d'abord Les Sims 2 avec `Cmd + Q`)*.
 2. **Débloquez Gatekeeper :** double-cliquez sur `patch_sims2.command` → si macOS affiche *« bloqué pour protéger votre Mac »*, cliquez sur **Terminé**, ouvrez **Réglages Système → Confidentialité et sécurité**, descendez tout en bas et cliquez sur **Ouvrir quand même**.
 3. **Appuyez sur `Entrée` (`[1]`)** dans le Terminal :
    - Tapez votre mot de passe session Mac à l'aveugle (`Password:`, **aucun caractère `*` ne s'affiche**, c'est la sécurité normale de macOS) puis faites `Entrée`.
    - Quand macOS affiche *« Terminal souhaite contrôler Finder »*, cliquez sur **Autoriser** pour copier vos sauvegardes sans rien écraser.
-   - Attendez le message `PATCH COMPLETE (v1.5.0-rc2)` puis lancez le jeu normalement.
+   - Attendez le message `PATCH COMPLETE (v1.5.0)` puis lancez le jeu normalement.
 
 ### 🇬🇧 English
-1. **Download and unzip** [`sims2-crash-patch-v1.5.0-rc2.zip`](https://github.com/Justinbdna/sims2-crash-patch/releases) *(quit The Sims 2 first with `Cmd + Q`)*.
+1. **Download and unzip** [`sims2-crash-patch-v1.5.0.zip`](https://github.com/Justinbdna/sims2-crash-patch/releases) *(quit The Sims 2 first with `Cmd + Q`)*.
 2. **Bypass Gatekeeper:** double-click `patch_sims2.command` → if macOS shows *"blocked to protect your Mac"*, click **Done**, open **System Settings → Privacy & Security**, scroll down and click **Open Anyway**.
 3. **Press `Enter` (`[1]`)** in Terminal:
    - Type your Mac login password blindly at `Password:` (**nothing prints on screen**, that is standard macOS security) and press `Enter`.
    - When macOS asks *"Terminal wants access to control Finder"*, click **Allow** so your App Store saves are safely copied without overwriting anything.
-   - Wait for `PATCH COMPLETE (v1.5.0-rc2)` and launch the game as usual.
+   - Wait for `PATCH COMPLETE (v1.5.0)` and launch the game as usual.
 
 ---
 
@@ -73,9 +73,9 @@ En plus de `patch_sims2.command`, deux scripts compagnons sont inclus dans l'arc
 | **`restore_sims2.command`** | Désinstallation complète et propre : restaure l'exécutable original vérifié (`Sims2XP_Exe.backup`) et `Graphics Rules.sgr.backup`, retire le module trackpad, re-signe l'app et nettoie le `LaunchDaemon` si le patch l'avait ajouté. *(Pour retrouver aussi la signature Mac App Store officielle, supprimez puis retéléchargez l'app depuis l'App Store ; vos sauvegardes restent intactes.)* | Clean full uninstall: restores the verified original binary (`Sims2XP_Exe.backup`) and `Graphics Rules.sgr.backup`, removes the trackpad module, re-signs the app, and removes the managed `LaunchDaemon` if installed by this patch. *(To also restore the Apple App Store signature/Sandbox, delete and re-download the app from the Mac App Store; saves are kept.)* |
 
 > [!NOTE]
-> **Affichage, Résolution & Multi-écrans (`v1.5.0-rc2`) :** Le jeu démarre toujours en **Space Plein écran natif sous l'encoche**. Utilisez **`⌘ + Entrée`** (ou le menu macOS **`Affichage`**) pour basculer entre Plein écran et Fenêtré, et **`⌘ + R`** en mode Fenêtré pour faire défiler les résolutions compatibles avec l'écran actif. En **multi-écrans**, déplacer une session 16:10 (MacBook) vers un écran externe 16:9 (TV/moniteur) conserve automatiquement des **bordures noires symétriques** afin de préserver les proportions exactes sans étirement — **astuce :** pour jouer en **16:9 natif plein cadre** sur un écran externe, définissez-le comme **Écran principal** dans *Réglages Système → Moniteurs* avant de lancer le jeu.  
+> **Affichage, Résolution & Multi-écrans (`v1.5.0`) :** Le jeu démarre toujours en **Space Plein écran natif sous l'encoche**. Utilisez **`⌘ + Entrée`** (ou le menu macOS **`Affichage`**) pour basculer entre Plein écran et Fenêtré, et **`⌘ + R`** en mode Fenêtré pour faire défiler les résolutions compatibles avec l'écran actif. En **multi-écrans**, déplacer une session 16:10 (MacBook) vers un écran externe 16:9 (TV/moniteur) conserve automatiquement des **bordures noires symétriques** afin de préserver les proportions exactes sans étirement — **astuce :** pour jouer en **16:9 natif plein cadre** sur un écran externe, définissez-le comme **Écran principal** dans *Réglages Système → Moniteurs* avant de lancer le jeu.  
 > **Limitation connue (macOS 27.0, multi-écrans mixtes Retina + externe 1x) :** passez en mode Fenêtré (`⌘ + Entrée`) avant de déplacer le jeu sur un autre écran plutôt que de glisser un Space Plein écran via Mission Control (contournement si l'écran externe reste noir : `killall Dock`).  
-> **Display, Resolution & Multi-Monitor (`v1.5.0-rc2`):** The game always launches into a **native under-notch Fullscreen Space**. Press **`⌘ + Return`** (or use the macOS **`Affichage`** menu) to toggle Fullscreen ↔ Windowed, and **`⌘ + R`** in Windowed mode to cycle display-compatible resolutions. On **multi-monitor** setups, moving a 16:10 MacBook session onto a 16:9 external display automatically preserves **symmetric black pillarboxes** so proportions never stretch — **tip:** to play in **native edge-to-edge 16:9** on an external display, set it as your **Main Display** in *System Settings → Displays* before launching the game.  
+> **Display, Resolution & Multi-Monitor (`v1.5.0`):** The game always launches into a **native under-notch Fullscreen Space**. Press **`⌘ + Return`** (or use the macOS **`Affichage`** menu) to toggle Fullscreen ↔ Windowed, and **`⌘ + R`** in Windowed mode to cycle display-compatible resolutions. On **multi-monitor** setups, moving a 16:10 MacBook session onto a 16:9 external display automatically preserves **symmetric black pillarboxes** so proportions never stretch — **tip:** to play in **native edge-to-edge 16:9** on an external display, set it as your **Main Display** in *System Settings → Displays* before launching the game.  
 > **Known limitation (macOS 27.0, mixed Retina + 1x external display):** switch to Windowed mode (`⌘ + Return`) before moving the game to another screen instead of dragging a Fullscreen Space in Mission Control (workaround if the external screen stays black: `killall Dock`).
 
 ---
@@ -83,13 +83,13 @@ En plus de `patch_sims2.command`, deux scripts compagnons sont inclus dans l'arc
 ## 🛟 Support & Dépannage rapide / Support & Quick Troubleshooting
 
 ### Outil intégré : `[2] Diagnostic & Support GitHub`
-Par défaut, la `v1.5.0-rc2` est **100 % silencieuse** : aucun fichier de log normal n'est écrit lors d'une partie *(télémétrie de diagnostic strictement opt-in via `SIMS2_DIAG_LOG=1` → `$TMPDIR/sims2_patch_diag_XXX.log`)*.
+Par défaut, la `v1.5.0` est **100 % silencieuse** : aucun fichier de log normal n'est écrit lors d'une partie *(télémétrie de diagnostic strictement opt-in via `SIMS2_DIAG_LOG=1` → `$TMPDIR/sims2_patch_diag_XXX.log`)*.
 * Si un plantage survient, un rapport cumulatif numéroté **`sims2_crash_001.log`**… *(jusqu'à 20 rapports conservés, lien `crash_report.log` vers le dernier + rapport `.ips` macOS natif préservé)* est automatiquement créé dans `~/Library/Logs/Sims2-Crash-Patch/`.
 * En cas de souci, lancez **`patch_sims2.command` → `[2] Diagnostic & Support GitHub`** :
   * Activez/désactivez le mode debug à la demande (`debug_boot.log`).
   * Générez `github_support_report.md` : **votre nom d'utilisateur macOS est anonymisé avec `~`**, les infos utiles (`crash_report.log` / `sims2_crash_XXX.log`, écran, `userProps.xml`) sont rassemblées, et le rapport est **copié automatiquement dans votre presse-papier** prêt à coller dans une [issue GitHub](https://github.com/Justinbdna/sims2-crash-patch/issues/new/choose).
 
-*By default, `v1.5.0-rc2` writes zero normal log files during gameplay (diagnostic logging is strictly opt-in via `SIMS2_DIAG_LOG=1`). Only a crash triggers a cumulative numbered `sims2_crash_XXX.log` (symlinked as `crash_report.log`, preserving native macOS `.ips` reports). Run `patch_sims2.command` → `[2] Diagnostic & Support GitHub` to toggle optional `debug_boot.log` or generate an anonymized (`~`) `github_support_report.md` copied straight to your clipboard for GitHub Issues.*
+*By default, `v1.5.0` writes zero normal log files during gameplay (diagnostic logging is strictly opt-in via `SIMS2_DIAG_LOG=1`). Only a crash triggers a cumulative numbered `sims2_crash_XXX.log` (symlinked as `crash_report.log`, preserving native macOS `.ips` reports). Run `patch_sims2.command` → `[2] Diagnostic & Support GitHub` to toggle optional `debug_boot.log` or generate an anonymized (`~`) `github_support_report.md` copied straight to your clipboard for GitHub Issues.*
 
 ### Cas fréquents / Common Cases
 * **Gatekeeper bloque le script :** double-cliquez sur `patch_sims2.command` → si macOS affiche *« bloqué pour protéger votre Mac »*, cliquez sur **Terminé**, ouvrez **Réglages Système → Confidentialité et sécurité**, descendez tout en bas et cliquez sur **Ouvrir quand même**.

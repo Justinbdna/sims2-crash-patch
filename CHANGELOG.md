@@ -4,6 +4,18 @@ All notable changes to **Sims 2 Crash Patch** (*The Sims 2: Super Collection* �
 
 ---
 
+## [1.5.0] - 2026-11-23
+
+### Stable Release Summary (FR / EN)
+- **Sortie stable `v1.5.0` (consolidation complète `v1.5.0-rc1` + `v1.5.0-rc2`) :**
+  - **FR :** Correctif ProMotion 120 Hz → 60 Hz, démarrage toujours en Space Plein écran natif sous l'encoche sans `SIGSEGV` ni alerte TCC, bascule à chaud Plein écran ↔ Fenêtré (`⌘ + Entrée`) et cycle des résolutions fenêtrées (`⌘ + R` + menu macOS `Affichage`), résolution interne unique dans *Taille de l'écran*, alignement souris 3D / warps / caméra Trackpad `Option` & `Control` en Plein écran comme en Fenêtré, support multi-écrans complet (anti-rebond Display 0, sortie Plein écran sur l'écran d'origine, ratio 16:10 / 16:9 préservé, TV/moniteur 16:9 natif en écran principal, rafraîchissements OpenGL/Spaces coalescés), signature ad-hoc interne → externe sans `--deep` et rapports de crash cumulatifs numérotés (`sims2_crash_XXX.log` + `.ips` natif).
+  - **EN:** ProMotion 120 Hz → 60 Hz fix, fast crash-free startup directly in an under-notch native Fullscreen Space (zero TCC prompts), hot-swap Fullscreen ↔ Windowed (`⌘ + Return`) and windowed resolution cycling (`⌘ + R` + macOS `Affichage` menu), single native in-game *Screen Size* entry, pixel-exact 3D clicks / cursor warps / `Option` & `Control` camera in both Fullscreen and Windowed modes, full multi-monitor support (Display-0 anti-bounce, exit-fullscreen origin screen preservation, aspect-fitted 16:10 / 16:9, native edge-to-edge 16:9 when external monitor is Main Display, coalesced OpenGL/Spaces refreshes), inside-out ad-hoc signing without `--deep`, and numbered crash reports (`sims2_crash_XXX.log` + native `.ips`).
+- **Nomenclature propre des archives ZIP & CI (`scripts/verify_and_package.py`, `.github/workflows/ci-and-release.yml`):**
+  - **FR :** Encapsulation systématique des fichiers de release dans un dossier racine nommé dynamiquement `sims2-crash-patch-<version>/` (et `sims2-crash-patch-windows-<version>/` pour Windows) afin d'éviter la troncature macOS Archive Utility en `sims2-crash-patch-v1` ; ajout de `-framework OpenGL` au workflow CI macOS et tests anti-régression dédiés.
+  - **EN:** Wrapped all release archive entries under a versioned top-level directory (`sims2-crash-patch-<version>/` and `sims2-crash-patch-windows-<version>/`) so macOS Archive Utility extracts cleanly instead of truncating to `sims2-crash-patch-v1`; added `-framework OpenGL` to the macOS CI workflow with dedicated anti-regression tests.
+
+---
+
 ## [1.5.0-rc2] - 2026-11-22
 
 ### Fixed & Improved (FR / EN)

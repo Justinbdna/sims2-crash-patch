@@ -1,7 +1,7 @@
 #!/bin/bash
 # ==============================================================================
 # The Sims 2: Super Collection — Official Binary Restore Utility
-# Version: 1.5.0-rc2
+# Version: 1.5.0
 # Verifies pristine fingerprints before atomically restoring Sims2XP_Exe.backup.
 # License: MIT — Free, non-profit community software preservation & bug-fix
 # utility for lawful owners. No copyrighted game binaries or DRM bypass.
@@ -9,7 +9,7 @@
 
 set -u
 
-SCRIPT_VERSION="1.5.0-rc2"
+SCRIPT_VERSION="1.5.0"
 
 APP_PATH="/Applications/The Sims 2.app"
 EXE_PATH="$APP_PATH/Contents/MacOS/Sims2XP_Exe"
