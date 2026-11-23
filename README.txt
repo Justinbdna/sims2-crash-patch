@@ -1,5 +1,5 @@
 ================================================================================
-  THE SIMS 2: SUPER COLLECTION (macOS) — QUICK START & SUPPORT MEMO (v1.4.1)
+  THE SIMS 2: SUPER COLLECTION (macOS) — QUICK START & SUPPORT MEMO (v1.5.0)
   Apple Silicon & Intel | Zero Xcode | MIT License (Free & Non-Profit)
 ================================================================================
 
@@ -17,20 +17,28 @@
         aucun '*', c'est normal !) puis Entrée.
       - Cliquez impérativement sur « Autoriser » si Terminal demande à contrôler
         Finder (pour copier vos sauvegardes sans rien écraser).
-      - Attendez « PATCH COMPLETE (v1.4.1) » puis lancez le jeu !
+      - Attendez « PATCH COMPLETE (v1.5.0) » puis lancez le jeu !
 
-2. CONTRÔLES TRACKPAD MACBOOK
+2. CONTRÔLES TRACKPAD & AFFICHAGE MACOS
    - Pincement 2 doigts                 : Zoom (+ / -)
    - Balayage horizontal / rotation 2 d.: Rotation caméra (, / ., AZERTY & QWERTY)
    - Control (^) + clic-glissé          : Orbite 3D libre & inclinaison
    - Option (⌥) + glisser               : Panoramique natif (déplacement carte)
+   - ⌘ + Entrée (ou menu Affichage)     : Plein écran natif <-> Mode Fenêtré
+   - ⌘ + R (en mode Fenêtré uniquement) : Cycle des résolutions fenêtrées
+   - Multi-écrans : déplacer une session 16:10 vers un écran 16:9 conserve des
+     bordures noires symétriques (zéro étirement). Astuce : définissez l'écran
+     externe comme Écran principal avant de lancer le jeu pour du 16:9 natif !
+   - Limitation connue (macOS 27.0, Retina + écran externe 1x) : passez en mode
+     Fenêtré (⌘ + Entrée) avant de déplacer le jeu d'un écran à l'autre plutôt
+     que via un Space Plein écran dans Mission Control (si écran noir : killall Dock).
 
-3. OUTILS INCLUS & NOTE RÉSOLUTION
+3. OUTILS INCLUS & NOTE AFFICHAGE
    - clean_sims2_cache.command :
      [1] Nettoyer les caches corrompus (Entrée, sans mot de passe).
      [2] Réinitialiser la résolution au lancement dans userProps.xml (crée
-         userProps.xml.backup). Note : pas de changement de résolution à chaud
-         en pleine partie dans la v1.4.1.
+         userProps.xml.backup). Le jeu démarre toujours en Space Plein écran
+         natif sous l'encoche (v1.5.0).
      [3] Vérifier vos Mods (.package / .zip oubliés) & limite maxfiles (10 240).
    - restore_sims2.command :
      Restaure le jeu d'origine (Sims2XP_Exe.backup + Graphics Rules.sgr.backup)
@@ -39,10 +47,11 @@
 
 4. SUPPORT & DÉPANNAGE RAPIDE
    - Option [2] de patch_sims2.command (Diagnostic & Support GitHub) :
-     En partie normale, zéro log n'est écrit. Un fichier crash_report.log est
-     créé uniquement en cas de crash. L'option [2] active le mode debug au
-     besoin et génère github_support_report.md anonymisé (chemins /Users/...
-     remplacés par ~), copié automatiquement dans votre presse-papier.
+     En partie normale, zéro log n'est écrit. En cas de crash, un rapport
+     numéroté sims2_crash_XXX.log (lien crash_report.log) est créé dans
+     ~/Library/Logs/Sims2-Crash-Patch/ (rapports .ips macOS préservés).
+     L'option [2] génère github_support_report.md anonymisé (~) dans votre
+     presse-papier.
    - Anciennes sauvegardes absentes ? Vérifiez le dossier :
      ~/Library/Application Support/Aspyr/The Sims 2 (Sandbox Backup ...)
      et fusionnez Neighborhoods/ et Downloads/ vers The Sims 2/ (jeu fermé).
@@ -65,19 +74,27 @@
         or '*' appear on screen — normal macOS security) then press Enter.
       - Click "Allow" ("Autoriser") if Terminal asks to control Finder so your
         saves are copied without overwriting anything.
-      - Wait for "PATCH COMPLETE (v1.4.1)" and launch the game!
+      - Wait for "PATCH COMPLETE (v1.5.0)" and launch the game!
 
-2. MACBOOK TRACKPAD CONTROLS
+2. MACBOOK TRACKPAD & DISPLAY CONTROLS
    - 2-finger pinch                     : Zoom in / out (+ / -)
    - 2-finger horizontal swipe / twist  : Camera rotation (, / ., AZERTY & QWERTY)
    - Control (^) + click & drag         : Free 3D orbit & pitch
    - Option (⌥) + drag                  : Native camera pan (hand-drag)
+   - ⌘ + Return (or Affichage menu)     : Toggle Native Fullscreen <-> Windowed
+   - ⌘ + R (Windowed mode only)         : Cycle display-compatible resolutions
+   - Multi-monitor: moving a 16:10 session onto a 16:9 external display keeps
+     symmetric black pillarboxes (zero stretch). Tip: set your external display
+     as Main Display before launching the game for native edge-to-edge 16:9!
+   - Known limitation (macOS 27.0, mixed Retina + 1x external display): switch
+     to Windowed mode (⌘ + Return) before moving the game across displays instead
+     of dragging a Fullscreen Space in Mission Control (if black screen: killall Dock).
 
-3. INCLUDED TOOLS & RESOLUTION NOTE
+3. INCLUDED TOOLS & DISPLAY NOTE
    - clean_sims2_cache.command :
      [1] Purge corrupted caches (Enter, no password).
      [2] Reset launch resolution in userProps.xml (keeps userProps.xml.backup).
-         Note: there is no in-game hot-swap resolution switching in v1.4.1.
+         In v1.5.0, the game always launches in native under-notch Fullscreen.
      [3] Check Mods/CC (.package / leftover .zip) & 10,240 open-file limit.
    - restore_sims2.command :
      Cleanly restores original binaries/configs and removes the trackpad dylib.
@@ -86,9 +103,10 @@
 
 4. SUPPORT & QUICK TROUBLESHOOTING
    - Run patch_sims2.command -> [2] Diagnostic & Support GitHub:
-     Normal sessions write zero logs; crash_report.log is only created if a
-     crash happens. Option [2] toggles optional debug mode and copies an
-     anonymized (~) github_support_report.md straight to your clipboard.
+     Normal sessions write zero logs; crashes automatically write numbered
+     sims2_crash_XXX.log reports (symlinked as crash_report.log, preserving
+     native macOS .ips reports). Option [2] copies an anonymized (~)
+     github_support_report.md straight to your clipboard.
    - Missing saves? Check ~/Library/Application Support/Aspyr/ for a
      "The Sims 2 (Sandbox Backup ...)" folder and merge Neighborhoods/Downloads
      while the game is closed.

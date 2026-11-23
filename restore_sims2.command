@@ -1,13 +1,15 @@
 #!/bin/bash
 # ==============================================================================
 # The Sims 2: Super Collection — Official Binary Restore Utility
-# Version: 1.4.1
+# Version: 1.5.0
 # Verifies pristine fingerprints before atomically restoring Sims2XP_Exe.backup.
 # License: MIT — Free, non-profit community software preservation & bug-fix
 # utility for lawful owners. No copyrighted game binaries or DRM bypass.
 # ==============================================================================
 
 set -u
+
+SCRIPT_VERSION="1.5.0"
 
 APP_PATH="/Applications/The Sims 2.app"
 EXE_PATH="$APP_PATH/Contents/MacOS/Sims2XP_Exe"
@@ -35,7 +37,7 @@ LOG_FILE=""
 LOG_FINALIZED=0
 
 init_diagnostic_log() {
-    local label="${1:-restore_sims2.command v1.4.1}"
+    local label="${1:-restore_sims2.command v${SCRIPT_VERSION}}"
     [ -z "${REAL_HOME:-}" ] && return 0
     local log_dir="${SIMS2_LOG_DIR:-$REAL_HOME/Library/Logs/Sims2-Crash-Patch}"
     run_as_real_user mkdir -p "$log_dir" >/dev/null 2>&1 || return 0
@@ -312,6 +314,9 @@ my $repl1 = pack("H*", "41bf3c000000909090904889df");
 my $orig2 = pack("H*", "41bf3c000000440f45f8c70300000000");
 my $repl2 = pack("H*", "41bf3c00000090909090c70300000000");
 my $repl_asl     = pack("H*", "39f190904139f89090");
+my $repl_fb_1280 = pack("H*", "4989c19090909090c745b000040000");
+my $repl_fb_1024 = pack("H*", "4c8d4dd090909090904c89e8");
+my $repl_fb_1344 = pack("H*", "4c8d4dd09090909090488b9d48ffffff");
 my $repl_aspect  = pack("H*", "3b45c077063b4dc4764190");
 my $repl_val_p3  = pack("H*", "3d000a0000771581f940060000770deb4b9090909090909090909090");
 my $repl_stretch = pack("H*", "e86277fbff84c0eb108b43183b45f0");
@@ -321,6 +326,9 @@ if (count_occurrences($buf, $orig1) == 1 &&
     count_occurrences($buf, $repl1) == 0 &&
     count_occurrences($buf, $repl2) == 0 &&
     index($buf, $repl_asl) == -1 &&
+    index($buf, $repl_fb_1280) == -1 &&
+    index($buf, $repl_fb_1024) == -1 &&
+    index($buf, $repl_fb_1344) == -1 &&
     index($buf, $repl_aspect) == -1 &&
     index($buf, $repl_val_p3) == -1 &&
     index($buf, $repl_stretch) == -1 &&
@@ -376,7 +384,7 @@ restore_auxiliary_files() {
 main() {
     echo -e "${CYAN}${BOLD}"
     echo "========================================================================"
-    echo "  The Sims 2 — Utilitaire de Restauration / Restore Utility (v1.4.1)    "
+    echo "  The Sims 2 — Utilitaire de Restauration / Restore Utility (v${SCRIPT_VERSION})"
     echo "========================================================================"
     echo -e "${NC}"
 
@@ -384,7 +392,7 @@ main() {
         pause_exit 1
     fi
 
-    init_diagnostic_log "restore_sims2.command v1.4.1"
+    init_diagnostic_log "restore_sims2.command v${SCRIPT_VERSION}"
 
     # 1. Verify the game is not currently running
     if pgrep -x "Sims2XP_Exe" >/dev/null 2>&1 || pgrep -x "AppBundleExe" >/dev/null 2>&1; then
@@ -505,7 +513,7 @@ main() {
 
     echo ""
     echo -e "${GREEN}${BOLD}========================================================================${NC}"
-    echo -e "${GREEN}${BOLD}  RESTAURATION TERMINÉE / RESTORATION COMPLETE (v1.4.1)                 ${NC}"
+    echo -e "${GREEN}${BOLD}  RESTAURATION TERMINÉE / RESTORATION COMPLETE (v${SCRIPT_VERSION})            ${NC}"
     echo -e "${GREEN}${BOLD}========================================================================${NC}"
     echo ""
     echo "Le binaire d'origine (vérifié intègre) a été restauré. Note : pour rétablir"

@@ -172,7 +172,8 @@ def package_releases(version: str, out_dir: Path) -> tuple[Path, Path]:
     safe_ver = re.sub(r'[\\/:*?"<>|\s]+', "-", version).strip("-") or "dev"
     clean_ver = f"v{safe_ver}" if safe_ver[0].isdigit() else safe_ver
 
-    mac_zip = out_dir / f"sims2-crash-patch-{clean_ver}.zip"
+    mac_root_dir = f"sims2-crash-patch-{clean_ver}"
+    mac_zip = out_dir / f"{mac_root_dir}.zip"
     with zipfile.ZipFile(mac_zip, "w", compression=zipfile.ZIP_DEFLATED) as zf:
         for rel in MAC_RELEASE_FILES:
             src = ROOT_DIR / rel
@@ -180,15 +181,16 @@ def package_releases(version: str, out_dir: Path) -> tuple[Path, Path]:
             if rel.suffix not in (".dylib", ".so", ".dll", ".exe"):
                 data = data.replace(b"\r\n", b"\n")
             mode = 0o755 if rel.suffix in (".command", ".sh", ".dylib") else 0o644
-            _zip_write_bytes(zf, rel.as_posix(), data, mode)
+            _zip_write_bytes(zf, f"{mac_root_dir}/{rel.as_posix()}", data, mode)
 
-    win_zip = out_dir / f"sims2-crash-patch-windows-{clean_ver}.zip"
+    win_root_dir = f"sims2-crash-patch-windows-{clean_ver}"
+    win_zip = out_dir / f"{win_root_dir}.zip"
     win_root = ROOT_DIR / WINDOWS_RELEASE_DIR
     with zipfile.ZipFile(win_zip, "w", compression=zipfile.ZIP_DEFLATED) as zf:
         for item in sorted(win_root.rglob("*")):
             if not item.is_file() or "__pycache__" in item.parts or item.suffix == ".pyc":
                 continue
-            rel_arc = item.relative_to(ROOT_DIR).as_posix()
+            rel_arc = f"{win_root_dir}/{item.relative_to(win_root).as_posix()}"
             raw = item.read_bytes()
             if item.suffix in (".bat", ".cmd", ".ps1"):
                 raw = raw.replace(b"\r\n", b"\n").replace(b"\n", b"\r\n")
@@ -202,7 +204,7 @@ def package_releases(version: str, out_dir: Path) -> tuple[Path, Path]:
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Verify repo & build release archives")
     parser.add_argument("--package", action="store_true", help="Build Mac & Windows release ZIPs in dist/")
-    parser.add_argument("--version", default="v1.4.1", help="Release version tag (default: v1.4.1)")
+    parser.add_argument("--version", default="v1.5.0", help="Release version tag (default: v1.5.0)")
     parser.add_argument("--out-dir", type=Path, default=ROOT_DIR / "dist")
     args = parser.parse_args(argv)
 

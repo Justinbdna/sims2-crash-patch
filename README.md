@@ -1,6 +1,6 @@
-# 💎 Sims 2 Crash Patch — macOS Edition (`v1.4.1`)
+# 💎 Sims 2 Crash Patch — macOS Edition (`v1.5.0`)
 
-[![Release v1.4.1](https://img.shields.io/badge/Release-v1.4.1-blue.svg)](https://github.com/Justinbdna/sims2-crash-patch/releases)
+[![Release v1.5.0](https://img.shields.io/badge/Release-v1.5.0-blue.svg)](https://github.com/Justinbdna/sims2-crash-patch/releases)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![macOS Apple Silicon & Intel](https://img.shields.io/badge/macOS-Apple%20Silicon%20%26%20Intel-black.svg?logo=apple)](https://apple.com)
 [![ProMotion 120Hz Fix](https://img.shields.io/badge/ProMotion-120Hz%20Fix-brightgreen.svg)](https://github.com/Justinbdna/sims2-crash-patch)
@@ -20,7 +20,7 @@
 | Problème / Issue | 🇫🇷 En français | 🇬🇧 In English |
 | :--- | :--- | :--- |
 | **1. Crash 120 Hz ProMotion** | Supprime le plantage immédiat au lancement : votre Mac reste en **120 Hz**, le moteur du jeu est verrouillé à **60 Hz** stables. | Fixes the instant startup crash on 120 Hz displays: your Mac stays at **120 Hz** while the game engine runs cleanly at **60 Hz**. |
-| **2. Bandes noires & Encoche** | Détecte la résolution native de votre MacBook ou écran externe et cale le plein écran proprement sous l'encoche (jusqu'à `2560×1600`, profil `$High`). | Automatically detects your MacBook or external display resolution and fits fullscreen neatly below the notch (up to `2560×1600`, `$High` preset). |
+| **2. Bandes noires, Encoche & Fenêtré** | Démarre toujours en vrai **Space Plein écran natif sous l'encoche**, avec bascule à chaud vers le **mode Fenêtré multi-résolutions** (`⌘ + Entrée`, `⌘ + R`, menu `Affichage`) et clics 3D alignés au pixel près (multi-écrans & souris externe inclus). | Always boots in a native **under-notch macOS Fullscreen Space**, with hot-swap **multi-resolution Windowed mode** (`⌘ + Return`, `⌘ + R`, `Affichage` menu) and pixel-exact 3D clicks (multi-display & external mouse supported). |
 | **3. `Command+Tab` cassé** | Corrige le rebond vers le Bureau et les blocages de curseur quand vous basculez vers une autre app macOS. | Stops Desktop bounce-backs and cursor-lock issues when switching to another macOS app and back. |
 | **4. Caméra Trackpad** | Ajoute les gestes MacBook natifs (zoom, rotation, orbite 3D et panoramique) pour jouer confortablement sans souris externe. | Adds native MacBook gestures (pinch zoom, 2-finger rotate, 3D orbit, and pan) so you can play comfortably without an external mouse. |
 
@@ -33,20 +33,20 @@
 > **Zero external dependencies:** uses only built-in macOS system tools (no Xcode or Command Line Tools required).
 
 ### 🇫🇷 Français
-1. **Téléchargez et décompressez** [`sims2-crash-patch-v1.4.1.zip`](https://github.com/Justinbdna/sims2-crash-patch/releases) *(fermez d'abord Les Sims 2 avec `Cmd + Q`)*.
+1. **Téléchargez et décompressez** [`sims2-crash-patch-v1.5.0.zip`](https://github.com/Justinbdna/sims2-crash-patch/releases) *(fermez d'abord Les Sims 2 avec `Cmd + Q`)*.
 2. **Débloquez Gatekeeper :** double-cliquez sur `patch_sims2.command` → si macOS affiche *« bloqué pour protéger votre Mac »*, cliquez sur **Terminé**, ouvrez **Réglages Système → Confidentialité et sécurité**, descendez tout en bas et cliquez sur **Ouvrir quand même**.
 3. **Appuyez sur `Entrée` (`[1]`)** dans le Terminal :
    - Tapez votre mot de passe session Mac à l'aveugle (`Password:`, **aucun caractère `*` ne s'affiche**, c'est la sécurité normale de macOS) puis faites `Entrée`.
    - Quand macOS affiche *« Terminal souhaite contrôler Finder »*, cliquez sur **Autoriser** pour copier vos sauvegardes sans rien écraser.
-   - Attendez le message `PATCH COMPLETE (v1.4.1)` puis lancez le jeu normalement.
+   - Attendez le message `PATCH COMPLETE (v1.5.0)` puis lancez le jeu normalement.
 
 ### 🇬🇧 English
-1. **Download and unzip** [`sims2-crash-patch-v1.4.1.zip`](https://github.com/Justinbdna/sims2-crash-patch/releases) *(quit The Sims 2 first with `Cmd + Q`)*.
+1. **Download and unzip** [`sims2-crash-patch-v1.5.0.zip`](https://github.com/Justinbdna/sims2-crash-patch/releases) *(quit The Sims 2 first with `Cmd + Q`)*.
 2. **Bypass Gatekeeper:** double-click `patch_sims2.command` → if macOS shows *"blocked to protect your Mac"*, click **Done**, open **System Settings → Privacy & Security**, scroll down and click **Open Anyway**.
 3. **Press `Enter` (`[1]`)** in Terminal:
    - Type your Mac login password blindly at `Password:` (**nothing prints on screen**, that is standard macOS security) and press `Enter`.
    - When macOS asks *"Terminal wants access to control Finder"*, click **Allow** so your App Store saves are safely copied without overwriting anything.
-   - Wait for `PATCH COMPLETE (v1.4.1)` and launch the game as usual.
+   - Wait for `PATCH COMPLETE (v1.5.0)` and launch the game as usual.
 
 ---
 
@@ -56,8 +56,10 @@
 | :--- | :--- | :--- |
 | **Pincement à 2 doigts** / *2-finger pinch* | Zoom avant / arrière (`+` / `-`) | Zoom in / out (`+` / `-`) |
 | **Balayage horizontal à 2 doigts** *(ou rotation 2 doigts)* / *2-finger horizontal swipe (or twist)* | Rotation fluide de la caméra (`,` / `.`, compatible claviers **AZERTY & QWERTY**) | Smooth camera rotation (`,` / `.`, **AZERTY & QWERTY** layouts supported) |
-| **`Control (^)` + clic-glissé** / *`Control (^)` + click & drag* | Orbite 3D libre & inclinaison verticale (émulation clic molette) | Free 3D camera orbit & pitch (middle-mouse drag emulation) |
-| **`Option (⌥)` + glisser** / *`Option (⌥)` + drag* | Panoramique natif (déplacement sur la carte, curseur 4 flèches) | Native camera pan (hand-drag across the map) |
+| **`Control (^)` + clic-glissé** / *`Control (^)` + click & drag* | Orbite 3D libre & inclinaison verticale (émulation clic molette — Plein écran & Fenêtré) | Free 3D camera orbit & pitch (middle-mouse drag emulation — Fullscreen & Windowed) |
+| **`Option (⌥)` + glisser** / *`Option (⌥)` + drag* | Panoramique natif (déplacement sur la carte, curseur 4 flèches — Plein écran & Fenêtré) | Native camera pan (hand-drag across the map — Fullscreen & Windowed) |
+| **`⌘ + Entrée`** / *`⌘ + Return`* | Basculer à chaud **Plein écran natif ↔ Fenêtré** (également dans le menu **`Affichage`**) | Hot-swap **Native Fullscreen ↔ Windowed** (also in the macOS **`Affichage`** menu) |
+| **`⌘ + R`** | En **mode Fenêtré uniquement**, faire défiler les résolutions compatibles avec votre écran | In **Windowed mode only**, cycle display-compatible windowed resolutions |
 
 ---
 
@@ -71,21 +73,23 @@ En plus de `patch_sims2.command`, deux scripts compagnons sont inclus dans l'arc
 | **`restore_sims2.command`** | Désinstallation complète et propre : restaure l'exécutable original vérifié (`Sims2XP_Exe.backup`) et `Graphics Rules.sgr.backup`, retire le module trackpad, re-signe l'app et nettoie le `LaunchDaemon` si le patch l'avait ajouté. *(Pour retrouver aussi la signature Mac App Store officielle, supprimez puis retéléchargez l'app depuis l'App Store ; vos sauvegardes restent intactes.)* | Clean full uninstall: restores the verified original binary (`Sims2XP_Exe.backup`) and `Graphics Rules.sgr.backup`, removes the trackpad module, re-signs the app, and removes the managed `LaunchDaemon` if installed by this patch. *(To also restore the Apple App Store signature/Sandbox, delete and re-download the app from the Mac App Store; saves are kept.)* |
 
 > [!NOTE]
-> **Résolution en jeu (`v1.4.1`) :** La résolution et le plein écran sous l'encoche sont configurés **au lancement du jeu** (via `userProps.xml` / `Graphics Rules.sgr` et l'option `[2]` de `clean_sims2_cache.command`). **Il n'y a pas de changement de résolution à chaud en pleine partie dans la `v1.4.1`.**  
-> **In-game resolution (`v1.4.1`):** Resolution and under-notch fullscreen are applied **at game launch** (via `userProps.xml` / `Graphics Rules.sgr` and `clean_sims2_cache.command` option `[2]`). **There is no in-game hot-swap resolution switching in `v1.4.1`.**
+> **Affichage, Résolution & Multi-écrans (`v1.5.0`) :** Le jeu démarre toujours en **Space Plein écran natif sous l'encoche**. Utilisez **`⌘ + Entrée`** (ou le menu macOS **`Affichage`**) pour basculer entre Plein écran et Fenêtré, et **`⌘ + R`** en mode Fenêtré pour faire défiler les résolutions compatibles avec l'écran actif. En **multi-écrans**, déplacer une session 16:10 (MacBook) vers un écran externe 16:9 (TV/moniteur) conserve automatiquement des **bordures noires symétriques** afin de préserver les proportions exactes sans étirement — **astuce :** pour jouer en **16:9 natif plein cadre** sur un écran externe, définissez-le comme **Écran principal** dans *Réglages Système → Moniteurs* avant de lancer le jeu.  
+> **Limitation connue (macOS 27.0, multi-écrans mixtes Retina + externe 1x) :** passez en mode Fenêtré (`⌘ + Entrée`) avant de déplacer le jeu sur un autre écran plutôt que de glisser un Space Plein écran via Mission Control (contournement si l'écran externe reste noir : `killall Dock`).  
+> **Display, Resolution & Multi-Monitor (`v1.5.0`):** The game always launches into a **native under-notch Fullscreen Space**. Press **`⌘ + Return`** (or use the macOS **`Affichage`** menu) to toggle Fullscreen ↔ Windowed, and **`⌘ + R`** in Windowed mode to cycle display-compatible resolutions. On **multi-monitor** setups, moving a 16:10 MacBook session onto a 16:9 external display automatically preserves **symmetric black pillarboxes** so proportions never stretch — **tip:** to play in **native edge-to-edge 16:9** on an external display, set it as your **Main Display** in *System Settings → Displays* before launching the game.  
+> **Known limitation (macOS 27.0, mixed Retina + 1x external display):** switch to Windowed mode (`⌘ + Return`) before moving the game to another screen instead of dragging a Fullscreen Space in Mission Control (workaround if the external screen stays black: `killall Dock`).
 
 ---
 
 ## 🛟 Support & Dépannage rapide / Support & Quick Troubleshooting
 
 ### Outil intégré : `[2] Diagnostic & Support GitHub`
-Par défaut, la `v1.4.1` est **100 % silencieuse** : aucun fichier de log n'est écrit lors d'une partie normale.
-* Si un plantage survient, un fichier `crash_report.log` est automatiquement créé dans `~/Library/Logs/Sims2-Crash-Patch/`.
+Par défaut, la `v1.5.0` est **100 % silencieuse** : aucun fichier de log normal n'est écrit lors d'une partie *(télémétrie de diagnostic strictement opt-in via `SIMS2_DIAG_LOG=1` → `$TMPDIR/sims2_patch_diag_XXX.log`)*.
+* Si un plantage survient, un rapport cumulatif numéroté **`sims2_crash_001.log`**… *(jusqu'à 20 rapports conservés, lien `crash_report.log` vers le dernier + rapport `.ips` macOS natif préservé)* est automatiquement créé dans `~/Library/Logs/Sims2-Crash-Patch/`.
 * En cas de souci, lancez **`patch_sims2.command` → `[2] Diagnostic & Support GitHub`** :
   * Activez/désactivez le mode debug à la demande (`debug_boot.log`).
-  * Générez `github_support_report.md` : **votre nom d'utilisateur macOS est anonymisé avec `~`**, les infos utiles (`crash_report.log`, écran, `userProps.xml`) sont rassemblées, et le rapport est **copié automatiquement dans votre presse-papier** prêt à coller dans une [issue GitHub](https://github.com/Justinbdna/sims2-crash-patch/issues/new/choose).
+  * Générez `github_support_report.md` : **votre nom d'utilisateur macOS est anonymisé avec `~`**, les infos utiles (`crash_report.log` / `sims2_crash_XXX.log`, écran, `userProps.xml`) sont rassemblées, et le rapport est **copié automatiquement dans votre presse-papier** prêt à coller dans une [issue GitHub](https://github.com/Justinbdna/sims2-crash-patch/issues/new/choose).
 
-*By default, `v1.4.1` writes zero log files during normal gameplay. Only a crash triggers `crash_report.log`. Run `patch_sims2.command` → `[2] Diagnostic & Support GitHub` to toggle optional `debug_boot.log` or generate an anonymized (`~`) `github_support_report.md` copied straight to your clipboard for GitHub Issues.*
+*By default, `v1.5.0` writes zero normal log files during gameplay (diagnostic logging is strictly opt-in via `SIMS2_DIAG_LOG=1`). Only a crash triggers a cumulative numbered `sims2_crash_XXX.log` (symlinked as `crash_report.log`, preserving native macOS `.ips` reports). Run `patch_sims2.command` → `[2] Diagnostic & Support GitHub` to toggle optional `debug_boot.log` or generate an anonymized (`~`) `github_support_report.md` copied straight to your clipboard for GitHub Issues.*
 
 ### Cas fréquents / Common Cases
 * **Gatekeeper bloque le script :** double-cliquez sur `patch_sims2.command` → si macOS affiche *« bloqué pour protéger votre Mac »*, cliquez sur **Terminé**, ouvrez **Réglages Système → Confidentialité et sécurité**, descendez tout en bas et cliquez sur **Ouvrir quand même**.
@@ -131,6 +135,7 @@ Par défaut, la `v1.4.1` est **100 % silencieuse** : aucun fichier de log n'est 
 Toutes les modifications vérifient d'abord les empreintes d'origine et créent atomiquement `Sims2XP_Exe.backup` avant toute écriture :
 * **`0xfe6dc` (`FUN_1000fe510`) :** Neutralise `_CGDisplayModeGetRefreshRate` en forçant `60` (`0x3c`) dans `R15D` (`f20f1045d0f2440f2cf84889df` → `41bf3c000000909090904889df`).
 * **`0xfe741` (`FUN_1000fe510`) :** Verrouille la branche secondaire `_CVDisplayLink` via `NOP` sur `cmovnel %eax, %r15d` (`41bf3c000000440f45f8c70300000000` → `41bf3c00000090909090c70300000000`).
+* **`0x5e517` / `0x5e54c` / `0x5e591` :** Neutralise les 3 résolutions de secours synthétiques codées en dur par Aspyr (`1280×720`, `1024×768`, `1344×756`) dans le constructeur ASL afin que le menu interne *Taille de l'écran* n'affiche que la résolution native utile active du Mac (sans perdre ces modes s'ils correspondent à la résolution réelle de l'écran).
 * **`0x5e610` :** Lève le filtre de modes ASL (`39f17fd04139f87fcb` → `39f190904139f89090`) afin que toutes les résolutions calibrées `≤ 2560×1600` restent sélectionnables.
 * **`0x1303243` :** Remplace le validateur plein écran par un plafond propre `width ≤ 2560 && height ≤ 1600`.
 * **`0xa7619` :** Active le remplissage plein écran bord à bord sous Space sans bandes noires latérales ni décalage FBO (`e86277fbff84c074108b43183b45f0` → `e86277fbff84c0eb108b43183b45f0`).
@@ -140,11 +145,11 @@ Compilé en `x86_64` et injecté dans `Sims2XP_Exe` via `LC_LOAD_WEAK_DYLIB` (`@
 * **`hook_CGDisplayCopyAllDisplayModes` :** Intercepte `_CGDisplayCopyAllDisplayModes` via `__DATA,__la_symbol_ptr` pour filtrer et exposer uniquement de vrais modes matériels macOS à 60 Hz (aucun mode synthétique).
 * **`NSScreen.visibleFrame` :** Détecte dynamiquement la zone utilisable sous l'encoche au runtime (`clamp_fullscreen_window_to_visible_frame`) pour les MacBook 13"/14"/16" et écrans externes.
 * **Trackpad & `Command+Tab` :** `SDL_VIDEO_MAC_FULLSCREEN_SPACES=1`, `SDL_VIDEO_MINIMIZE_ON_FOCUS_LOSS=0`, neutralisation des fenêtres `SDLWindow` orphelines, pincement non inversé, rotation Carbon `UCKeyTranslate` (AZERTY/QWERTY), et émulation `SDL_BUTTON_MIDDLE` sur `Control (^)` + clic-glissé tout en laissant `Option (⌥)` natif intact.
-* **Logs & Crash handler :** Zéro écriture disque en session normale ; gestionnaire async-signal-safe (`SIGSEGV`, `SIGABRT`, `SIGBUS`, `SIGILL`, `SIGFPE`, `std::set_terminate`) écrivant `crash_report.log` uniquement en cas d'incident.
+* **Logs & Crash reporter :** Zéro écriture disque en session normale (télémétrie opt-in via `SIMS2_DIAG_LOG=1`) ; gestionnaire async-signal-safe (`SIGSEGV`, `SIGABRT`, `SIGBUS`, `SIGILL`, `SIGFPE`, `std::set_terminate`, `NSException`) sur pile alternative (`sigaltstack`) avec symbolisation `dladdr`, fichiers cumulatifs `sims2_crash_001.log`… (max 20, lien `crash_report.log`) et préservation des rapports `.ips` macOS natifs.
 
 ### 3. Migration Sandbox, `Graphics Rules.sgr` & Signature `codesign --strict`
 * **Migration Sandbox sans écrasement :** La re-signature locale retire les entitlements App Store Sandbox ; `patch_sims2.command` copie via Automation Finder les sauvegardes de `~/Library/Containers/com.aspyr.sims2.appstore/Data/Library/Application Support/Aspyr/The Sims 2/` vers `~/Library/Application Support/Aspyr/The Sims 2/` (ou vers `The Sims 2 (Sandbox Backup YYYY-MM-DD)` si un dossier actif existe déjà).
 * **`Graphics Rules.sgr` :** Sauvegarde `Graphics Rules.sgr.backup`, fixe `maxResWidth 2560` / `maxResHeight 1600`, configure `$High` sur la résolution native détectée et passe `textureMemory` à `1024` Mo.
-* **Intégrité macOS :** Nettoyage des attributs AppleDouble/ResourceFork superflus, signature ad-hoc `codesign --force --deep --sign -` et validation stricte `codesign --verify --deep --strict`.
+* **Intégrité macOS :** Nettoyage `xattr -cr` sur la dylib et des attributs AppleDouble/ResourceFork superflus, signature ad-hoc interne → externe **sans `--deep`** (`libsims2_trackpad.dylib`, `Sims2XP_Exe`, puis `The Sims 2.app` via `codesign --force --sign -`), et validation stricte `codesign --verify --deep --strict`.
 
 </details>

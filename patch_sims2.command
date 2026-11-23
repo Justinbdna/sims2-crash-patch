@@ -1,7 +1,7 @@
 #!/bin/bash
 # ==============================================================================
 # The Sims 2: Super Collection — ProMotion 120Hz Patch, Save Migration & Fixes
-# Version: 1.4.1 (Option A — Non-Sandbox Architecture)
+# Version: 1.5.0 (Option A — Non-Sandbox Architecture)
 # Target:  /Applications/The Sims 2.app/Contents/MacOS/Sims2XP_Exe
 # Zero Xcode / Python dependency: native /usr/bin/perl, codesign & osascript.
 # License: MIT — Free, non-profit community software preservation & bug-fix
@@ -10,7 +10,7 @@
 
 set -u
 
-PATCH_VERSION="1.4.1"
+PATCH_VERSION="1.5.0"
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
@@ -52,7 +52,7 @@ LOG_FILE=""
 LOG_FINALIZED=0
 
 init_diagnostic_log() {
-    local label="${1:-patch_sims2.command v1.4.1}"
+    local label="${1:-patch_sims2.command v${PATCH_VERSION}}"
     [ -z "${REAL_HOME:-}" ] && return 0
     local log_dir="${SIMS2_LOG_DIR:-$REAL_HOME/Library/Logs/Sims2-Crash-Patch}"
     run_as_real_user mkdir -p "$log_dir" >/dev/null 2>&1 || return 0
@@ -285,12 +285,41 @@ print_container_access_help() {
     echo "    -> (Ou activez Accès complet au disque pour Terminal dans Réglages Système -> Confidentialité et sécurité.)"
 }
 
+cleanup_obsolete_experimental_prefs() {
+    local domain="${1:-com.aspyr.sims2.appstore}"
+    local key
+    for key in \
+        S2PatchFullscreenUpscaling \
+        S2PatchWindowedMode \
+        S2PatchTargetWidth \
+        S2PatchTargetHeight \
+        S2PatchPrefsConfigured; do
+        run_as_real_user /usr/bin/defaults delete "$domain" "$key" >/dev/null 2>&1 || true
+    done
+    return 0
+}
+
 sign_and_verify_app() {
     local target_app="${1:-$APP_PATH}"
-    local cs_out cs_rc verify_out verify_rc
+    local target_dylib="$target_app/Contents/MacOS/libsims2_trackpad.dylib"
+    local target_bin="$target_app/Contents/MacOS/Sims2XP_Exe"
+    local cs_out="" cs_rc=0 verify_out verify_rc
 
-    cs_out="$(run_privileged "$target_app" /usr/bin/codesign --force --deep --sign - "$target_app" 2>&1)"
-    cs_rc=$?
+    if [ -f "$target_dylib" ] && [ ! -L "$target_dylib" ]; then
+        run_privileged "$target_dylib" /usr/bin/xattr -cr "$target_dylib" >/dev/null 2>&1 || true
+        cs_out="$(run_privileged "$target_dylib" /usr/bin/codesign --force --sign - "$target_dylib" 2>&1)"
+        cs_rc=$?
+    fi
+
+    if [ "$cs_rc" -eq 0 ] && [ -f "$target_bin" ] && [ ! -L "$target_bin" ]; then
+        cs_out="$(run_privileged "$target_bin" /usr/bin/codesign --force --sign - "$target_bin" 2>&1)"
+        cs_rc=$?
+    fi
+
+    if [ "$cs_rc" -eq 0 ]; then
+        cs_out="$(run_privileged "$target_app" /usr/bin/codesign --force --sign - "$target_app" 2>&1)"
+        cs_rc=$?
+    fi
 
     if [ "$cs_rc" -ne 0 ] && printf '%s\n' "$cs_out" | grep -qiE '(detritus|Finder information|resource fork|AppleDouble)'; then
         echo -e "${YELLOW}[!] Détection d'attributs Finder parasites (detritus) — nettoyage sécurisé en cours...${NC}"
@@ -298,8 +327,19 @@ sign_and_verify_app() {
         run_privileged "$target_app" /usr/bin/xattr -dr com.apple.ResourceFork "$target_app" >/dev/null 2>&1 || true
         run_privileged "$target_app" /usr/bin/xattr -dr com.apple.quarantine "$target_app" >/dev/null 2>&1 || true
         run_privileged "$target_app" /usr/sbin/dot_clean -m "$target_app" >/dev/null 2>&1 || true
-        cs_out="$(run_privileged "$target_app" /usr/bin/codesign --force --deep --sign - "$target_app" 2>&1)"
-        cs_rc=$?
+        cs_rc=0
+        if [ -f "$target_dylib" ] && [ ! -L "$target_dylib" ]; then
+            cs_out="$(run_privileged "$target_dylib" /usr/bin/codesign --force --sign - "$target_dylib" 2>&1)"
+            cs_rc=$?
+        fi
+        if [ "$cs_rc" -eq 0 ] && [ -f "$target_bin" ] && [ ! -L "$target_bin" ]; then
+            cs_out="$(run_privileged "$target_bin" /usr/bin/codesign --force --sign - "$target_bin" 2>&1)"
+            cs_rc=$?
+        fi
+        if [ "$cs_rc" -eq 0 ]; then
+            cs_out="$(run_privileged "$target_app" /usr/bin/codesign --force --sign - "$target_app" 2>&1)"
+            cs_rc=$?
+        fi
     fi
 
     if [ "$cs_rc" -ne 0 ]; then
@@ -1306,6 +1346,18 @@ sub write_atomic {
     $active_tmp = undef;
 }
 
+# Remove Aspyr's 3 hardcoded synthetic fallback resolutions (1280x720 @ 0x5e517,
+# 1024x768 @ 0x5e54c, 1344x756 @ 0x5e591) inside ASL mode builder 0x10005e400 so
+# the in-game Screen Size dropdown shows ONLY the Mac's single usable native mode
+# exposed by hook_CGDisplayCopyAllDisplayModes (real 1280x720/1024x768 displays
+# remain supported via the SDL_GetDisplayMode loop right above 0x5e4d9).
+my $orig_fb_1280 = pack("H*", "4989c1e8740c0000c745b000040000");
+my $repl_fb_1280 = pack("H*", "4989c19090909090c745b000040000");
+my $orig_fb_1024 = pack("H*", "4c8d4dd0e83f0c00004c89e8");
+my $repl_fb_1024 = pack("H*", "4c8d4dd090909090904c89e8");
+my $orig_fb_1344 = pack("H*", "4c8d4dd0e8fa0b0000488b9d48ffffff");
+my $repl_fb_1344 = pack("H*", "4c8d4dd09090909090488b9d48ffffff");
+
 # Lift ASL resolution filter (0x10005e610..0x10005e618) so all calibrated modes <= 2560x1600
 # remain selectable regardless of current logical desktop size.
 my $orig_asl = pack("H*", "39f17fd04139f87fcb");
@@ -1327,6 +1379,9 @@ my $data = read_raw($exe_path);
 my $changed = 0;
 
 my @opt_patches = (
+    [ "ASL Remove Synthetic 1280x720 (0x5e517)",       [ $orig_fb_1280 ],              $repl_fb_1280 ],
+    [ "ASL Remove Synthetic 1024x768 (0x5e54c)",       [ $orig_fb_1024 ],              $repl_fb_1024 ],
+    [ "ASL Remove Synthetic 1344x756 (0x5e591)",       [ $orig_fb_1344 ],              $repl_fb_1344 ],
     [ "Phase 3 ASL Mode Filter Unlock (0x5e610)",       [ $orig_asl ],                  $repl_asl ],
     [ "Phase 3 Fullscreen Catalog Cap (0x1303243)",    [ $orig_val_p0, $orig_val_p2 ], $repl_val_p3 ],
     [ "Option A Fullscreen Fill (0xa7619)",            [ $orig_stretch ],              $repl_stretch ],
@@ -1606,6 +1661,9 @@ close($fh);
 my %checks = (
     patch1 => [ pack("H*", "41bf3c000000909090904889df"), pack("H*", "f20f1045d0f2440f2cf84889df") ],
     patch2 => [ pack("H*", "41bf3c00000090909090c70300000000"), pack("H*", "41bf3c000000440f45f8c70300000000") ],
+    fb1280 => [ pack("H*", "4989c19090909090c745b000040000"), pack("H*", "4989c1e8740c0000c745b000040000") ],
+    fb1024 => [ pack("H*", "4c8d4dd090909090904c89e8"), pack("H*", "4c8d4dd0e83f0c00004c89e8") ],
+    fb1344 => [ pack("H*", "4c8d4dd09090909090488b9d48ffffff"), pack("H*", "4c8d4dd0e8fa0b0000488b9d48ffffff") ],
     asl    => [ pack("H*", "39f190904139f89090"), pack("H*", "39f17fd04139f87fcb") ],
     val_p3 => [ pack("H*", "3d000a0000771581f940060000770deb4b9090909090909090909090"), pack("H*", "0f57c9f3480f2ac9f3480f2ad0f30f5eca0f2ec10f8538ffffff7b40") ],
     stretch=> [ pack("H*", "e86277fbff84c0eb108b43183b45f0"), pack("H*", "e86277fbff84c074108b43183b45f0") ],
@@ -1620,6 +1678,12 @@ sub state_of {
 
 my $p1 = state_of(@{$checks{patch1}});
 my $p2 = state_of(@{$checks{patch2}});
+my $fb1 = state_of(@{$checks{fb1280}});
+my $fb2 = state_of(@{$checks{fb1024}});
+my $fb3 = state_of(@{$checks{fb1344}});
+my $fb_all = ($fb1 eq "APPLIQUE" && $fb2 eq "APPLIQUE" && $fb3 eq "APPLIQUE") ? "APPLIQUE"
+           : ($fb1 eq "NON_APPLIQUE" && $fb2 eq "NON_APPLIQUE" && $fb3 eq "NON_APPLIQUE") ? "NON_APPLIQUE"
+           : "PARTIEL";
 my $asl = state_of(@{$checks{asl}});
 my $vp3 = state_of(@{$checks{val_p3}});
 my $str = state_of(@{$checks{stretch}});
@@ -1635,7 +1699,7 @@ if (-f $grules_path && open(my $gfh, "<:raw", $grules_path)) {
     $grules_state = (index($graw, "# Patched by sims2-crash-patch") != -1) ? "PATCHE" : "ORIGINE";
 }
 
-print "Patch1_60Hz=$p1 | Patch2_60Hz=$p2 | ASL=$asl | CatalogP3=$vp3 | NotchFill=$str\n";
+print "Patch1_60Hz=$p1 | Patch2_60Hz=$p2 | ASL=$asl | AslSingleNative=$fb_all | CatalogP3=$vp3 | NotchFill=$str\n";
 print "WeakDylib_MachO=$dylib_inj | Dylib_File=$dylib_file | Backup_Exe=$exe_bak | GraphicsRules=$grules_state\n";
 SUPPORT_PERL
 )"
@@ -1839,7 +1903,7 @@ run_support_menu() {
 run_install_patch() {
     # 1. Verify application presence (supports /Applications or ~/Applications)
     if ! locate_app_bundle; then
-        init_diagnostic_log "patch_sims2.command v1.4.1"
+        init_diagnostic_log "patch_sims2.command v${PATCH_VERSION}"
         log_diag "ERROR game not found (/Applications or ~/Applications)"
         echo -e "${RED}[-] Erreur / Error:${NC} Jeu introuvable / Game not found at:"
         echo "    /Applications/The Sims 2.app/Contents/MacOS/Sims2XP_Exe"
@@ -1848,7 +1912,7 @@ run_install_patch() {
         pause_exit 1
     fi
 
-    init_diagnostic_log "patch_sims2.command v1.4.1"
+    init_diagnostic_log "patch_sims2.command v${PATCH_VERSION}"
     local ASPYR_BASE_DIR="$REAL_HOME/Library/Application Support/Aspyr"
     local TARGET_DATA_DIR="$ASPYR_BASE_DIR/The Sims 2"
     log_diag "START active_dir=$TARGET_DATA_DIR sudo_required=$APP_REQUIRES_SUDO"
@@ -2105,6 +2169,7 @@ PERLEOF
                 run_privileged "$TRACKPAD_DYLIB_DEST" /usr/bin/xattr -d com.apple.quarantine "$TRACKPAD_DYLIB_DEST" >/dev/null 2>&1 || true
                 echo -e "${GREEN}[+] Module Trackpad installé :${NC} $TRACKPAD_DYLIB_DEST"
                 if inject_weak_dylib_macho "$EXE_PATH" "@executable_path/libsims2_trackpad.dylib"; then
+                    cleanup_obsolete_experimental_prefs "com.aspyr.sims2.appstore"
                     TRACKPAD_STATUS="OK (libsims2_trackpad.dylib installé & injecté)"
                     log_diag "TRACKPAD_DYLIB OK"
                 else
@@ -2318,17 +2383,19 @@ FINDBAK
 
     echo -e "${GREEN}${BOLD}"
     echo "========================================================================"
-    echo "  INSTALLATION TERMINÉE AVEC SUCCÈS / PATCH COMPLETE (v1.4.1) !         "
+    echo "  INSTALLATION TERMINÉE AVEC SUCCÈS / PATCH COMPLETE (v${PATCH_VERSION}) !     "
     echo "========================================================================"
     echo -e "${NC}"
     echo -e "  • ${BOLD}Patch Binaire 120 Hz :${NC} $PATCH_STATUS"
     echo -e "  • ${BOLD}Graphics Rules.sgr   :${NC} $GRULES_STATUS"
-    echo -e "  • ${BOLD}Module Trackpad      :${NC} $TRACKPAD_STATUS"
+    echo -e "  • ${BOLD}Module Trackpad/Aff. :${NC} $TRACKPAD_STATUS"
     echo -e "  • ${BOLD}Sauvegardes / Saves  :${NC} $MIGRATION_STATUS"
     echo -e "  • ${BOLD}Dossier Données/Mods :${NC} ~/Library/Application Support/Aspyr/The Sims 2/"
     echo -e "  • ${BOLD}Purge des Caches     :${NC} $CACHE_STATUS"
     echo -e "  • ${BOLD}Affichage userProps  :${NC} $USERPROPS_STATUS"
     echo -e "  • ${BOLD}CC / Limite macOS    :${NC} $CC_MAXFILES_STATUS"
+    echo -e "  • ${BOLD}Raccourcis Affichage :${NC} ⌘ + Entrée (Plein écran ↔ Fenêtré) | ⌘ + R (Résolution fenêtrée suivante) | Menu Affichage"
+    echo -e "  • ${BOLD}Rapports de crash    :${NC} ~/Library/Logs/Sims2-Crash-Patch/sims2_crash_XXX.log (automatique uniquement en cas de crash)"
     if [ "$MIGRATION_FAILED" -eq 2 ]; then
         echo ""
         echo -e "  ${YELLOW}[i] Note Sandbox :${NC} Vos parties actives dans Application Support sont prêtes et intactes."
@@ -2349,7 +2416,7 @@ FINDBAK
 main() {
     echo -e "${CYAN}${BOLD}"
     echo "========================================================================"
-    echo "  The Sims 2: Super Collection — ProMotion 120Hz & Stability Patch v1.4.1"
+    echo "  The Sims 2: Super Collection — ProMotion 120Hz & Stability Patch v${PATCH_VERSION}"
     echo "========================================================================"
     echo -e "${NC}"
 
