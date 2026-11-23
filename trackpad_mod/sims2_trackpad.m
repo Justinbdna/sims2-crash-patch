@@ -27,7 +27,7 @@
 #import <unistd.h>
 
 /*
- * libsims2_trackpad.dylib (v1.5.0-rc2)
+ * libsims2_trackpad.dylib (v1.5.0)
  * Free, non-profit & open-source (MIT) Trackpad, Display & Stability helper
  * for lawful owners of The Sims 2: Super Collection (macOS).
  * Software preservation, debugging & interoperability only — no DRM bypass.
@@ -58,7 +58,7 @@
  *   SIMS2_TRACKPAD_DEBUG=0|1     (default 0, logs via NSLog)
  */
 
-#define SIMS2_PATCH_VERSION "1.5.0-rc2"
+#define SIMS2_PATCH_VERSION "1.5.0"
 
 typedef NS_ENUM(NSInteger, Sims2ScrollAxis) {
     Sims2ScrollAxisNone = 0,

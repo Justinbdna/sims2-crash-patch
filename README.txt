@@ -1,5 +1,5 @@
 ================================================================================
-  THE SIMS 2: SUPER COLLECTION (macOS) — QUICK START & SUPPORT MEMO (v1.5.0-rc2)
+  THE SIMS 2: SUPER COLLECTION (macOS) — QUICK START & SUPPORT MEMO (v1.5.0)
   Apple Silicon & Intel | Zero Xcode | MIT License (Free & Non-Profit)
 ================================================================================
 
@@ -17,7 +17,7 @@
         aucun '*', c'est normal !) puis Entrée.
       - Cliquez impérativement sur « Autoriser » si Terminal demande à contrôler
         Finder (pour copier vos sauvegardes sans rien écraser).
-      - Attendez « PATCH COMPLETE (v1.5.0-rc2) » puis lancez le jeu !
+      - Attendez « PATCH COMPLETE (v1.5.0) » puis lancez le jeu !
 
 2. CONTRÔLES TRACKPAD & AFFICHAGE MACOS
    - Pincement 2 doigts                 : Zoom (+ / -)
@@ -38,7 +38,7 @@
      [1] Nettoyer les caches corrompus (Entrée, sans mot de passe).
      [2] Réinitialiser la résolution au lancement dans userProps.xml (crée
          userProps.xml.backup). Le jeu démarre toujours en Space Plein écran
-         natif sous l'encoche (v1.5.0-rc2).
+         natif sous l'encoche (v1.5.0).
      [3] Vérifier vos Mods (.package / .zip oubliés) & limite maxfiles (10 240).
    - restore_sims2.command :
      Restaure le jeu d'origine (Sims2XP_Exe.backup + Graphics Rules.sgr.backup)
@@ -74,7 +74,7 @@
         or '*' appear on screen — normal macOS security) then press Enter.
       - Click "Allow" ("Autoriser") if Terminal asks to control Finder so your
         saves are copied without overwriting anything.
-      - Wait for "PATCH COMPLETE (v1.5.0-rc2)" and launch the game!
+      - Wait for "PATCH COMPLETE (v1.5.0)" and launch the game!
 
 2. MACBOOK TRACKPAD & DISPLAY CONTROLS
    - 2-finger pinch                     : Zoom in / out (+ / -)
@@ -94,7 +94,7 @@
    - clean_sims2_cache.command :
      [1] Purge corrupted caches (Enter, no password).
      [2] Reset launch resolution in userProps.xml (keeps userProps.xml.backup).
-         In v1.5.0-rc2, the game always launches in native under-notch Fullscreen.
+         In v1.5.0, the game always launches in native under-notch Fullscreen.
      [3] Check Mods/CC (.package / leftover .zip) & 10,240 open-file limit.
    - restore_sims2.command :
      Cleanly restores original binaries/configs and removes the trackpad dylib.

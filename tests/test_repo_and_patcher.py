@@ -59,19 +59,20 @@ class TestMacScriptsIntegrity(unittest.TestCase):
             self.assertTrue(mac_zip.is_file())
             self.assertTrue(win_zip.is_file())
 
+            root_dir = "sims2-crash-patch-v1.2.1-test"
             with zipfile.ZipFile(mac_zip, "r") as zf:
                 names = set(zf.namelist())
                 self.assertEqual(
                     names,
                     {
-                        "patch_sims2.command",
-                        "clean_sims2_cache.command",
-                        "restore_sims2.command",
-                        "README.txt",
-                        "LICENSE",
-                        "trackpad_mod/libsims2_trackpad.dylib",
-                        "trackpad_mod/sims2_trackpad.m",
-                        "trackpad_mod/build_trackpad.sh",
+                        f"{root_dir}/patch_sims2.command",
+                        f"{root_dir}/clean_sims2_cache.command",
+                        f"{root_dir}/restore_sims2.command",
+                        f"{root_dir}/README.txt",
+                        f"{root_dir}/LICENSE",
+                        f"{root_dir}/trackpad_mod/libsims2_trackpad.dylib",
+                        f"{root_dir}/trackpad_mod/sims2_trackpad.m",
+                        f"{root_dir}/trackpad_mod/build_trackpad.sh",
                     },
                 )
                 for info in zf.infolist():
@@ -83,6 +84,32 @@ class TestMacScriptsIntegrity(unittest.TestCase):
                         self.assertEqual(mode, 0o755, f"{info.filename} must be 0755 in zip")
                     else:
                         self.assertEqual(mode, 0o644)
+
+    def test_release_zip_root_folder_matches_exact_version(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_dir = Path(tmp)
+            for raw_ver, expected_ver in (("v1.5.0", "v1.5.0"), ("1.5.0", "v1.5.0"), ("v2.3.4-beta1", "v2.3.4-beta1")):
+                mac_zip, win_zip = vp.package_releases(raw_ver, tmp_dir)
+                expected_mac_root = f"sims2-crash-patch-{expected_ver}"
+                expected_win_root = f"sims2-crash-patch-windows-{expected_ver}"
+                self.assertEqual(mac_zip.name, f"{expected_mac_root}.zip")
+                self.assertEqual(win_zip.name, f"{expected_win_root}.zip")
+
+                with zipfile.ZipFile(mac_zip, "r") as zf:
+                    mac_names = zf.namelist()
+                    self.assertTrue(mac_names)
+                    mac_roots = {name.split("/", 1)[0] for name in mac_names}
+                    self.assertEqual(mac_roots, {expected_mac_root})
+                    self.assertNotIn("sims2-crash-patch-v1", mac_roots)
+                    self.assertTrue(all(name.startswith(f"{expected_mac_root}/") for name in mac_names))
+
+                with zipfile.ZipFile(win_zip, "r") as zf:
+                    win_names = zf.namelist()
+                    self.assertTrue(win_names)
+                    win_roots = {name.split("/", 1)[0] for name in win_names}
+                    self.assertEqual(win_roots, {expected_win_root})
+                    self.assertNotIn("sims2-crash-patch-v1", win_roots)
+                    self.assertTrue(all(name.startswith(f"{expected_win_root}/") for name in win_names))
 
     def _extract_binary_patch_perl(self) -> str:
         patch_blocks = vp.extract_perl_blocks((ROOT_DIR / "patch_sims2.command").read_text(encoding="utf-8"))
@@ -589,7 +616,7 @@ class TestMacScriptsIntegrity(unittest.TestCase):
         clt_tools_rx = re.compile(r"(?<![#\w/.-])(python3|swift|git|clang|xcodebuild|objdump|cc)\b")
         for script_name in ("patch_sims2.command", "clean_sims2_cache.command", "restore_sims2.command"):
             text = (ROOT_DIR / script_name).read_text(encoding="utf-8")
-            self.assertIn("Version: 1.5.0-rc2", text)
+            self.assertIn("Version: 1.5.0", text)
             non_comment = "\n".join(ln for ln in text.splitlines() if not ln.lstrip().startswith("#"))
             # Remove heredoc text/URLs isn't needed if no CLT tool word appears in code lines
             for line in non_comment.splitlines():
@@ -604,10 +631,11 @@ class TestMacScriptsIntegrity(unittest.TestCase):
         readme_md = (ROOT_DIR / "README.md").read_text(encoding="utf-8")
         changelog = (ROOT_DIR / "CHANGELOG.md").read_text(encoding="utf-8")
         for doc_text in (readme_txt, readme_md):
-            self.assertIn("v1.5.0-rc2", doc_text)
+            self.assertIn("v1.5.0", doc_text)
             self.assertIn("Gatekeeper", doc_text)
             self.assertIn("userProps.xml.backup", doc_text)
             self.assertIn("Autoriser", doc_text)
+        self.assertIn("[1.5.0]", changelog)
         self.assertIn("[1.5.0-rc2]", changelog)
         self.assertIn("[1.5.0-rc1]", changelog)
         self.assertIn("[1.4.1]", changelog)
@@ -866,10 +894,11 @@ class TestMacScriptsIntegrity(unittest.TestCase):
             expected_dylib = dylib_src.read_bytes()
             mac_zip, _ = vp.package_releases("v1.4.0-test", tmp_dir)
             with zipfile.ZipFile(mac_zip, "r") as zf:
-                info = zf.getinfo("trackpad_mod/libsims2_trackpad.dylib")
+                dylib_arc = "sims2-crash-patch-v1.4.0-test/trackpad_mod/libsims2_trackpad.dylib"
+                info = zf.getinfo(dylib_arc)
                 mode = (info.external_attr >> 16) & 0o777
                 self.assertEqual(mode, 0o755)
-                self.assertEqual(zf.read("trackpad_mod/libsims2_trackpad.dylib"), expected_dylib)
+                self.assertEqual(zf.read(dylib_arc), expected_dylib)
 
             # Branch names with '/' (e.g. feat/v1.4-audit) must sanitize cleanly to flat ZIP paths
             branch_mac_zip, branch_win_zip = vp.package_releases("feat/test-branch", tmp_dir)
@@ -939,7 +968,7 @@ class TestMacScriptsIntegrity(unittest.TestCase):
         self.assertIn("--------RRRRRRRRGGGGGGGGBBBBBBBB", src_m)
         self.assertIn("clamp_fullscreen_window_to_visible_frame", src_m)
         self.assertIn("update_cached_screen_geometry", src_m)
-        self.assertIn("SIMS2_PATCH_VERSION \"1.5.0-rc2\"", src_m)
+        self.assertIn("SIMS2_PATCH_VERSION \"1.5.0\"", src_m)
         self.assertIn("_CGDisplayCopyAllDisplayModes", src_m)
         self.assertIn("_CGDisplayCopyDisplayMode", src_m)
         self.assertIn("_CGDisplayModeGetHeight", src_m)
@@ -1406,7 +1435,7 @@ class TestMacScriptsIntegrity(unittest.TestCase):
                     self.assertTrue(diag_log.is_file(), "Expected sims2_patch_diag.log when SIMS2_DIAG_LOG=1")
                     diag_txt = diag_log.read_text(encoding="utf-8")
                     self.assertIn("[BOOT]", diag_txt)
-                    self.assertIn("v1.5.0-rc2", diag_txt)
+                    self.assertIn("v1.5.0", diag_txt)
                     self.assertIn("[INIT]", diag_txt)
                     self.assertIn("[+0", diag_txt)
                     self.assertFalse((h1 / "Library" / "Logs" / "Sims2-Crash-Patch").exists())
@@ -1792,7 +1821,7 @@ class TestMacScriptsIntegrity(unittest.TestCase):
                 for expected in (
                     "Timestamp     :",
                     "Crash Log #   : 1 ",
-                    "Patch Version : 1.5.0-rc2",
+                    "Patch Version : 1.5.0",
                     "SIGSEGV",
                     "Signal Code   :",
                     "Fault Address : 0x8",
@@ -1859,7 +1888,7 @@ class TestMacScriptsIntegrity(unittest.TestCase):
         #    compact screen presets, and external mouse wheel bypass.
         for sym in (
             '#import <objc/message.h>',
-            'SIMS2_PATCH_VERSION "1.5.0-rc2"',
+            'SIMS2_PATCH_VERSION "1.5.0"',
             "extract_nswindow_from_delegate_arg",
             "is_callable_orig_imp",
             "_objc_msgForward",
@@ -1922,7 +1951,7 @@ class TestMacScriptsIntegrity(unittest.TestCase):
 
         # 4. patch_sims2.command v1.5.0-rc1 checks: version, obsolete prefs cleanup, ad-hoc sign WITHOUT --deep,
         #    strict --verify --deep --strict, Command shortcuts, crash log path, zero Upscaling / Option+U / Option+R.
-        self.assertIn('PATCH_VERSION="1.5.0-rc2"', patch_sh)
+        self.assertIn('PATCH_VERSION="1.5.0"', patch_sh)
         self.assertIn("cleanup_obsolete_experimental_prefs", patch_sh)
         for obsolete_key in (
             "S2PatchFullscreenUpscaling",
@@ -2131,14 +2160,14 @@ class TestMacScriptsIntegrity(unittest.TestCase):
         self.assertIn("resolve_screen_for_rect(", cf_body)
 
         # 3. Version consistency across all scripts & docs (zero stale v1.4.1 banners in restore/clean)
-        self.assertIn('PATCH_VERSION="1.5.0-rc2"', patch_sh)
-        self.assertIn('SCRIPT_VERSION="1.5.0-rc2"', restore_sh)
-        self.assertIn('SCRIPT_VERSION="1.5.0-rc2"', clean_sh)
+        self.assertIn('PATCH_VERSION="1.5.0"', patch_sh)
+        self.assertIn('SCRIPT_VERSION="1.5.0"', restore_sh)
+        self.assertIn('SCRIPT_VERSION="1.5.0"', clean_sh)
         self.assertNotIn("v1.4.1", restore_sh)
         self.assertNotIn("v1.4.1", clean_sh)
         for doc_name in ("README.md", "README.txt"):
             doc = (ROOT_DIR / doc_name).read_text(encoding="utf-8")
-            self.assertIn("v1.5.0-rc2", doc)
+            self.assertIn("v1.5.0", doc)
             self.assertIn("16:9", doc)
             self.assertIn("16:10", doc)
 
@@ -2545,7 +2574,7 @@ class TestMacScriptsIntegrity(unittest.TestCase):
 
                 crash_file = log_dir / "crash_report.log"
                 crash_file.write_text(
-                    f"Patch Version : 1.5.0-rc2\nPath: /Users/alice_secret/Library/Application Support/test\n",
+                    f"Patch Version : 1.5.0\nPath: /Users/alice_secret/Library/Application Support/test\n",
                     encoding="utf-8",
                 )
                 dbg_file = log_dir / "debug_boot.log"
@@ -2577,7 +2606,7 @@ class TestMacScriptsIntegrity(unittest.TestCase):
                 report_path = log_dir / "github_support_report.md"
                 self.assertTrue(report_path.is_file())
                 rep_text = report_path.read_text(encoding="utf-8")
-                self.assertIn("v1.5.0-rc2", rep_text)
+                self.assertIn("v1.5.0", rep_text)
                 self.assertIn("1440x900x32x60", rep_text)
                 self.assertIn("crash_report.log", rep_text)
                 self.assertIn("debug_boot.log", rep_text)
@@ -2636,7 +2665,7 @@ class TestMacScriptsIntegrity(unittest.TestCase):
                     cr_segv = h_segv / "Library" / "Logs" / "Sims2-Crash-Patch" / "crash_report.log"
                     self.assertTrue(cr_segv.is_file())
                     cr_txt = cr_segv.read_text(encoding="utf-8")
-                    self.assertIn("Patch Version : 1.5.0-rc2", cr_txt)
+                    self.assertIn("Patch Version : 1.5.0", cr_txt)
                     self.assertIn("SIGSEGV", cr_txt)
                     self.assertIn("Backtrace", cr_txt)
 
