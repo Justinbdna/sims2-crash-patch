@@ -1,6 +1,7 @@
 ================================================================================
-  THE SIMS 2: SUPER COLLECTION (macOS) — QUICK START & SUPPORT MEMO (v1.5.0)
-  Apple Silicon & Intel | Zero Xcode | MIT License (Free & Non-Profit)
+  THE SIMS 2: SUPER COLLECTION (Aspyr, macOS) — QUICK START & SUPPORT (v1.5.0)
+  120Hz ProMotion Crash on Launch Fix | Apple Silicon (M1-M5, Rosetta 2) & Intel
+  Zero Xcode | MIT License (Free & Non-Profit — see LICENSE & NOTICE)
 ================================================================================
 
 [FRANÇAIS] (English version below / Version anglaise plus bas) -----------------

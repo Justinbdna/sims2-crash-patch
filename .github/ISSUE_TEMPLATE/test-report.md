@@ -1,7 +1,7 @@
 ---
 name: "🧪 Compatibility & Test Report / Rapport de Test"
-about: "Report your Mac hardware, chip (M1/M2/M3/M4), macOS version, and test result / Signalez votre configuration Mac et le résultat du patch"
-title: "[Test Report] MacBook Pro/Air (M1/M2/M3/M4) - macOS XX.X"
+about: "Report your Mac hardware, chip (M1–M5 / Intel), macOS version, and test result / Signalez votre configuration Mac et le résultat du patch"
+title: "[Test Report] MacBook Pro/Air (M1/M2/M3/M4/M5) - macOS XX.X"
 labels: ["compatibility", "test-report"]
 assignees: ""
 ---
@@ -9,11 +9,11 @@ assignees: ""
 ## 🖥️ Hardware & macOS Configuration / Configuration Matérielle
 
 - **Mac Model / Modèle de Mac :** (e.g., MacBook Pro 14" / MacBook Pro 16" / MacBook Air / Mac Studio / iMac)
-- **Apple Silicon Chip / Puce :** (e.g., M1 Pro / M1 Max / M2 Pro / M3 Pro / M4 Pro / Base M1-M4)
+- **Apple Silicon / Intel Chip / Puce :** (e.g., M1 Pro / M2 Max / M3 / M4 Pro / M5 / Intel)
 - **Display Refresh Rate / Écran :** (e.g., Built-in Liquid Retina XDR 120 Hz ProMotion / External 120 Hz+ Monitor)
-- **macOS Version :** (e.g., macOS Sequoia 15.x / macOS 27.0)
+- **macOS Version :** (e.g., macOS Sequoia 15.x / macOS 26.x / macOS 27.0)
 - **Keyboard Layout / Clavier :** (e.g., French AZERTY / US QWERTY / Other)
-- **Patch Version :** `v1.4.1` (or `v1.4.0`)
+- **Patch Version :** `v1.5.0`
 
 ---
 
