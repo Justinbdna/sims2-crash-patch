@@ -1,4 +1,4 @@
-# Sims 2 Crash Patch — Windows Special Edition (`windows/` — v1.4.0)
+# Sims 2 Crash Patch — Windows Special Edition (`windows/` — v1.5.0)
 
 > **FR :** Édition dédiée à **Windows 10 / Windows 11**, volontairement séparée des scripts macOS (`*.command`) à la racine du dépôt afin que PC et Mac cohabitent sans jamais interférer.  
 > **EN:** Dedicated **Windows 10 / Windows 11** edition, strictly isolated from the macOS scripts (`*.command`) at the repository root so PC and Mac never interfere with each other.

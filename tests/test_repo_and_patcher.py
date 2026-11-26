@@ -70,6 +70,7 @@ class TestMacScriptsIntegrity(unittest.TestCase):
                         f"{root_dir}/restore_sims2.command",
                         f"{root_dir}/README.txt",
                         f"{root_dir}/LICENSE",
+                        f"{root_dir}/NOTICE",
                         f"{root_dir}/trackpad_mod/libsims2_trackpad.dylib",
                         f"{root_dir}/trackpad_mod/sims2_trackpad.m",
                         f"{root_dir}/trackpad_mod/build_trackpad.sh",
@@ -84,6 +85,12 @@ class TestMacScriptsIntegrity(unittest.TestCase):
                         self.assertEqual(mode, 0o755, f"{info.filename} must be 0755 in zip")
                     else:
                         self.assertEqual(mode, 0o644)
+
+            win_root_dir = "sims2-crash-patch-windows-v1.2.1-test"
+            with zipfile.ZipFile(win_zip, "r") as zf:
+                win_names = set(zf.namelist())
+                self.assertIn(f"{win_root_dir}/LICENSE", win_names)
+                self.assertIn(f"{win_root_dir}/NOTICE", win_names)
 
     def test_release_zip_root_folder_matches_exact_version(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
