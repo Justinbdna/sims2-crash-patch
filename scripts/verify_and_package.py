@@ -40,9 +40,15 @@ MAC_RELEASE_FILES = (
     Path("restore_sims2.command"),
     Path("README.txt"),
     Path("LICENSE"),
+    Path("NOTICE"),
     Path("trackpad_mod/libsims2_trackpad.dylib"),
     Path("trackpad_mod/sims2_trackpad.m"),
     Path("trackpad_mod/build_trackpad.sh"),
+)
+
+WINDOWS_ROOT_FILES = (
+    Path("LICENSE"),
+    Path("NOTICE"),
 )
 
 WINDOWS_RELEASE_DIR = Path("windows")
@@ -187,6 +193,9 @@ def package_releases(version: str, out_dir: Path) -> tuple[Path, Path]:
     win_zip = out_dir / f"{win_root_dir}.zip"
     win_root = ROOT_DIR / WINDOWS_RELEASE_DIR
     with zipfile.ZipFile(win_zip, "w", compression=zipfile.ZIP_DEFLATED) as zf:
+        for rel in WINDOWS_ROOT_FILES:
+            raw = (ROOT_DIR / rel).read_bytes().replace(b"\r\n", b"\n")
+            _zip_write_bytes(zf, f"{win_root_dir}/{rel.as_posix()}", raw, 0o644)
         for item in sorted(win_root.rglob("*")):
             if not item.is_file() or "__pycache__" in item.parts or item.suffix == ".pyc":
                 continue
