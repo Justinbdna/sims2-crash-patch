@@ -60,7 +60,7 @@ jobs:
           python scripts/verify_and_package.py --package --version "$SAFE_VER"
 
       - name: Upload workflow artifacts
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: sims2-crash-patch-archives
           path: dist/*.zip
