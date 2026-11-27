@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: 💬 Setup Help & Questions (GitHub Discussions — Q&A)
+    url: https://github.com/Justinbdna/sims2-crash-patch/discussions/categories/q-a
+    about: Need help installing, bypassing Gatekeeper, or configuring multi-monitor/trackpad? Ask here!
+  - name: 💡 Feature Requests & Ideas (GitHub Discussions — Ideas)
+    url: https://github.com/Justinbdna/sims2-crash-patch/discussions/categories/ideas
+    about: Share ideas or improvements for macOS or Windows support.
